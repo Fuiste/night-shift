@@ -84,6 +84,21 @@ pub fn load(
   Ok(#(run, events))
 }
 
+pub fn list_runs(repo_root: String) -> Result(List(types.RunRecord), String) {
+  let repo_path = repo_state_path(repo_root)
+  use run_ids <- result.try(list_run_ids(repo_path))
+  Ok(
+    run_ids
+    |> list.filter_map(fn(run_id) {
+      let state_path = filepath.join(filepath.join(repo_path, run_id), "state.json")
+      case read_run(state_path) {
+        Ok(run) -> Ok(run)
+        Error(_) -> Error(Nil)
+      }
+    })
+  )
+}
+
 pub fn save(run: types.RunRecord, events: List(types.RunEvent)) -> Result(Nil, String) {
   use _ <- result.try(write_string(run.state_path, encode_run(run)))
   use _ <- result.try(write_events(run.events_path, events))
@@ -134,6 +149,14 @@ pub fn mark_status(
 pub fn read_report(repo_root: String, selector: types.RunSelector) -> Result(String, String) {
   use #(run, _) <- result.try(load(repo_root, selector))
   read_string(run.report_path)
+}
+
+pub fn active_run_id(repo_root: String) -> Result(String, String) {
+  let lock_path = filepath.join(repo_state_path(repo_root), "active.lock")
+  case simplifile.read(lock_path) {
+    Ok(run_id) -> Ok(string.trim(run_id))
+    Error(_) -> Error("No active Night Shift run was found for this repository.")
+  }
 }
 
 pub fn state_root() -> String {
@@ -220,19 +243,22 @@ fn read_events(path: String) -> Result(List(types.RunEvent), String) {
 }
 
 fn latest_run_id(repo_path: String) -> Result(String, String) {
+  use run_ids <- result.try(list_run_ids(repo_path))
+  case run_ids {
+    [latest, .._] -> Ok(latest)
+    [] -> Error("No Night Shift runs were found for this repository.")
+  }
+}
+
+fn list_run_ids(repo_path: String) -> Result(List(String), String) {
   case simplifile.read_directory(at: repo_path) {
-    Ok(entries) -> {
-      let candidates =
+    Ok(entries) ->
+      Ok(
         entries
         |> list.filter(fn(entry) { entry != "active.lock" })
         |> list.sort(string.compare)
         |> list.reverse
-
-      case candidates {
-        [latest, .._] -> Ok(latest)
-        [] -> Error("No Night Shift runs were found for this repository.")
-      }
-    }
+      )
     Error(_) -> Error("No Night Shift runs were found for this repository.")
   }
 }

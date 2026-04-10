@@ -193,11 +193,17 @@ pub fn default_config() -> Config {
 }
 
 pub type Command {
-  Start(brief_path: String, harness: Result(Harness, Nil), max_workers: Result(Int, Nil))
+  Start(
+    brief_path: String,
+    harness: Result(Harness, Nil),
+    max_workers: Result(Int, Nil),
+    ui_enabled: Bool,
+  )
   Status(run: RunSelector)
   Report(run: RunSelector)
-  Resume(run: RunSelector)
+  Resume(run: RunSelector, ui_enabled: Bool)
   Review(harness: Result(Harness, Nil))
+  Demo(ui_enabled: Bool)
   Help
 }
 import gleam/option.{type Option}

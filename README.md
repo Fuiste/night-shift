@@ -59,11 +59,26 @@ commands = []
 
 The CLI surface for v1 is:
 
-- `night-shift start --brief <path> [--harness <codex|cursor>] [--max-workers <n>]`
+- `night-shift --demo [--ui]`
+- `night-shift start --brief <path> [--harness <codex|cursor>] [--max-workers <n>] [--ui]`
 - `night-shift status [--run <id>|latest]`
 - `night-shift report [--run <id>|latest]`
-- `night-shift resume [--run <id>|latest]`
+- `night-shift resume [--run <id>|latest] [--ui]`
 - `night-shift review [--harness <codex|cursor>]`
+
+## Demo Mode
+
+Night Shift can self-demo against fixture harnesses without printing anything on
+success:
+
+```sh
+night-shift --demo
+night-shift --demo --ui
+```
+
+The headless demo runs a real fixture-backed start flow and validates the
+resulting journal/report state. The UI demo launches the local dashboard, waits
+for the run to complete, validates the served payload, and then exits.
 
 ## Run Journal
 
