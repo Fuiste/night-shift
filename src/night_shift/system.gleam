@@ -10,6 +10,9 @@ pub fn home_directory() -> String
 @external(erlang, "night_shift_system", "state_directory")
 pub fn state_directory() -> String
 
+@external(erlang, "night_shift_system", "get_env")
+pub fn get_env(name: String) -> String
+
 @external(erlang, "night_shift_system", "timestamp")
 pub fn timestamp() -> String
 

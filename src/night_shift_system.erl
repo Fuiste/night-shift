@@ -1,6 +1,6 @@
 -module(night_shift_system).
 
--export([argv/0, cwd/0, home_directory/0, state_directory/0, timestamp/0, unique_id/0]).
+-export([argv/0, cwd/0, home_directory/0, state_directory/0, get_env/1, timestamp/0, unique_id/0]).
 
 argv() ->
     lists:map(fun to_binary/1, init:get_plain_arguments()).
@@ -19,6 +19,12 @@ state_directory() ->
     case os:getenv("XDG_STATE_HOME") of
         false -> to_binary(filename:join(binary_to_list(home_directory()), ".local/state"));
         Dir -> to_binary(Dir)
+    end.
+
+get_env(Name) ->
+    case os:getenv(binary_to_list(Name)) of
+        false -> <<>>;
+        Value -> to_binary(Value)
     end.
 
 timestamp() ->

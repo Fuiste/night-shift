@@ -140,6 +140,10 @@ pub fn state_root() -> String {
   filepath.join(system.state_directory(), "night-shift")
 }
 
+pub fn repo_state_path_for(repo_root: String) -> String {
+  repo_state_path(repo_root)
+}
+
 fn ensure_repo_ready(repo_path: String, lock_path: String) -> Result(Nil, String) {
   use _ <- result.try(create_directory(repo_path))
   case simplifile.read(lock_path) {
