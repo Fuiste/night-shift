@@ -59,11 +59,35 @@ commands = []
 
 The CLI surface for v1 is:
 
-- `night-shift start --brief <path> [--harness <codex|cursor>] [--max-workers <n>]`
+- `night-shift start --brief <path> [--harness <codex|cursor>] [--max-workers <n>] [--ui]`
 - `night-shift status [--run <id>|latest]`
 - `night-shift report [--run <id>|latest]`
-- `night-shift resume [--run <id>|latest]`
+- `night-shift resume [--run <id>|latest] [--ui]`
 - `night-shift review [--harness <codex|cursor>]`
+
+## Dashboard
+
+Night Shift can launch a local read-only dashboard while a run is active:
+
+```sh
+night-shift start --brief brief.md --ui
+night-shift resume --run latest --ui
+```
+
+The dashboard binds to `127.0.0.1`, prefers port `8787`, and will try the next
+few ports if that one is unavailable. The CLI prints the chosen URL and keeps
+serving until you stop the process.
+
+The first cut is intentionally minimal and monitor-only:
+
+- run history for the current repository
+- run summary metadata
+- task status list
+- event timeline
+- report content as plain text
+
+There are no browser-side controls for starting, resuming, or reviewing runs in
+v1.
 
 ## Run Journal
 
