@@ -1,10 +1,12 @@
 import gleeunit
 import filepath
 import gleam/list
+import gleam/option.{Some}
 import gleam/result
 import gleam/string
 import night_shift/cli
 import night_shift/config
+import night_shift/dashboard
 import night_shift/harness
 import night_shift/journal
 import night_shift/orchestrator
@@ -90,6 +92,56 @@ pub fn latest_run_round_trip_test() {
   assert saved_run.run_id == run.run_id
   assert saved_run.harness == types.Cursor
   assert result.is_ok(simplifile.delete(file_or_dir_at: base_dir))
+}
+
+pub fn list_runs_returns_newest_first_test() {
+  let unique = system.unique_id()
+  let base_dir = filepath.join(system.state_directory(), "night-shift-test-history-" <> unique)
+  let repo_root = filepath.join(base_dir, "repo-" <> unique)
+  let brief_a = filepath.join(base_dir, "brief-a.md")
+  let brief_b = filepath.join(base_dir, "brief-b.md")
+
+  let _ = simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(base_dir)
+  let assert Ok(_) = simplifile.write("# Brief A", to: brief_a)
+  let assert Ok(_) = simplifile.write("# Brief B", to: brief_b)
+
+  let assert Ok(first_run) = journal.start_run(repo_root, brief_a, types.Codex, 1)
+  let assert Ok(_) = journal.mark_status(first_run, types.RunCompleted, "done")
+  let assert Ok(second_run) = journal.start_run(repo_root, brief_b, types.Cursor, 2)
+  let assert Ok(runs) = journal.list_runs(repo_root)
+
+  let assert [latest, previous, .._] = runs
+  assert latest.run_id == second_run.run_id
+  assert previous.run_id == first_run.run_id
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn dashboard_payloads_include_run_data_test() {
+  let unique = system.unique_id()
+  let base_dir = filepath.join(system.state_directory(), "night-shift-test-dashboard-" <> unique)
+  let repo_root = filepath.join(base_dir, "repo-" <> unique)
+  let brief_path = filepath.join(base_dir, "brief.md")
+
+  let _ = simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(base_dir)
+  let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
+  let assert Ok(run) = journal.start_run(repo_root, brief_path, types.Codex, 1)
+  let assert Ok(updated_run) =
+    journal.append_event(
+      run,
+      types.RunEvent(kind: "task_progress", at: system.timestamp(), message: "Working", task_id: Some("demo-task")),
+    )
+
+  let assert Ok(runs_payload) = dashboard.runs_json(repo_root)
+  let assert Ok(run_payload) = dashboard.run_json(repo_root, updated_run.run_id)
+
+  assert string.contains(does: runs_payload, contain: updated_run.run_id)
+  assert string.contains(does: run_payload, contain: "\"events\"")
+  assert string.contains(does: run_payload, contain: "\"report\"")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
 
 pub fn extract_json_payload_test() {
