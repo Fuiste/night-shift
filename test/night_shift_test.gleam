@@ -18,12 +18,22 @@ pub fn main() -> Nil {
 }
 
 pub fn parse_start_command_test() {
-  let assert Ok(types.Start("brief.md", Ok(types.Cursor), Ok(2))) =
+  let assert Ok(types.Start("brief.md", Ok(types.Cursor), Ok(2), False)) =
     cli.parse(["start", "--brief", "brief.md", "--harness", "cursor", "--max-workers", "2"])
 }
 
 pub fn parse_status_defaults_to_latest_test() {
   let assert Ok(types.Status(types.LatestRun)) = cli.parse(["status"])
+}
+
+pub fn parse_start_command_with_ui_test() {
+  let assert Ok(types.Start("brief.md", Error(Nil), Error(Nil), True)) =
+    cli.parse(["start", "--brief", "brief.md", "--ui"])
+}
+
+pub fn parse_resume_command_with_ui_test() {
+  let assert Ok(types.Resume(types.RunId("run-123"), True)) =
+    cli.parse(["resume", "--run", "run-123", "--ui"])
 }
 
 pub fn parse_default_config_values_test() {

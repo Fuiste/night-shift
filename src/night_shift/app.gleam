@@ -16,7 +16,7 @@ pub fn run(command: types.Command) -> String {
 
   case command {
     types.Help -> "Night Shift is ready.\n\n" <> cli.usage() <> "\n" <> crate_summary(config)
-    types.Start(brief_path, harness, max_workers) -> {
+    types.Start(brief_path, harness, max_workers, _) -> {
       let resolved_harness = choose_harness(harness, config)
       let resolved_workers = choose_max_workers(max_workers, config)
 
@@ -31,7 +31,7 @@ pub fn run(command: types.Command) -> String {
     }
     types.Status(run) -> status(repo_root, run)
     types.Report(run) -> report(repo_root, run)
-    types.Resume(run) -> resume(repo_root, run, config)
+    types.Resume(run, _) -> resume(repo_root, run, config)
     types.Review(harness) -> review(repo_root, harness, config)
   }
 }
