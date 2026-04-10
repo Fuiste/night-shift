@@ -14,8 +14,10 @@ runtime modules for:
 - repo-local configuration
 - resumable run journals
 - task DAG scheduling
-- harness adapters
+- async harness adapters for Codex CLI and Cursor Agent
+- isolated git worktree execution
 - verification and PR delivery plumbing
+- review-loop task ingestion for open Night Shift PRs
 - local notifier/report output
 
 ## Tooling
@@ -63,9 +65,58 @@ The CLI surface for v1 is:
 - `night-shift resume [--run <id>|latest]`
 - `night-shift review [--harness <codex|cursor>]`
 
+## Run Journal
+
+Night Shift stores durable state outside the target repo under:
+
+```text
+$XDG_STATE_HOME/night-shift/<repo-key>/<run-id>/
+```
+
+If `XDG_STATE_HOME` is unset, it falls back to:
+
+```text
+$HOME/.local/state/night-shift/<repo-key>/<run-id>/
+```
+
+Each run directory includes:
+
+- `brief.md`
+- `state.json`
+- `events.jsonl`
+- `report.md`
+- `logs/`
+
+An `active.lock` file is kept at the repo state root so only one active run can
+operate on a repo at a time.
+
+## Harness Contract
+
+Harnesses are treated as external runtimes. Night Shift prepares a prompt,
+launches the selected CLI, and extracts a structured JSON payload from stdout
+between these markers:
+
+```text
+NIGHT_SHIFT_RESULT_START
+{ ...json... }
+NIGHT_SHIFT_RESULT_END
+```
+
+The planner emits task DAGs. The executor emits task status, demo evidence,
+files touched, PR metadata, and follow-up tasks.
+
+For integration tests or local experimentation, you can point Night Shift at a
+fixture harness by setting `NIGHT_SHIFT_FAKE_HARNESS` to an executable that
+implements:
+
+- `fake-harness plan <prompt-file>`
+- `fake-harness execute <prompt-file> <worktree> <repo-root>`
+
 ## Delivery Model
 
 - Each completed task is delivered as a pull request.
 - Dependent tasks may be delivered as stacked pull requests.
 - Verification is run locally before PR creation.
 - A local Markdown report is updated throughout the run.
+- Review mode reopens open Night Shift PRs, turns review state into
+  stabilization tasks, and reruns the scheduler.

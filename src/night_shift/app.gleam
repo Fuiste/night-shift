@@ -2,6 +2,7 @@ import gleam/int
 import gleam/list
 import gleam/result
 import gleam/string
+import night_shift/cli
 import night_shift/config
 import night_shift/git
 import night_shift/journal
@@ -14,7 +15,7 @@ pub fn run(command: types.Command) -> String {
   let repo_root = git.repo_root(system.cwd())
 
   case command {
-    types.Help -> "Night Shift is ready.\n\n" <> crate_summary(config)
+    types.Help -> "Night Shift is ready.\n\n" <> cli.usage() <> "\n" <> crate_summary(config)
     types.Start(brief_path, harness, max_workers) -> {
       let resolved_harness = choose_harness(harness, config)
       let resolved_workers = choose_max_workers(max_workers, config)
