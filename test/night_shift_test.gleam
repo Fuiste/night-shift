@@ -319,11 +319,50 @@ pub fn dashboard_start_session_tracks_completed_run_test() {
 }
 
 pub fn demo_run_succeeds_without_ui_test() {
-  let assert Ok(Nil) = demo.run(False)
+  let old_demo_command = system.get_env("NIGHT_SHIFT_DEMO_COMMAND")
+  system.set_env("NIGHT_SHIFT_DEMO_COMMAND", local_demo_command())
+
+  let result = demo.run(False)
+
+  system.set_env("NIGHT_SHIFT_DEMO_COMMAND", old_demo_command)
+  let _ = simplifile.delete(file_or_dir_at: demo.demo_root())
+
+  let assert Ok(Nil) = result
 }
 
 pub fn demo_run_succeeds_with_ui_test() {
-  let assert Ok(Nil) = demo.run(True)
+  let old_demo_command = system.get_env("NIGHT_SHIFT_DEMO_COMMAND")
+  system.set_env("NIGHT_SHIFT_DEMO_COMMAND", local_demo_command())
+
+  let result = demo.run(True)
+
+  system.set_env("NIGHT_SHIFT_DEMO_COMMAND", old_demo_command)
+  let _ = simplifile.delete(file_or_dir_at: demo.demo_root())
+
+  let assert Ok(Nil) = result
+}
+
+fn local_demo_command() -> String {
+  let cwd = system.cwd()
+  let erlang_root = filepath.join(cwd, "build/dev/erlang")
+  let ebin_paths = [
+    filepath.join(erlang_root, "night_shift/ebin"),
+    filepath.join(erlang_root, "gleam_stdlib/ebin"),
+    filepath.join(erlang_root, "gleam_json/ebin"),
+    filepath.join(erlang_root, "filepath/ebin"),
+    filepath.join(erlang_root, "simplifile/ebin"),
+    filepath.join(erlang_root, "gleeunit/ebin"),
+  ]
+
+  "erl"
+  <> {
+    ebin_paths
+    |> list.map(fn(path) { " -pa " <> shell.quote(path) })
+    |> string.join(with: "")
+  }
+  <> " -noshell -eval "
+  <> shell.quote("'night_shift@@main':run(night_shift).")
+  <> " -extra"
 }
 
 fn write_fake_harness(path: String) -> Result(Nil, simplifile.FileError) {

@@ -16,6 +16,9 @@ pub fn get_env(name: String) -> String
 @external(erlang, "night_shift_system", "set_env")
 pub fn set_env(name: String, value: String) -> Nil
 
+@external(erlang, "night_shift_system", "unset_env")
+pub fn unset_env(name: String) -> Nil
+
 @external(erlang, "night_shift_system", "timestamp")
 pub fn timestamp() -> String
 
