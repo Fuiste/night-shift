@@ -140,6 +140,29 @@ pub fn run_status_to_string(status: RunStatus) -> String {
   }
 }
 
+pub type RunEvent {
+  RunEvent(kind: String, at: String, message: String, task_id: Option(String))
+}
+
+pub type RunRecord {
+  RunRecord(
+    run_id: String,
+    repo_root: String,
+    run_path: String,
+    brief_path: String,
+    state_path: String,
+    events_path: String,
+    report_path: String,
+    lock_path: String,
+    harness: Harness,
+    max_workers: Int,
+    status: RunStatus,
+    created_at: String,
+    updated_at: String,
+    tasks: List(Task),
+  )
+}
+
 pub type RunSelector {
   LatestRun
   RunId(String)
@@ -177,3 +200,4 @@ pub type Command {
   Review(harness: Result(Harness, Nil))
   Help
 }
+import gleam/option.{type Option}

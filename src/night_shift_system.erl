@@ -1,22 +1,33 @@
 -module(night_shift_system).
 
--export([argv/0, cwd/0, home_directory/0, timestamp/0, unique_id/0]).
+-export([argv/0, cwd/0, home_directory/0, state_directory/0, timestamp/0, unique_id/0]).
 
 argv() ->
-    init:get_plain_arguments().
+    lists:map(fun to_binary/1, init:get_plain_arguments()).
 
 cwd() ->
     {ok, Dir} = file:get_cwd(),
-    unicode:characters_to_list(Dir).
+    to_binary(Dir).
 
 home_directory() ->
     case os:getenv("HOME") of
         false -> cwd();
-        Dir -> Dir
+        Dir -> to_binary(Dir)
+    end.
+
+state_directory() ->
+    case os:getenv("XDG_STATE_HOME") of
+        false -> to_binary(filename:join(binary_to_list(home_directory()), ".local/state"));
+        Dir -> to_binary(Dir)
     end.
 
 timestamp() ->
-    calendar:system_time_to_rfc3339(erlang:system_time(second), [{unit, second}]).
+    to_binary(calendar:system_time_to_rfc3339(erlang:system_time(second), [{unit, second}])).
 
 unique_id() ->
-    integer_to_list(erlang:unique_integer([positive, monotonic])).
+    to_binary(integer_to_list(erlang:unique_integer([positive, monotonic]))).
+
+to_binary(Value) when is_binary(Value) ->
+    Value;
+to_binary(Value) ->
+    unicode:characters_to_binary(Value).

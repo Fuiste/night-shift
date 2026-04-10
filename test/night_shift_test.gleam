@@ -1,7 +1,13 @@
 import gleeunit
+import filepath
+import gleam/result
+import gleam/string
 import night_shift/cli
 import night_shift/config
+import night_shift/journal
+import night_shift/system
 import night_shift/types
+import simplifile
 
 pub fn main() -> Nil {
   gleeunit.main()
@@ -32,4 +38,40 @@ pub fn parse_notifiers_and_verification_commands_test() {
 
   assert parsed.notifiers == [types.ConsoleNotifier, types.ReportFileNotifier]
   assert parsed.verification_commands == ["gleam test", "npm test"]
+}
+
+pub fn start_run_creates_report_and_state_test() {
+  let unique = system.unique_id()
+  let base_dir = filepath.join(system.state_directory(), "night-shift-test-" <> unique)
+  let repo_root = filepath.join(base_dir, "repo-" <> unique)
+  let brief_path = filepath.join(base_dir, "brief.md")
+
+  let assert Ok(_) = simplifile.create_directory_all(base_dir)
+  let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
+
+  let assert Ok(run) = journal.start_run(repo_root, brief_path, types.Codex, 2)
+  let assert Ok(report_contents) = simplifile.read(run.report_path)
+  let assert Ok(state_contents) = simplifile.read(run.state_path)
+
+  assert string.contains(does: report_contents, contain: "Night Shift Report")
+  assert string.contains(does: state_contents, contain: "\"run_id\"")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn latest_run_round_trip_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    filepath.join(system.state_directory(), "night-shift-test-round-trip-" <> unique)
+  let repo_root = filepath.join(base_dir, "repo-" <> unique)
+  let brief_path = filepath.join(base_dir, "brief.md")
+
+  let assert Ok(_) = simplifile.create_directory_all(base_dir)
+  let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
+  let assert Ok(run) = journal.start_run(repo_root, brief_path, types.Cursor, 1)
+  let assert Ok(#(saved_run, _)) = journal.load(repo_root, types.LatestRun)
+
+  assert saved_run.run_id == run.run_id
+  assert saved_run.harness == types.Cursor
+  assert result.is_ok(simplifile.delete(file_or_dir_at: base_dir))
 }
