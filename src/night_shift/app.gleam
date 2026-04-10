@@ -1,5 +1,5 @@
-import gleam/io
 import gleam/int
+import gleam/io
 import gleam/list
 import gleam/result
 import gleam/string
@@ -14,17 +14,32 @@ import night_shift/system
 import night_shift/types
 
 pub fn run(command: types.Command) -> Nil {
-  let config = config.load(".night-shift.toml") |> result.unwrap(or: types.default_config())
+  let config =
+    config.load(".night-shift.toml")
+    |> result.unwrap(or: types.default_config())
   let repo_root = git.repo_root(system.cwd())
 
   case command {
-    types.Help -> io.println("Night Shift is ready.\n\n" <> cli.usage() <> "\n" <> crate_summary(config))
+    types.Help ->
+      io.println(
+        "Night Shift is ready.\n\n"
+        <> cli.usage()
+        <> "\n"
+        <> crate_summary(config),
+      )
     types.Start(brief_path, harness, max_workers, False) -> {
       let resolved_harness = choose_harness(harness, config)
       let resolved_workers = choose_max_workers(max_workers, config)
 
       io.println(
-        case journal.start_run(repo_root, brief_path, resolved_harness, resolved_workers) {
+        case
+          journal.start_run(
+            repo_root,
+            brief_path,
+            resolved_harness,
+            resolved_workers,
+          )
+        {
           Ok(run) ->
             case orchestrator.start(run, config) {
               Ok(completed_run) -> render_run_summary(completed_run)
@@ -38,9 +53,18 @@ pub fn run(command: types.Command) -> Nil {
       let resolved_harness = choose_harness(harness, config)
       let resolved_workers = choose_max_workers(max_workers, config)
 
-      case journal.start_run(repo_root, brief_path, resolved_harness, resolved_workers) {
+      case
+        journal.start_run(
+          repo_root,
+          brief_path,
+          resolved_harness,
+          resolved_workers,
+        )
+      {
         Ok(run) ->
-          case dashboard.start_start_session(repo_root, run.run_id, run, config) {
+          case
+            dashboard.start_start_session(repo_root, run.run_id, run, config)
+          {
             Ok(session) -> {
               io.println(render_dashboard_summary(session.url, run.run_id))
               system.wait_forever()
@@ -60,7 +84,7 @@ pub fn run(command: types.Command) -> Nil {
     types.Review(harness) -> io.println(review(repo_root, harness, config))
     types.Demo(ui) ->
       case demo.run(ui) {
-        Ok(Nil) -> Nil
+        Ok(summary) -> io.println(summary)
         Error(message) -> io.println(message)
       }
   }
@@ -101,7 +125,11 @@ fn report(repo_root: String, run: types.RunSelector) -> String {
   }
 }
 
-fn resume(repo_root: String, run: types.RunSelector, config: types.Config) -> String {
+fn resume(
+  repo_root: String,
+  run: types.RunSelector,
+  config: types.Config,
+) -> String {
   case journal.load(repo_root, run) {
     Ok(#(saved_run, _)) ->
       case orchestrator.resume(saved_run, config) {
@@ -119,12 +147,7 @@ fn review(
 ) -> String {
   let review_harness = choose_harness(harness, config)
   let review_run =
-    journal.start_run(
-      repo_root,
-      ".night-shift.toml",
-      review_harness,
-      1,
-    )
+    journal.start_run(repo_root, ".night-shift.toml", review_harness, 1)
 
   case review_run {
     Ok(run) ->
@@ -136,7 +159,10 @@ fn review(
   }
 }
 
-fn choose_harness(candidate: Result(types.Harness, Nil), config: types.Config) -> types.Harness {
+fn choose_harness(
+  candidate: Result(types.Harness, Nil),
+  config: types.Config,
+) -> types.Harness {
   case candidate {
     Ok(harness) -> harness
     Error(Nil) -> config.default_harness
@@ -169,10 +195,21 @@ fn render_run_summary(run: types.RunRecord) -> String {
   <> run.run_path
 }
 
-fn resume_with_ui(repo_root: String, run: types.RunSelector, config: types.Config) -> Nil {
+fn resume_with_ui(
+  repo_root: String,
+  run: types.RunSelector,
+  config: types.Config,
+) -> Nil {
   case journal.load(repo_root, run) {
     Ok(#(saved_run, _)) ->
-      case dashboard.start_resume_session(repo_root, saved_run.run_id, saved_run, config) {
+      case
+        dashboard.start_resume_session(
+          repo_root,
+          saved_run.run_id,
+          saved_run,
+          config,
+        )
+      {
         Ok(session) -> {
           io.println(render_dashboard_summary(session.url, saved_run.run_id))
           system.wait_forever()

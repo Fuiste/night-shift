@@ -92,8 +92,8 @@ v1.
 
 ## Demo Mode
 
-Night Shift can self-demo against fixture harnesses without printing anything on
-success:
+Night Shift can self-demo against fixture harnesses and prints a compact proof
+summary on success:
 
 ```sh
 night-shift --demo
@@ -103,7 +103,9 @@ night-shift --demo --ui
 The headless demo runs a real fixture-backed start flow and validates the
 resulting `start`, `status`, and `report` CLI flows. The UI demo launches the
 local dashboard through the real CLI, waits for the run to complete, validates
-the served payload, and then exits.
+the served payload, and then exits. Both variants print the validated flows,
+the proof file path, and the artifact directory so the demo is visible from the
+terminal.
 
 Artifacts are kept under:
 

@@ -1,9 +1,9 @@
-import gleeunit
 import filepath
 import gleam/list
 import gleam/option.{Some}
 import gleam/result
 import gleam/string
+import gleeunit
 import night_shift/cli
 import night_shift/config
 import night_shift/dashboard
@@ -22,7 +22,15 @@ pub fn main() -> Nil {
 
 pub fn parse_start_command_test() {
   let assert Ok(types.Start("brief.md", Ok(types.Cursor), Ok(2), False)) =
-    cli.parse(["start", "--brief", "brief.md", "--harness", "cursor", "--max-workers", "2"])
+    cli.parse([
+      "start",
+      "--brief",
+      "brief.md",
+      "--harness",
+      "cursor",
+      "--max-workers",
+      "2",
+    ])
 }
 
 pub fn parse_status_defaults_to_latest_test() {
@@ -48,7 +56,8 @@ pub fn parse_demo_command_with_ui_test() {
 }
 
 pub fn parse_default_config_values_test() {
-  let assert Ok(parsed) = config.parse("base_branch = \"develop\"\nmax_workers = 2")
+  let assert Ok(parsed) =
+    config.parse("base_branch = \"develop\"\nmax_workers = 2")
   assert parsed.base_branch == "develop"
   assert parsed.max_workers == 2
 }
@@ -67,11 +76,13 @@ pub fn parse_notifiers_and_verification_commands_test() {
 
 pub fn start_run_creates_report_and_state_test() {
   let unique = system.unique_id()
-  let base_dir = filepath.join(system.state_directory(), "night-shift-test-" <> unique)
+  let base_dir =
+    filepath.join(system.state_directory(), "night-shift-test-" <> unique)
   let repo_root = filepath.join(base_dir, "repo-" <> unique)
   let brief_path = filepath.join(base_dir, "brief.md")
 
-  let _ = simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
   let assert Ok(_) = simplifile.create_directory_all(base_dir)
   let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
 
@@ -88,11 +99,15 @@ pub fn start_run_creates_report_and_state_test() {
 pub fn latest_run_round_trip_test() {
   let unique = system.unique_id()
   let base_dir =
-    filepath.join(system.state_directory(), "night-shift-test-round-trip-" <> unique)
+    filepath.join(
+      system.state_directory(),
+      "night-shift-test-round-trip-" <> unique,
+    )
   let repo_root = filepath.join(base_dir, "repo-" <> unique)
   let brief_path = filepath.join(base_dir, "brief.md")
 
-  let _ = simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
   let assert Ok(_) = simplifile.create_directory_all(base_dir)
   let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
   let assert Ok(run) = journal.start_run(repo_root, brief_path, types.Cursor, 1)
@@ -105,22 +120,29 @@ pub fn latest_run_round_trip_test() {
 
 pub fn list_runs_returns_newest_first_test() {
   let unique = system.unique_id()
-  let base_dir = filepath.join(system.state_directory(), "night-shift-test-history-" <> unique)
+  let base_dir =
+    filepath.join(
+      system.state_directory(),
+      "night-shift-test-history-" <> unique,
+    )
   let repo_root = filepath.join(base_dir, "repo-" <> unique)
   let brief_a = filepath.join(base_dir, "brief-a.md")
   let brief_b = filepath.join(base_dir, "brief-b.md")
 
-  let _ = simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
   let assert Ok(_) = simplifile.create_directory_all(base_dir)
   let assert Ok(_) = simplifile.write("# Brief A", to: brief_a)
   let assert Ok(_) = simplifile.write("# Brief B", to: brief_b)
 
-  let assert Ok(first_run) = journal.start_run(repo_root, brief_a, types.Codex, 1)
+  let assert Ok(first_run) =
+    journal.start_run(repo_root, brief_a, types.Codex, 1)
   let assert Ok(_) = journal.mark_status(first_run, types.RunCompleted, "done")
-  let assert Ok(second_run) = journal.start_run(repo_root, brief_b, types.Cursor, 2)
+  let assert Ok(second_run) =
+    journal.start_run(repo_root, brief_b, types.Cursor, 2)
   let assert Ok(runs) = journal.list_runs(repo_root)
 
-  let assert [latest, previous, .._] = runs
+  let assert [latest, previous, ..] = runs
   assert latest.run_id == second_run.run_id
   assert previous.run_id == first_run.run_id
 
@@ -129,18 +151,28 @@ pub fn list_runs_returns_newest_first_test() {
 
 pub fn dashboard_payloads_include_run_data_test() {
   let unique = system.unique_id()
-  let base_dir = filepath.join(system.state_directory(), "night-shift-test-dashboard-" <> unique)
+  let base_dir =
+    filepath.join(
+      system.state_directory(),
+      "night-shift-test-dashboard-" <> unique,
+    )
   let repo_root = filepath.join(base_dir, "repo-" <> unique)
   let brief_path = filepath.join(base_dir, "brief.md")
 
-  let _ = simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
   let assert Ok(_) = simplifile.create_directory_all(base_dir)
   let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
   let assert Ok(run) = journal.start_run(repo_root, brief_path, types.Codex, 1)
   let assert Ok(updated_run) =
     journal.append_event(
       run,
-      types.RunEvent(kind: "task_progress", at: system.timestamp(), message: "Working", task_id: Some("demo-task")),
+      types.RunEvent(
+        kind: "task_progress",
+        at: system.timestamp(),
+        message: "Working",
+        task_id: Some("demo-task"),
+      ),
     )
 
   let assert Ok(runs_payload) = dashboard.runs_json(repo_root)
@@ -155,11 +187,16 @@ pub fn dashboard_payloads_include_run_data_test() {
 
 pub fn dashboard_server_serves_run_data_test() {
   let unique = system.unique_id()
-  let base_dir = filepath.join(system.state_directory(), "night-shift-test-dashboard-server-" <> unique)
+  let base_dir =
+    filepath.join(
+      system.state_directory(),
+      "night-shift-test-dashboard-server-" <> unique,
+    )
   let repo_root = filepath.join(base_dir, "repo-" <> unique)
   let brief_path = filepath.join(base_dir, "brief.md")
 
-  let _ = simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
   let assert Ok(_) = simplifile.create_directory_all(base_dir)
   let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
   let assert Ok(run) = journal.start_run(repo_root, brief_path, types.Codex, 1)
@@ -169,11 +206,15 @@ pub fn dashboard_server_serves_run_data_test() {
 
   let assert Ok(index_html) = dashboard.http_get(session.url)
   let assert Ok(runs_payload) = dashboard.http_get(session.url <> "/api/runs")
-  let assert Ok(run_payload) = dashboard.http_get(session.url <> "/api/runs/" <> run.run_id)
+  let assert Ok(run_payload) =
+    dashboard.http_get(session.url <> "/api/runs/" <> run.run_id)
 
   assert string.contains(does: index_html, contain: "Night Shift Dashboard")
   assert string.contains(does: runs_payload, contain: run.run_id)
-  assert string.contains(does: run_payload, contain: "\"run_id\":\"" <> run.run_id <> "\"")
+  assert string.contains(
+    does: run_payload,
+    contain: "\"run_id\":\"" <> run.run_id <> "\"",
+  )
 
   let _ = dashboard.stop_session(session)
   let _ = simplifile.delete(file_or_dir_at: base_dir)
@@ -192,12 +233,17 @@ pub fn extract_json_payload_test() {
 
 pub fn repo_state_path_is_stable_test() {
   let repo_root = "/tmp/night-shift-demo"
-  assert journal.repo_state_path_for(repo_root) == journal.repo_state_path_for(repo_root)
+  assert journal.repo_state_path_for(repo_root)
+    == journal.repo_state_path_for(repo_root)
 }
 
 pub fn orchestrator_start_runs_fake_harness_test() {
   let unique = system.unique_id()
-  let base_dir = filepath.join(system.state_directory(), "night-shift-integration-" <> unique)
+  let base_dir =
+    filepath.join(
+      system.state_directory(),
+      "night-shift-integration-" <> unique,
+    )
   let repo_root = filepath.join(base_dir, "repo")
   let remote_root = filepath.join(base_dir, "remote.git")
   let bin_dir = filepath.join(base_dir, "bin")
@@ -208,21 +254,63 @@ pub fn orchestrator_start_runs_fake_harness_test() {
   let old_fake_harness = system.get_env("NIGHT_SHIFT_FAKE_HARNESS")
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
-  let _ = simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
   let assert Ok(_) = simplifile.create_directory_all(base_dir)
   let assert Ok(_) = simplifile.create_directory_all(bin_dir)
   let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
   let assert Ok(_) = write_fake_harness(fake_harness)
   let assert Ok(_) = write_fake_gh(fake_gh)
-  let _ = shell.run("chmod +x " <> shell.quote(fake_harness) <> " " <> shell.quote(fake_gh), base_dir, filepath.join(base_dir, "chmod.log"))
-  let _ = shell.run("git init --bare " <> shell.quote(remote_root), base_dir, filepath.join(base_dir, "remote.log"))
-  let _ = shell.run("git init --initial-branch=main " <> shell.quote(repo_root), base_dir, filepath.join(base_dir, "repo-init.log"))
-  let _ = shell.run("git config user.name 'Night Shift Test'", repo_root, filepath.join(base_dir, "git-user.log"))
-  let _ = shell.run("git config user.email 'night-shift@example.com'", repo_root, filepath.join(base_dir, "git-email.log"))
-  let assert Ok(_) = simplifile.write("# Demo\n", to: filepath.join(repo_root, "README.md"))
-  let _ = shell.run("git add README.md && git commit -m 'chore: seed repo'", repo_root, filepath.join(base_dir, "seed.log"))
-  let _ = shell.run("git remote add origin " <> shell.quote(remote_root), repo_root, filepath.join(base_dir, "remote-add.log"))
-  let _ = shell.run("git push -u origin main", repo_root, filepath.join(base_dir, "push-main.log"))
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_harness) <> " " <> shell.quote(fake_gh),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+  let _ =
+    shell.run(
+      "git init --bare " <> shell.quote(remote_root),
+      base_dir,
+      filepath.join(base_dir, "remote.log"),
+    )
+  let _ =
+    shell.run(
+      "git init --initial-branch=main " <> shell.quote(repo_root),
+      base_dir,
+      filepath.join(base_dir, "repo-init.log"),
+    )
+  let _ =
+    shell.run(
+      "git config user.name 'Night Shift Test'",
+      repo_root,
+      filepath.join(base_dir, "git-user.log"),
+    )
+  let _ =
+    shell.run(
+      "git config user.email 'night-shift@example.com'",
+      repo_root,
+      filepath.join(base_dir, "git-email.log"),
+    )
+  let assert Ok(_) =
+    simplifile.write("# Demo\n", to: filepath.join(repo_root, "README.md"))
+  let _ =
+    shell.run(
+      "git add README.md && git commit -m 'chore: seed repo'",
+      repo_root,
+      filepath.join(base_dir, "seed.log"),
+    )
+  let _ =
+    shell.run(
+      "git remote add origin " <> shell.quote(remote_root),
+      repo_root,
+      filepath.join(base_dir, "remote-add.log"),
+    )
+  let _ =
+    shell.run(
+      "git push -u origin main",
+      repo_root,
+      filepath.join(base_dir, "push-main.log"),
+    )
 
   system.set_env("NIGHT_SHIFT_FAKE_HARNESS", fake_harness)
   system.set_env("PATH", bin_dir <> ":" <> old_path)
@@ -267,7 +355,11 @@ pub fn orchestrator_start_runs_fake_harness_test() {
 
 pub fn dashboard_start_session_tracks_completed_run_test() {
   let unique = system.unique_id()
-  let base_dir = filepath.join(system.state_directory(), "night-shift-ui-integration-" <> unique)
+  let base_dir =
+    filepath.join(
+      system.state_directory(),
+      "night-shift-ui-integration-" <> unique,
+    )
   let repo_root = filepath.join(base_dir, "repo")
   let remote_root = filepath.join(base_dir, "remote.git")
   let bin_dir = filepath.join(base_dir, "bin")
@@ -278,21 +370,63 @@ pub fn dashboard_start_session_tracks_completed_run_test() {
   let old_fake_harness = system.get_env("NIGHT_SHIFT_FAKE_HARNESS")
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
-  let _ = simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
   let assert Ok(_) = simplifile.create_directory_all(base_dir)
   let assert Ok(_) = simplifile.create_directory_all(bin_dir)
   let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
   let assert Ok(_) = write_fake_harness(fake_harness)
   let assert Ok(_) = write_fake_gh(fake_gh)
-  let _ = shell.run("chmod +x " <> shell.quote(fake_harness) <> " " <> shell.quote(fake_gh), base_dir, filepath.join(base_dir, "chmod.log"))
-  let _ = shell.run("git init --bare " <> shell.quote(remote_root), base_dir, filepath.join(base_dir, "remote.log"))
-  let _ = shell.run("git init --initial-branch=main " <> shell.quote(repo_root), base_dir, filepath.join(base_dir, "repo-init.log"))
-  let _ = shell.run("git config user.name 'Night Shift Test'", repo_root, filepath.join(base_dir, "git-user.log"))
-  let _ = shell.run("git config user.email 'night-shift@example.com'", repo_root, filepath.join(base_dir, "git-email.log"))
-  let assert Ok(_) = simplifile.write("# Demo\n", to: filepath.join(repo_root, "README.md"))
-  let _ = shell.run("git add README.md && git commit -m 'chore: seed repo'", repo_root, filepath.join(base_dir, "seed.log"))
-  let _ = shell.run("git remote add origin " <> shell.quote(remote_root), repo_root, filepath.join(base_dir, "remote-add.log"))
-  let _ = shell.run("git push -u origin main", repo_root, filepath.join(base_dir, "push-main.log"))
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_harness) <> " " <> shell.quote(fake_gh),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+  let _ =
+    shell.run(
+      "git init --bare " <> shell.quote(remote_root),
+      base_dir,
+      filepath.join(base_dir, "remote.log"),
+    )
+  let _ =
+    shell.run(
+      "git init --initial-branch=main " <> shell.quote(repo_root),
+      base_dir,
+      filepath.join(base_dir, "repo-init.log"),
+    )
+  let _ =
+    shell.run(
+      "git config user.name 'Night Shift Test'",
+      repo_root,
+      filepath.join(base_dir, "git-user.log"),
+    )
+  let _ =
+    shell.run(
+      "git config user.email 'night-shift@example.com'",
+      repo_root,
+      filepath.join(base_dir, "git-email.log"),
+    )
+  let assert Ok(_) =
+    simplifile.write("# Demo\n", to: filepath.join(repo_root, "README.md"))
+  let _ =
+    shell.run(
+      "git add README.md && git commit -m 'chore: seed repo'",
+      repo_root,
+      filepath.join(base_dir, "seed.log"),
+    )
+  let _ =
+    shell.run(
+      "git remote add origin " <> shell.quote(remote_root),
+      repo_root,
+      filepath.join(base_dir, "remote-add.log"),
+    )
+  let _ =
+    shell.run(
+      "git push -u origin main",
+      repo_root,
+      filepath.join(base_dir, "push-main.log"),
+    )
 
   system.set_env("NIGHT_SHIFT_FAKE_HARNESS", fake_harness)
   system.set_env("PATH", bin_dir <> ":" <> old_path)
@@ -305,13 +439,17 @@ pub fn dashboard_start_session_tracks_completed_run_test() {
     )
 
   let assert Ok(run) = journal.start_run(repo_root, brief_path, types.Codex, 1)
-  let assert Ok(session) = dashboard.start_start_session(repo_root, run.run_id, run, config)
+  let assert Ok(session) =
+    dashboard.start_start_session(repo_root, run.run_id, run, config)
   let final_payload = wait_for_run_payload(session.url, run.run_id, 20)
 
   system.set_env("PATH", old_path)
   system.set_env("NIGHT_SHIFT_FAKE_HARNESS", old_fake_harness)
 
-  assert string.contains(does: final_payload, contain: "\"status\":\"completed\"")
+  assert string.contains(
+    does: final_payload,
+    contain: "\"status\":\"completed\"",
+  )
   assert string.contains(does: final_payload, contain: "\"pr_number\":\"1\"")
 
   let _ = dashboard.stop_session(session)
@@ -322,12 +460,28 @@ pub fn demo_run_succeeds_without_ui_test() {
   let old_demo_command = system.get_env("NIGHT_SHIFT_DEMO_COMMAND")
   system.set_env("NIGHT_SHIFT_DEMO_COMMAND", local_demo_command())
 
-  let result = demo.run(False)
+  let first_result = demo.run(False)
+  let second_result = demo.run(False)
 
   system.set_env("NIGHT_SHIFT_DEMO_COMMAND", old_demo_command)
   let _ = simplifile.delete(file_or_dir_at: demo.demo_root())
 
-  let assert Ok(Nil) = result
+  let assert Ok(first_summary) = first_result
+  let assert Ok(second_summary) = second_result
+
+  assert string.contains(
+    does: first_summary,
+    contain: "Validated CLI flows: start, status, report",
+  )
+  assert string.contains(
+    does: first_summary,
+    contain: "Proof file: "
+      <> filepath.join(demo.demo_root(), "repo/IMPLEMENTED.md"),
+  )
+  assert string.contains(
+    does: second_summary,
+    contain: "Artifacts: " <> demo.demo_root(),
+  )
 }
 
 pub fn demo_run_succeeds_with_ui_test() {
@@ -339,7 +493,18 @@ pub fn demo_run_succeeds_with_ui_test() {
   system.set_env("NIGHT_SHIFT_DEMO_COMMAND", old_demo_command)
   let _ = simplifile.delete(file_or_dir_at: demo.demo_root())
 
-  let assert Ok(Nil) = result
+  let assert Ok(summary) = result
+
+  assert string.contains(
+    does: summary,
+    contain: "Validated UI flows: start --ui, dashboard payload, status",
+  )
+  assert string.contains(does: summary, contain: "Dashboard: http://127.0.0.1:")
+  assert string.contains(
+    does: summary,
+    contain: "Proof file: "
+      <> filepath.join(demo.demo_root(), "repo/IMPLEMENTED.md"),
+  )
 }
 
 fn local_demo_command() -> String {
@@ -368,19 +533,23 @@ fn local_demo_command() -> String {
 fn write_fake_harness(path: String) -> Result(Nil, simplifile.FileError) {
   simplifile.write(
     "#!/bin/sh\n"
-    <> "MODE=$1\n"
-    <> "PROMPT_FILE=$2\n"
-    <> "if [ \"$MODE\" = \"plan\" ]; then\n"
-    <> "  printf 'planning\\nNIGHT_SHIFT_RESULT_START\\n{\"tasks\":[{\"id\":\"demo-task\",\"title\":\"Implement demo task\",\"description\":\"Create a file to prove execution\",\"dependencies\":[],\"acceptance\":[\"Create IMPLEMENTED.md\"],\"demo_plan\":[\"Show the new file\"],\"parallel_safe\":false}]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
-    <> "else\n"
-    <> "  echo 'completed by fake harness' > IMPLEMENTED.md\n"
-    <> "  printf 'execution\\nNIGHT_SHIFT_RESULT_START\\n{\"status\":\"completed\",\"summary\":\"Implemented demo task\",\"files_touched\":[\"IMPLEMENTED.md\"],\"demo_evidence\":[\"IMPLEMENTED.md created\"],\"pr\":{\"title\":\"[night-shift] Implement demo task\",\"summary\":\"Implemented the fake harness task.\",\"demo\":[\"IMPLEMENTED.md created\"],\"risks\":[]},\"follow_up_tasks\":[]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
-    <> "fi\n",
+      <> "MODE=$1\n"
+      <> "PROMPT_FILE=$2\n"
+      <> "if [ \"$MODE\" = \"plan\" ]; then\n"
+      <> "  printf 'planning\\nNIGHT_SHIFT_RESULT_START\\n{\"tasks\":[{\"id\":\"demo-task\",\"title\":\"Implement demo task\",\"description\":\"Create a file to prove execution\",\"dependencies\":[],\"acceptance\":[\"Create IMPLEMENTED.md\"],\"demo_plan\":[\"Show the new file\"],\"parallel_safe\":false}]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "else\n"
+      <> "  echo 'completed by fake harness' > IMPLEMENTED.md\n"
+      <> "  printf 'execution\\nNIGHT_SHIFT_RESULT_START\\n{\"status\":\"completed\",\"summary\":\"Implemented demo task\",\"files_touched\":[\"IMPLEMENTED.md\"],\"demo_evidence\":[\"IMPLEMENTED.md created\"],\"pr\":{\"title\":\"[night-shift] Implement demo task\",\"summary\":\"Implemented the fake harness task.\",\"demo\":[\"IMPLEMENTED.md created\"],\"risks\":[]},\"follow_up_tasks\":[]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "fi\n",
     to: path,
   )
 }
 
-fn wait_for_run_payload(base_url: String, run_id: String, attempts: Int) -> String {
+fn wait_for_run_payload(
+  base_url: String,
+  run_id: String,
+  attempts: Int,
+) -> String {
   let url = base_url <> "/api/runs/" <> run_id
   case attempts {
     value if value <= 0 ->
@@ -389,7 +558,9 @@ fn wait_for_run_payload(base_url: String, run_id: String, attempts: Int) -> Stri
     _ ->
       case dashboard.http_get(url) {
         Ok(payload) ->
-          case string.contains(does: payload, contain: "\"status\":\"completed\"") {
+          case
+            string.contains(does: payload, contain: "\"status\":\"completed\"")
+          {
             True -> payload
             False -> {
               system.sleep(150)
@@ -407,24 +578,24 @@ fn wait_for_run_payload(base_url: String, run_id: String, attempts: Int) -> Stri
 fn write_fake_gh(path: String) -> Result(Nil, simplifile.FileError) {
   simplifile.write(
     "#!/bin/sh\n"
-    <> "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"list\" ]; then\n"
-    <> "  BRANCH=$(git rev-parse --abbrev-ref HEAD)\n"
-    <> "  printf '[{\"number\":1,\"url\":\"https://example.test/pr/1\",\"headRefName\":\"%s\",\"title\":\"Night Shift PR\"}]\\n' \"$BRANCH\"\n"
-    <> "  exit 0\n"
-    <> "fi\n"
-    <> "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"edit\" ]; then\n"
-    <> "  exit 0\n"
-    <> "fi\n"
-    <> "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"create\" ]; then\n"
-    <> "  printf 'https://example.test/pr/1\\n'\n"
-    <> "  exit 0\n"
-    <> "fi\n"
-    <> "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"view\" ]; then\n"
-    <> "  printf '{\"number\":1,\"title\":\"Night Shift PR\",\"body\":\"Review body\",\"headRefName\":\"night-shift/demo\",\"baseRefName\":\"main\",\"url\":\"https://example.test/pr/1\",\"reviewDecision\":\"REVIEW_REQUIRED\",\"statusCheckRollup\":[],\"reviews\":[],\"comments\":[]}'\n"
-    <> "  exit 0\n"
-    <> "fi\n"
-    <> "printf 'unsupported gh invocation: %s %s\\n' \"$1\" \"$2\" >&2\n"
-    <> "exit 1\n",
+      <> "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"list\" ]; then\n"
+      <> "  BRANCH=$(git rev-parse --abbrev-ref HEAD)\n"
+      <> "  printf '[{\"number\":1,\"url\":\"https://example.test/pr/1\",\"headRefName\":\"%s\",\"title\":\"Night Shift PR\"}]\\n' \"$BRANCH\"\n"
+      <> "  exit 0\n"
+      <> "fi\n"
+      <> "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"edit\" ]; then\n"
+      <> "  exit 0\n"
+      <> "fi\n"
+      <> "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"create\" ]; then\n"
+      <> "  printf 'https://example.test/pr/1\\n'\n"
+      <> "  exit 0\n"
+      <> "fi\n"
+      <> "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"view\" ]; then\n"
+      <> "  printf '{\"number\":1,\"title\":\"Night Shift PR\",\"body\":\"Review body\",\"headRefName\":\"night-shift/demo\",\"baseRefName\":\"main\",\"url\":\"https://example.test/pr/1\",\"reviewDecision\":\"REVIEW_REQUIRED\",\"statusCheckRollup\":[],\"reviews\":[],\"comments\":[]}'\n"
+      <> "  exit 0\n"
+      <> "fi\n"
+      <> "printf 'unsupported gh invocation: %s %s\\n' \"$1\" \"$2\" >&2\n"
+      <> "exit 1\n",
     to: path,
   )
 }
