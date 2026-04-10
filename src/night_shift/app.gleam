@@ -6,6 +6,7 @@ import gleam/string
 import night_shift/cli
 import night_shift/config
 import night_shift/dashboard
+import night_shift/demo
 import night_shift/git
 import night_shift/journal
 import night_shift/orchestrator
@@ -57,6 +58,11 @@ pub fn run(command: types.Command) -> Nil {
     types.Resume(run, False) -> io.println(resume(repo_root, run, config))
     types.Resume(run, True) -> resume_with_ui(repo_root, run, config)
     types.Review(harness) -> io.println(review(repo_root, harness, config))
+    types.Demo(ui) ->
+      case demo.run(ui) {
+        Ok(Nil) -> Nil
+        Error(message) -> io.println(message)
+      }
   }
 }
 

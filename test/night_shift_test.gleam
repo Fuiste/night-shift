@@ -7,6 +7,7 @@ import gleam/string
 import night_shift/cli
 import night_shift/config
 import night_shift/dashboard
+import night_shift/demo
 import night_shift/harness
 import night_shift/journal
 import night_shift/orchestrator
@@ -36,6 +37,14 @@ pub fn parse_start_command_with_ui_test() {
 pub fn parse_resume_command_with_ui_test() {
   let assert Ok(types.Resume(types.RunId("run-123"), True)) =
     cli.parse(["resume", "--run", "run-123", "--ui"])
+}
+
+pub fn parse_demo_command_test() {
+  let assert Ok(types.Demo(False)) = cli.parse(["--demo"])
+}
+
+pub fn parse_demo_command_with_ui_test() {
+  let assert Ok(types.Demo(True)) = cli.parse(["--demo", "--ui"])
 }
 
 pub fn parse_default_config_values_test() {
@@ -307,6 +316,14 @@ pub fn dashboard_start_session_tracks_completed_run_test() {
 
   let _ = dashboard.stop_session(session)
   let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn demo_run_succeeds_without_ui_test() {
+  let assert Ok(Nil) = demo.run(False)
+}
+
+pub fn demo_run_succeeds_with_ui_test() {
+  let assert Ok(Nil) = demo.run(True)
 }
 
 fn write_fake_harness(path: String) -> Result(Nil, simplifile.FileError) {

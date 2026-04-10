@@ -203,6 +203,7 @@ pub type Command {
   Report(run: RunSelector)
   Resume(run: RunSelector, ui_enabled: Bool)
   Review(harness: Result(Harness, Nil))
+  Demo(ui_enabled: Bool)
   Help
 }
 import gleam/option.{type Option}

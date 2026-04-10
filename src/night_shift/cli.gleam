@@ -6,6 +6,7 @@ pub fn usage() -> String {
   "Night Shift\n"
   <> "\n"
   <> "Commands:\n"
+  <> "  --demo [--ui]\n"
   <> "  start --brief <path> [--harness <codex|cursor>] [--max-workers <n>] [--ui]\n"
   <> "  status [--run <id>|latest]\n"
   <> "  report [--run <id>|latest]\n"
@@ -14,15 +15,37 @@ pub fn usage() -> String {
 }
 
 pub fn parse(args: List(String)) -> Result(types.Command, String) {
+  case contains_demo_flag(args) {
+    True -> parse_demo(args, False)
+    False ->
+      case args {
+        [] -> Ok(types.Help)
+        ["help", .._] -> Ok(types.Help)
+        ["start", ..rest] -> parse_start(rest)
+        ["status", ..rest] -> parse_run_lookup(rest, types.Status)
+        ["report", ..rest] -> parse_run_lookup(rest, types.Report)
+        ["resume", ..rest] -> parse_resume(rest)
+        ["review", ..rest] -> parse_review(rest)
+        [command, .._] -> Error("Unknown command: " <> command)
+      }
+  }
+}
+
+fn contains_demo_flag(args: List(String)) -> Bool {
   case args {
-    [] -> Ok(types.Help)
-    ["help", .._] -> Ok(types.Help)
-    ["start", ..rest] -> parse_start(rest)
-    ["status", ..rest] -> parse_run_lookup(rest, types.Status)
-    ["report", ..rest] -> parse_run_lookup(rest, types.Report)
-    ["resume", ..rest] -> parse_resume(rest)
-    ["review", ..rest] -> parse_review(rest)
-    [command, .._] -> Error("Unknown command: " <> command)
+    [] -> False
+    ["--demo", .._] -> True
+    [_, ..rest] -> contains_demo_flag(rest)
+  }
+}
+
+fn parse_demo(args: List(String), ui_enabled: Bool) -> Result(types.Command, String) {
+  case args {
+    [] -> Ok(types.Demo(ui_enabled))
+    ["--demo", ..rest] -> parse_demo(rest, ui_enabled)
+    ["--ui", ..rest] -> parse_demo(rest, True)
+    [_flag, .._] ->
+      Error("--demo does not accept commands. Run `night-shift --demo [--ui]`.")
   }
 }
 
