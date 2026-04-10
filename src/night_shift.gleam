@@ -1,5 +1,15 @@
 import gleam/io
+import night_shift/app
+import night_shift/cli
+import night_shift/system
 
-pub fn main() {
-  io.println("Night Shift is bootstrapped. Run commands once the runtime is installed.")
+pub fn main() -> Nil {
+  case cli.parse(system.argv()) {
+    Ok(command) -> app.run(command) |> io.println
+    Error(message) -> {
+      io.println(message)
+      io.println("")
+      io.println(cli.usage())
+    }
+  }
 }
