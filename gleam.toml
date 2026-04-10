@@ -1,0 +1,12 @@
+name = "night_shift"
+version = "0.1.0"
+description = "Autonomous agent orchestration for overnight software work."
+licences = ["Apache-2.0"]
+repository = { type = "github", user = "Fuiste", repo = "night-shift" }
+target = "erlang"
+
+[dependencies]
+gleam_stdlib = ">= 0.44.0 and < 2.0.0"
+
+[dev-dependencies]
+gleeunit = ">= 1.0.0 and < 2.0.0"

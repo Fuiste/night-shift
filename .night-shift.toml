@@ -1,0 +1,9 @@
+base_branch = "main"
+default_harness = "codex"
+max_workers = 4
+branch_prefix = "night-shift"
+pr_title_prefix = "[night-shift]"
+notifiers = ["console", "report_file"]
+
+[verification]
+commands = []
