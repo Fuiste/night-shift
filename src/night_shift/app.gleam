@@ -1,38 +1,62 @@
+import gleam/io
 import gleam/int
 import gleam/list
 import gleam/result
 import gleam/string
 import night_shift/cli
 import night_shift/config
+import night_shift/dashboard
 import night_shift/git
 import night_shift/journal
 import night_shift/orchestrator
 import night_shift/system
 import night_shift/types
 
-pub fn run(command: types.Command) -> String {
+pub fn run(command: types.Command) -> Nil {
   let config = config.load(".night-shift.toml") |> result.unwrap(or: types.default_config())
   let repo_root = git.repo_root(system.cwd())
 
   case command {
-    types.Help -> "Night Shift is ready.\n\n" <> cli.usage() <> "\n" <> crate_summary(config)
-    types.Start(brief_path, harness, max_workers, _) -> {
+    types.Help -> io.println("Night Shift is ready.\n\n" <> cli.usage() <> "\n" <> crate_summary(config))
+    types.Start(brief_path, harness, max_workers, False) -> {
+      let resolved_harness = choose_harness(harness, config)
+      let resolved_workers = choose_max_workers(max_workers, config)
+
+      io.println(
+        case journal.start_run(repo_root, brief_path, resolved_harness, resolved_workers) {
+          Ok(run) ->
+            case orchestrator.start(run, config) {
+              Ok(completed_run) -> render_run_summary(completed_run)
+              Error(message) -> message
+            }
+          Error(message) -> message
+        },
+      )
+    }
+    types.Start(brief_path, harness, max_workers, True) -> {
       let resolved_harness = choose_harness(harness, config)
       let resolved_workers = choose_max_workers(max_workers, config)
 
       case journal.start_run(repo_root, brief_path, resolved_harness, resolved_workers) {
         Ok(run) ->
-          case orchestrator.start(run, config) {
-            Ok(completed_run) -> render_run_summary(completed_run)
-            Error(message) -> message
+          case dashboard.start_start_session(repo_root, run.run_id, run, config) {
+            Ok(session) -> {
+              io.println(render_dashboard_summary(session.url, run.run_id))
+              system.wait_forever()
+            }
+            Error(message) -> {
+              let _ = journal.mark_status(run, types.RunFailed, message)
+              io.println(message)
+            }
           }
-        Error(message) -> message
+        Error(message) -> io.println(message)
       }
     }
-    types.Status(run) -> status(repo_root, run)
-    types.Report(run) -> report(repo_root, run)
-    types.Resume(run, _) -> resume(repo_root, run, config)
-    types.Review(harness) -> review(repo_root, harness, config)
+    types.Status(run) -> io.println(status(repo_root, run))
+    types.Report(run) -> io.println(report(repo_root, run))
+    types.Resume(run, False) -> io.println(resume(repo_root, run, config))
+    types.Resume(run, True) -> resume_with_ui(repo_root, run, config)
+    types.Review(harness) -> io.println(review(repo_root, harness, config))
   }
 }
 
@@ -137,4 +161,22 @@ fn render_run_summary(run: types.RunRecord) -> String {
   <> "\n"
   <> "Journal: "
   <> run.run_path
+}
+
+fn resume_with_ui(repo_root: String, run: types.RunSelector, config: types.Config) -> Nil {
+  case journal.load(repo_root, run) {
+    Ok(#(saved_run, _)) ->
+      case dashboard.start_resume_session(repo_root, saved_run.run_id, saved_run, config) {
+        Ok(session) -> {
+          io.println(render_dashboard_summary(session.url, saved_run.run_id))
+          system.wait_forever()
+        }
+        Error(message) -> io.println(message)
+      }
+    Error(message) -> io.println(message)
+  }
+}
+
+fn render_dashboard_summary(url: String, run_id: String) -> String {
+  "Dashboard: " <> url <> "\n" <> "Run: " <> run_id
 }

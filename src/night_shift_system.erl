@@ -1,6 +1,6 @@
 -module(night_shift_system).
 
--export([argv/0, cwd/0, home_directory/0, state_directory/0, get_env/1, set_env/2, timestamp/0, unique_id/0]).
+-export([argv/0, cwd/0, home_directory/0, state_directory/0, get_env/1, set_env/2, timestamp/0, unique_id/0, sleep/1, wait_forever/0]).
 
 argv() ->
     lists:map(fun to_binary/1, init:get_plain_arguments()).
@@ -36,6 +36,16 @@ timestamp() ->
 
 unique_id() ->
     to_binary(integer_to_list(erlang:unique_integer([positive, monotonic]))).
+
+sleep(Milliseconds) ->
+    timer:sleep(Milliseconds),
+    nil.
+
+wait_forever() ->
+    receive
+    after infinity ->
+        nil
+    end.
 
 to_binary(Value) when is_binary(Value) ->
     Value;

@@ -5,6 +5,35 @@ import gleam/result
 import night_shift/journal
 import night_shift/types
 
+pub type Session {
+  Session(url: String, handle: String)
+}
+
+@external(erlang, "night_shift_dashboard_server", "start_view_session")
+pub fn start_view_session(repo_root: String, initial_run_id: String) -> Result(Session, String)
+
+@external(erlang, "night_shift_dashboard_server", "start_start_session")
+pub fn start_start_session(
+  repo_root: String,
+  initial_run_id: String,
+  run: types.RunRecord,
+  config: types.Config,
+) -> Result(Session, String)
+
+@external(erlang, "night_shift_dashboard_server", "start_resume_session")
+pub fn start_resume_session(
+  repo_root: String,
+  initial_run_id: String,
+  run: types.RunRecord,
+  config: types.Config,
+) -> Result(Session, String)
+
+@external(erlang, "night_shift_dashboard_server", "stop_session")
+pub fn stop_session(session: Session) -> Nil
+
+@external(erlang, "night_shift_dashboard_server", "http_get")
+pub fn http_get(url: String) -> Result(String, String)
+
 pub fn index_html(initial_run_id: String) -> String {
   let initial_run_json = json.string(initial_run_id) |> json.to_string
 

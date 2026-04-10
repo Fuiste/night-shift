@@ -21,3 +21,9 @@ pub fn timestamp() -> String
 
 @external(erlang, "night_shift_system", "unique_id")
 pub fn unique_id() -> String
+
+@external(erlang, "night_shift_system", "sleep")
+pub fn sleep(milliseconds: Int) -> Nil
+
+@external(erlang, "night_shift_system", "wait_forever")
+pub fn wait_forever() -> Nil

@@ -5,7 +5,7 @@ import night_shift/system
 
 pub fn main() -> Nil {
   case cli.parse(system.argv()) {
-    Ok(command) -> app.run(command) |> io.println
+    Ok(command) -> app.run(command)
     Error(message) -> {
       io.println(message)
       io.println("")
