@@ -101,8 +101,21 @@ night-shift --demo --ui
 ```
 
 The headless demo runs a real fixture-backed start flow and validates the
-resulting journal/report state. The UI demo launches the local dashboard, waits
-for the run to complete, validates the served payload, and then exits.
+resulting `start`, `status`, and `report` CLI flows. The UI demo launches the
+local dashboard through the real CLI, waits for the run to complete, validates
+the served payload, and then exits.
+
+Artifacts are kept under:
+
+```text
+$XDG_STATE_HOME/night-shift-demo/
+```
+
+If `XDG_STATE_HOME` is unset, this resolves under:
+
+```text
+$HOME/.local/state/night-shift-demo/
+```
 
 ## Run Journal
 

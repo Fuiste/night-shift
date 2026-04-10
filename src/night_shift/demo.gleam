@@ -3,158 +3,159 @@ import gleam/list
 import gleam/result
 import gleam/string
 import night_shift/dashboard
-import night_shift/journal
-import night_shift/orchestrator
 import night_shift/shell
 import night_shift/system
-import night_shift/types
 import simplifile
 
 pub fn run(ui_enabled: Bool) -> Result(Nil, String) {
-  let unique = system.unique_id()
-  let base_dir = filepath.join(system.state_directory(), "night-shift-demo-" <> unique)
-  let repo_root = filepath.join(base_dir, "repo")
-  let remote_root = filepath.join(base_dir, "remote.git")
-  let bin_dir = filepath.join(base_dir, "bin")
-  let brief_path = filepath.join(base_dir, "brief.md")
+  let host_state_dir = system.state_directory()
+  let demo_root = filepath.join(host_state_dir, "night-shift-demo")
+  let repo_root = filepath.join(demo_root, "repo")
+  let remote_root = filepath.join(demo_root, "remote.git")
+  let bin_dir = filepath.join(demo_root, "bin")
+  let brief_path = filepath.join(repo_root, "brief.md")
   let fake_harness = filepath.join(bin_dir, "fake-harness")
   let fake_gh = filepath.join(bin_dir, "gh")
+  let demo_state_home = filepath.join(demo_root, "state")
   let old_path = system.get_env("PATH")
   let old_fake_harness = system.get_env("NIGHT_SHIFT_FAKE_HARNESS")
+  let old_demo_command = system.get_env("NIGHT_SHIFT_DEMO_COMMAND")
+  let old_state_home = system.get_env("XDG_STATE_HOME")
 
-  let _ = simplifile.delete(file_or_dir_at: base_dir)
-  let _ = simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let _ = simplifile.delete(file_or_dir_at: demo_root)
 
-  let setup_result =
+  use _ <- result.try(
     setup_demo_environment(
-      base_dir: base_dir,
+      demo_root: demo_root,
       repo_root: repo_root,
       remote_root: remote_root,
       bin_dir: bin_dir,
       brief_path: brief_path,
       fake_harness: fake_harness,
       fake_gh: fake_gh,
-    )
+    ),
+  )
 
-  case setup_result {
-    Error(message) -> {
-      cleanup(base_dir, repo_root)
-      Error(message)
+  system.set_env("NIGHT_SHIFT_FAKE_HARNESS", fake_harness)
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("XDG_STATE_HOME", demo_state_home)
+
+  let outcome =
+    case ui_enabled {
+      True -> run_ui_demo(repo_root, demo_root)
+      False -> run_headless_demo(repo_root, demo_root)
     }
-    Ok(Nil) -> {
-      system.set_env("NIGHT_SHIFT_FAKE_HARNESS", fake_harness)
-      system.set_env("PATH", bin_dir <> ":" <> old_path)
 
-      let outcome =
-        case ui_enabled {
-          True -> run_ui_demo(repo_root, brief_path)
-          False -> run_headless_demo(repo_root, brief_path)
-        }
-
-      system.set_env("PATH", old_path)
-      system.set_env("NIGHT_SHIFT_FAKE_HARNESS", old_fake_harness)
-      cleanup(base_dir, repo_root)
-      outcome
-    }
-  }
+  restore_env("PATH", old_path)
+  restore_env("NIGHT_SHIFT_FAKE_HARNESS", old_fake_harness)
+  restore_env("NIGHT_SHIFT_DEMO_COMMAND", old_demo_command)
+  restore_env("XDG_STATE_HOME", old_state_home)
+  outcome
 }
 
-fn run_headless_demo(repo_root: String, brief_path: String) -> Result(Nil, String) {
-  let config =
-    types.Config(
-      ..types.default_config(),
-      verification_commands: [],
-      max_workers: 1,
+pub fn demo_root() -> String {
+  filepath.join(system.state_directory(), "night-shift-demo")
+}
+
+fn run_headless_demo(repo_root: String, demo_root: String) -> Result(Nil, String) {
+  use start_output <- result.try(
+    run_cli_command(
+      ["start", "--brief", "brief.md"],
+      repo_root,
+      filepath.join(demo_root, "headless-start.log"),
+      "Headless demo failed while running `start`.",
+    ),
+  )
+  use _ <- result.try(
+    assert_contains(
+      start_output,
+      "finished with status completed",
+      "Headless demo start flow did not complete successfully.",
+    ),
+  )
+
+  use status_output <- result.try(
+    run_cli_command(
+      ["status"],
+      repo_root,
+      filepath.join(demo_root, "headless-status.log"),
+      "Headless demo failed while running `status`.",
+    ),
+  )
+  use _ <- result.try(
+    assert_contains(
+      status_output,
+      " is completed",
+      "Headless demo status flow did not report a completed run.",
+    ),
+  )
+
+  use report_output <- result.try(
+    run_cli_command(
+      ["report"],
+      repo_root,
+      filepath.join(demo_root, "headless-report.log"),
+      "Headless demo failed while running `report`.",
+    ),
+  )
+  use _ <- result.try(
+    assert_contains(
+      report_output,
+      "Night Shift Report",
+      "Headless demo report flow did not render the report.",
+    ),
+  )
+  assert_contains(
+    report_output,
+    "Implement demo task",
+    "Headless demo report did not include the fixture task entry.",
+  )
+}
+
+fn run_ui_demo(repo_root: String, demo_root: String) -> Result(Nil, String) {
+  let log_path = filepath.join(demo_root, "ui-start.log")
+  let pid_path = filepath.join(demo_root, "ui-start.pid")
+
+  use _ <- result.try(start_ui_command(repo_root, demo_root, log_path, pid_path))
+  use #(url, run_id) <- result.try(wait_for_ui_details(log_path, 40))
+  use payload <- result.try(wait_for_completed_dashboard_payload(url, run_id, 40))
+  use _ <- result.try(stop_ui_command(demo_root, pid_path))
+  use _ <- result.try(
+    assert_contains(
+      payload,
+      "\"status\":\"completed\"",
+      "UI demo dashboard never showed a completed run.",
+    ),
+  )
+  use _ <- result.try(
+    assert_contains(
+      payload,
+      "\"pr_number\":\"1\"",
+      "UI demo dashboard never showed the delivered PR.",
+    ),
+  )
+
+  let status_output =
+    run_cli_command(
+      ["status"],
+      repo_root,
+      filepath.join(demo_root, "ui-status.log"),
+      "UI demo failed while running `status` after dashboard validation.",
     )
 
-  use run <- result.try(journal.start_run(repo_root, brief_path, types.Codex, 1))
-  use completed_run <- result.try(orchestrator.start(run, config))
-  use #(saved_run, events) <- result.try(journal.load(repo_root, types.LatestRun))
-  use report_contents <- result.try(journal.read_report(repo_root, types.LatestRun))
-
-  use _ <- result.try(assert_run_completed(completed_run.status))
-  use _ <- result.try(assert_run_completed(saved_run.status))
-  use _ <- result.try(assert_true(events != [], "Demo run did not record any events."))
-  use _ <- result.try(assert_true(string.contains(does: report_contents, contain: "Night Shift Report"), "Demo report was not rendered."))
-
-  let delivered_task =
-    completed_run.tasks
-    |> list.find(fn(task) { task.state == types.Completed && task.pr_number == "1" })
-
-  case delivered_task {
-    Ok(task) ->
-      assert_true(
-        string.contains(does: task.summary, contain: "Implemented"),
-        "Demo task finished without the expected execution summary.",
+  case status_output {
+    Ok(output) ->
+      assert_contains(
+        output,
+        " is completed",
+        "UI demo status flow did not report a completed run after validation.",
       )
-    Error(Nil) -> Error("Demo run did not deliver a completed PR-backed task.")
+    Error(message) -> Error(message)
   }
-}
-
-fn run_ui_demo(repo_root: String, brief_path: String) -> Result(Nil, String) {
-  let config =
-    types.Config(
-      ..types.default_config(),
-      verification_commands: [],
-      max_workers: 1,
-    )
-
-  use run <- result.try(journal.start_run(repo_root, brief_path, types.Codex, 1))
-  use session <- result.try(dashboard.start_start_session(repo_root, run.run_id, run, config))
-  let payload = wait_for_run_payload(session.url, run.run_id, 30)
-  let _ = dashboard.stop_session(session)
-
-  use _ <- result.try(assert_true(string.contains(does: payload, contain: "\"status\":\"completed\""), "UI demo did not reach a completed run state."))
-  use _ <- result.try(assert_true(string.contains(does: payload, contain: "\"pr_number\":\"1\""), "UI demo did not surface the delivered PR in the dashboard payload."))
-  Ok(Nil)
-}
-
-fn wait_for_run_payload(base_url: String, run_id: String, attempts: Int) -> String {
-  let url = base_url <> "/api/runs/" <> run_id
-  case attempts {
-    value if value <= 0 ->
-      dashboard.http_get(url)
-      |> result.unwrap(or: "Unable to fetch dashboard payload.")
-    _ ->
-      case dashboard.http_get(url) {
-        Ok(payload) ->
-          case string.contains(does: payload, contain: "\"status\":\"completed\"") {
-            True -> payload
-            False -> {
-              system.sleep(150)
-              wait_for_run_payload(base_url, run_id, attempts - 1)
-            }
-          }
-        Error(_) -> {
-          system.sleep(150)
-          wait_for_run_payload(base_url, run_id, attempts - 1)
-        }
-      }
-  }
-}
-
-fn assert_run_completed(status: types.RunStatus) -> Result(Nil, String) {
-  case status == types.RunCompleted {
-    True -> Ok(Nil)
-    False -> Error("Demo run did not finish successfully.")
-  }
-}
-
-fn assert_true(condition: Bool, message: String) -> Result(Nil, String) {
-  case condition {
-    True -> Ok(Nil)
-    False -> Error(message)
-  }
-}
-
-fn cleanup(base_dir: String, repo_root: String) -> Nil {
-  let _ = simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
-  let _ = simplifile.delete(file_or_dir_at: base_dir)
-  Nil
 }
 
 fn setup_demo_environment(
-  base_dir base_dir: String,
+  demo_root demo_root: String,
   repo_root repo_root: String,
   remote_root remote_root: String,
   bin_dir bin_dir: String,
@@ -162,21 +163,216 @@ fn setup_demo_environment(
   fake_harness fake_harness: String,
   fake_gh fake_gh: String,
 ) -> Result(Nil, String) {
-  use _ <- result.try(create_directory(base_dir))
+  use _ <- result.try(create_directory(demo_root))
   use _ <- result.try(create_directory(bin_dir))
-  use _ <- result.try(write_file(brief_path, "# Demo\n"))
+  use _ <- result.try(create_directory(filepath.join(demo_root, "state")))
   use _ <- result.try(write_fake_harness(fake_harness))
   use _ <- result.try(write_fake_gh(fake_gh))
-  use _ <- result.try(run_checked("chmod +x " <> shell.quote(fake_harness) <> " " <> shell.quote(fake_gh), base_dir, filepath.join(base_dir, "chmod.log"), "Unable to make demo fixtures executable."))
-  use _ <- result.try(run_checked("git init --bare " <> shell.quote(remote_root), base_dir, filepath.join(base_dir, "remote.log"), "Unable to initialize the demo remote."))
-  use _ <- result.try(run_checked("git init --initial-branch=main " <> shell.quote(repo_root), base_dir, filepath.join(base_dir, "repo-init.log"), "Unable to initialize the demo repository."))
-  use _ <- result.try(run_checked("git config user.name 'Night Shift Demo'", repo_root, filepath.join(base_dir, "git-user.log"), "Unable to configure the demo git user."))
-  use _ <- result.try(run_checked("git config user.email 'night-shift-demo@example.com'", repo_root, filepath.join(base_dir, "git-email.log"), "Unable to configure the demo git email."))
+  use _ <- result.try(
+    run_checked(
+      "chmod +x " <> shell.quote(fake_harness) <> " " <> shell.quote(fake_gh),
+      demo_root,
+      filepath.join(demo_root, "chmod.log"),
+      "Unable to make demo fixtures executable.",
+    ),
+  )
+  use _ <- result.try(
+    run_checked(
+      "git init --bare " <> shell.quote(remote_root),
+      demo_root,
+      filepath.join(demo_root, "remote.log"),
+      "Unable to initialize the demo remote.",
+    ),
+  )
+  use _ <- result.try(
+    run_checked(
+      "git init --initial-branch=main " <> shell.quote(repo_root),
+      demo_root,
+      filepath.join(demo_root, "repo-init.log"),
+      "Unable to initialize the demo repository.",
+    ),
+  )
+  use _ <- result.try(
+    run_checked(
+      "git config user.name 'Night Shift Demo'",
+      repo_root,
+      filepath.join(demo_root, "git-user.log"),
+      "Unable to configure the demo git user.",
+    ),
+  )
+  use _ <- result.try(
+    run_checked(
+      "git config user.email 'night-shift-demo@example.com'",
+      repo_root,
+      filepath.join(demo_root, "git-email.log"),
+      "Unable to configure the demo git email.",
+    ),
+  )
+  use _ <- result.try(write_file(brief_path, "# Demo\n"))
   use _ <- result.try(write_file(filepath.join(repo_root, ".night-shift.toml"), ""))
   use _ <- result.try(write_file(filepath.join(repo_root, "README.md"), "# Demo\n"))
-  use _ <- result.try(run_checked("git add README.md .night-shift.toml && git commit -m 'chore: seed demo repo'", repo_root, filepath.join(base_dir, "seed.log"), "Unable to create the demo seed commit."))
-  use _ <- result.try(run_checked("git remote add origin " <> shell.quote(remote_root), repo_root, filepath.join(base_dir, "remote-add.log"), "Unable to connect the demo remote."))
-  run_checked("git push -u origin main", repo_root, filepath.join(base_dir, "push-main.log"), "Unable to push the demo base branch.")
+  use _ <- result.try(
+    run_checked(
+      "git add README.md .night-shift.toml && git commit -m 'chore: seed demo repo'",
+      repo_root,
+      filepath.join(demo_root, "seed.log"),
+      "Unable to create the demo seed commit.",
+    ),
+  )
+  use _ <- result.try(
+    run_checked(
+      "git remote add origin " <> shell.quote(remote_root),
+      repo_root,
+      filepath.join(demo_root, "remote-add.log"),
+      "Unable to connect the demo remote.",
+    ),
+  )
+  run_checked(
+    "git push -u origin main",
+    repo_root,
+    filepath.join(demo_root, "push-main.log"),
+    "Unable to push the demo base branch.",
+  )
+}
+
+fn run_cli_command(
+  args: List(String),
+  cwd: String,
+  log_path: String,
+  error_message: String,
+) -> Result(String, String) {
+  let command = build_cli_command(args)
+  let command_result = shell.run(command, cwd, log_path)
+  case shell.succeeded(command_result) {
+    True -> Ok(command_result.output)
+    False -> Error(error_message <> " See " <> log_path <> ".")
+  }
+}
+
+fn start_ui_command(
+  repo_root: String,
+  demo_root: String,
+  log_path: String,
+  pid_path: String,
+) -> Result(Nil, String) {
+  let command =
+    "nohup "
+    <> build_cli_command(["start", "--brief", "brief.md", "--ui"])
+    <> " > "
+    <> shell.quote(log_path)
+    <> " 2>&1 & echo $! > "
+    <> shell.quote(pid_path)
+
+  run_checked(
+    command,
+    repo_root,
+    filepath.join(demo_root, "ui-launch.log"),
+    "Unable to launch the UI demo command.",
+  )
+}
+
+fn stop_ui_command(demo_root: String, pid_path: String) -> Result(Nil, String) {
+  run_checked(
+    "kill $(cat " <> shell.quote(pid_path) <> ")",
+    demo_root,
+    filepath.join(demo_root, "ui-stop.log"),
+    "Unable to stop the UI demo command.",
+  )
+}
+
+fn wait_for_ui_details(log_path: String, attempts: Int) -> Result(#(String, String), String) {
+  case attempts {
+    value if value <= 0 -> Error("UI demo did not publish a dashboard URL in time.")
+    _ ->
+      case simplifile.read(log_path) {
+        Ok(contents) ->
+          case extract_prefixed_line(contents, "Dashboard: "), extract_prefixed_line(contents, "Run: ") {
+            Ok(url), Ok(run_id) -> Ok(#(url, run_id))
+            _, _ -> {
+              system.sleep(150)
+              wait_for_ui_details(log_path, attempts - 1)
+            }
+          }
+        Error(_) -> {
+          system.sleep(150)
+          wait_for_ui_details(log_path, attempts - 1)
+        }
+      }
+  }
+}
+
+fn wait_for_completed_dashboard_payload(
+  url: String,
+  run_id: String,
+  attempts: Int,
+) -> Result(String, String) {
+  let endpoint = url <> "/api/runs/" <> run_id
+  case attempts {
+    value if value <= 0 -> Error("UI demo dashboard never reached a completed state.")
+    _ ->
+      case dashboard.http_get(endpoint) {
+        Ok(payload) ->
+          case string.contains(does: payload, contain: "\"status\":\"completed\"") {
+            True -> Ok(payload)
+            False -> {
+              system.sleep(150)
+              wait_for_completed_dashboard_payload(url, run_id, attempts - 1)
+            }
+          }
+        Error(_) -> {
+          system.sleep(150)
+          wait_for_completed_dashboard_payload(url, run_id, attempts - 1)
+        }
+      }
+  }
+}
+
+fn extract_prefixed_line(contents: String, prefix: String) -> Result(String, Nil) {
+  contents
+  |> string.trim
+  |> string.split("\n")
+  |> find_prefixed_line(prefix)
+}
+
+fn find_prefixed_line(lines: List(String), prefix: String) -> Result(String, Nil) {
+  case lines {
+    [] -> Error(Nil)
+    [line, ..rest] ->
+      case string.starts_with(line, prefix) {
+        True -> Ok(string.drop_start(line, string.length(prefix)))
+        False -> find_prefixed_line(rest, prefix)
+      }
+  }
+}
+
+fn build_cli_command(args: List(String)) -> String {
+  let base =
+    case system.get_env("NIGHT_SHIFT_DEMO_COMMAND") {
+      "" -> "night-shift"
+      command -> command
+    }
+
+  base
+  <> " "
+  <> {
+    args
+    |> list.map(shell.quote)
+    |> string.join(with: " ")
+  }
+}
+
+fn assert_contains(output: String, expected: String, message: String) -> Result(Nil, String) {
+  case string.contains(does: output, contain: expected) {
+    True -> Ok(Nil)
+    False -> Error(message)
+  }
+}
+
+fn restore_env(name: String, value: String) -> Nil {
+  case value {
+    "" -> system.unset_env(name)
+    _ -> system.set_env(name, value)
+  }
 }
 
 fn create_directory(path: String) -> Result(Nil, String) {
@@ -202,13 +398,7 @@ fn run_checked(
   let command_result = shell.run(command, cwd, log_path)
   case shell.succeeded(command_result) {
     True -> Ok(Nil)
-    False ->
-      Error(
-        error_message
-        <> " See "
-        <> log_path
-        <> "."
-      )
+    False -> Error(error_message <> " See " <> log_path <> ".")
   }
 }
 
