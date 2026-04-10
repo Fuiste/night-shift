@@ -144,6 +144,32 @@ pub fn dashboard_payloads_include_run_data_test() {
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
 
+pub fn dashboard_server_serves_run_data_test() {
+  let unique = system.unique_id()
+  let base_dir = filepath.join(system.state_directory(), "night-shift-test-dashboard-server-" <> unique)
+  let repo_root = filepath.join(base_dir, "repo-" <> unique)
+  let brief_path = filepath.join(base_dir, "brief.md")
+
+  let _ = simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(base_dir)
+  let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
+  let assert Ok(run) = journal.start_run(repo_root, brief_path, types.Codex, 1)
+  let assert Ok(session) = dashboard.start_view_session(repo_root, run.run_id)
+
+  system.sleep(100)
+
+  let assert Ok(index_html) = dashboard.http_get(session.url)
+  let assert Ok(runs_payload) = dashboard.http_get(session.url <> "/api/runs")
+  let assert Ok(run_payload) = dashboard.http_get(session.url <> "/api/runs/" <> run.run_id)
+
+  assert string.contains(does: index_html, contain: "Night Shift Dashboard")
+  assert string.contains(does: runs_payload, contain: run.run_id)
+  assert string.contains(does: run_payload, contain: "\"run_id\":\"" <> run.run_id <> "\"")
+
+  let _ = dashboard.stop_session(session)
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
 pub fn extract_json_payload_test() {
   let output =
     "noise\n"
@@ -230,6 +256,59 @@ pub fn orchestrator_start_runs_fake_harness_test() {
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
 
+pub fn dashboard_start_session_tracks_completed_run_test() {
+  let unique = system.unique_id()
+  let base_dir = filepath.join(system.state_directory(), "night-shift-ui-integration-" <> unique)
+  let repo_root = filepath.join(base_dir, "repo")
+  let remote_root = filepath.join(base_dir, "remote.git")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let brief_path = filepath.join(base_dir, "brief.md")
+  let fake_harness = filepath.join(bin_dir, "fake-harness")
+  let fake_gh = filepath.join(bin_dir, "gh")
+  let old_path = system.get_env("PATH")
+  let old_fake_harness = system.get_env("NIGHT_SHIFT_FAKE_HARNESS")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let _ = simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
+  let assert Ok(_) = write_fake_harness(fake_harness)
+  let assert Ok(_) = write_fake_gh(fake_gh)
+  let _ = shell.run("chmod +x " <> shell.quote(fake_harness) <> " " <> shell.quote(fake_gh), base_dir, filepath.join(base_dir, "chmod.log"))
+  let _ = shell.run("git init --bare " <> shell.quote(remote_root), base_dir, filepath.join(base_dir, "remote.log"))
+  let _ = shell.run("git init --initial-branch=main " <> shell.quote(repo_root), base_dir, filepath.join(base_dir, "repo-init.log"))
+  let _ = shell.run("git config user.name 'Night Shift Test'", repo_root, filepath.join(base_dir, "git-user.log"))
+  let _ = shell.run("git config user.email 'night-shift@example.com'", repo_root, filepath.join(base_dir, "git-email.log"))
+  let assert Ok(_) = simplifile.write("# Demo\n", to: filepath.join(repo_root, "README.md"))
+  let _ = shell.run("git add README.md && git commit -m 'chore: seed repo'", repo_root, filepath.join(base_dir, "seed.log"))
+  let _ = shell.run("git remote add origin " <> shell.quote(remote_root), repo_root, filepath.join(base_dir, "remote-add.log"))
+  let _ = shell.run("git push -u origin main", repo_root, filepath.join(base_dir, "push-main.log"))
+
+  system.set_env("NIGHT_SHIFT_FAKE_HARNESS", fake_harness)
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+
+  let config =
+    types.Config(
+      ..types.default_config(),
+      verification_commands: [],
+      max_workers: 1,
+    )
+
+  let assert Ok(run) = journal.start_run(repo_root, brief_path, types.Codex, 1)
+  let assert Ok(session) = dashboard.start_start_session(repo_root, run.run_id, run, config)
+  let final_payload = wait_for_run_payload(session.url, run.run_id, 20)
+
+  system.set_env("PATH", old_path)
+  system.set_env("NIGHT_SHIFT_FAKE_HARNESS", old_fake_harness)
+
+  assert string.contains(does: final_payload, contain: "\"status\":\"completed\"")
+  assert string.contains(does: final_payload, contain: "\"pr_number\":\"1\"")
+
+  let _ = dashboard.stop_session(session)
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
 fn write_fake_harness(path: String) -> Result(Nil, simplifile.FileError) {
   simplifile.write(
     "#!/bin/sh\n"
@@ -243,6 +322,30 @@ fn write_fake_harness(path: String) -> Result(Nil, simplifile.FileError) {
     <> "fi\n",
     to: path,
   )
+}
+
+fn wait_for_run_payload(base_url: String, run_id: String, attempts: Int) -> String {
+  let url = base_url <> "/api/runs/" <> run_id
+  case attempts {
+    value if value <= 0 ->
+      dashboard.http_get(url)
+      |> result.unwrap(or: "Unable to fetch dashboard payload.")
+    _ ->
+      case dashboard.http_get(url) {
+        Ok(payload) ->
+          case string.contains(does: payload, contain: "\"status\":\"completed\"") {
+            True -> payload
+            False -> {
+              system.sleep(150)
+              wait_for_run_payload(base_url, run_id, attempts - 1)
+            }
+          }
+        Error(_) -> {
+          system.sleep(150)
+          wait_for_run_payload(base_url, run_id, attempts - 1)
+        }
+      }
+  }
 }
 
 fn write_fake_gh(path: String) -> Result(Nil, simplifile.FileError) {
