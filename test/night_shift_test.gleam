@@ -1,11 +1,14 @@
 import gleeunit
 import filepath
+import gleam/list
 import gleam/result
 import gleam/string
 import night_shift/cli
 import night_shift/config
 import night_shift/harness
 import night_shift/journal
+import night_shift/orchestrator
+import night_shift/shell
 import night_shift/system
 import night_shift/types
 import simplifile
@@ -88,4 +91,119 @@ pub fn extract_json_payload_test() {
 
   let assert Ok(payload) = harness.extract_json_payload(output)
   assert payload == "{\"tasks\":[]}"
+}
+
+pub fn repo_state_path_is_stable_test() {
+  let repo_root = "/tmp/night-shift-demo"
+  assert journal.repo_state_path_for(repo_root) == journal.repo_state_path_for(repo_root)
+}
+
+pub fn orchestrator_start_runs_fake_harness_test() {
+  let unique = system.unique_id()
+  let base_dir = filepath.join(system.state_directory(), "night-shift-integration-" <> unique)
+  let repo_root = filepath.join(base_dir, "repo")
+  let remote_root = filepath.join(base_dir, "remote.git")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let brief_path = filepath.join(base_dir, "brief.md")
+  let fake_harness = filepath.join(bin_dir, "fake-harness")
+  let fake_gh = filepath.join(bin_dir, "gh")
+  let old_path = system.get_env("PATH")
+  let old_fake_harness = system.get_env("NIGHT_SHIFT_FAKE_HARNESS")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let _ = simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
+  let assert Ok(_) = write_fake_harness(fake_harness)
+  let assert Ok(_) = write_fake_gh(fake_gh)
+  let _ = shell.run("chmod +x " <> shell.quote(fake_harness) <> " " <> shell.quote(fake_gh), base_dir, filepath.join(base_dir, "chmod.log"))
+  let _ = shell.run("git init --bare " <> shell.quote(remote_root), base_dir, filepath.join(base_dir, "remote.log"))
+  let _ = shell.run("git init --initial-branch=main " <> shell.quote(repo_root), base_dir, filepath.join(base_dir, "repo-init.log"))
+  let _ = shell.run("git config user.name 'Night Shift Test'", repo_root, filepath.join(base_dir, "git-user.log"))
+  let _ = shell.run("git config user.email 'night-shift@example.com'", repo_root, filepath.join(base_dir, "git-email.log"))
+  let assert Ok(_) = simplifile.write("# Demo\n", to: filepath.join(repo_root, "README.md"))
+  let _ = shell.run("git add README.md && git commit -m 'chore: seed repo'", repo_root, filepath.join(base_dir, "seed.log"))
+  let _ = shell.run("git remote add origin " <> shell.quote(remote_root), repo_root, filepath.join(base_dir, "remote-add.log"))
+  let _ = shell.run("git push -u origin main", repo_root, filepath.join(base_dir, "push-main.log"))
+
+  system.set_env("NIGHT_SHIFT_FAKE_HARNESS", fake_harness)
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+
+  let config =
+    types.Config(
+      ..types.default_config(),
+      verification_commands: [],
+      max_workers: 1,
+    )
+
+  let assert Ok(run) = journal.start_run(repo_root, brief_path, types.Codex, 1)
+  let assert Ok(completed_run) = orchestrator.start(run, config)
+
+  system.set_env("PATH", old_path)
+  system.set_env("NIGHT_SHIFT_FAKE_HARNESS", old_fake_harness)
+
+  let completed_task =
+    completed_run.tasks
+    |> list.find(fn(task) { task.state == types.Completed })
+    |> result.unwrap(or: types.Task(
+      id: "missing",
+      title: "missing",
+      description: "",
+      dependencies: [],
+      acceptance: [],
+      demo_plan: [],
+      parallel_safe: False,
+      state: types.Failed,
+      worktree_path: "",
+      branch_name: "",
+      pr_number: "",
+      summary: "",
+    ))
+
+  assert completed_run.status == types.RunCompleted
+  assert completed_task.pr_number == "1"
+  assert string.contains(does: completed_task.summary, contain: "Implemented")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+fn write_fake_harness(path: String) -> Result(Nil, simplifile.FileError) {
+  simplifile.write(
+    "#!/bin/sh\n"
+    <> "MODE=$1\n"
+    <> "PROMPT_FILE=$2\n"
+    <> "if [ \"$MODE\" = \"plan\" ]; then\n"
+    <> "  printf 'planning\\nNIGHT_SHIFT_RESULT_START\\n{\"tasks\":[{\"id\":\"demo-task\",\"title\":\"Implement demo task\",\"description\":\"Create a file to prove execution\",\"dependencies\":[],\"acceptance\":[\"Create IMPLEMENTED.md\"],\"demo_plan\":[\"Show the new file\"],\"parallel_safe\":false}]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+    <> "else\n"
+    <> "  echo 'completed by fake harness' > IMPLEMENTED.md\n"
+    <> "  printf 'execution\\nNIGHT_SHIFT_RESULT_START\\n{\"status\":\"completed\",\"summary\":\"Implemented demo task\",\"files_touched\":[\"IMPLEMENTED.md\"],\"demo_evidence\":[\"IMPLEMENTED.md created\"],\"pr\":{\"title\":\"[night-shift] Implement demo task\",\"summary\":\"Implemented the fake harness task.\",\"demo\":[\"IMPLEMENTED.md created\"],\"risks\":[]},\"follow_up_tasks\":[]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+    <> "fi\n",
+    to: path,
+  )
+}
+
+fn write_fake_gh(path: String) -> Result(Nil, simplifile.FileError) {
+  simplifile.write(
+    "#!/bin/sh\n"
+    <> "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"list\" ]; then\n"
+    <> "  BRANCH=$(git rev-parse --abbrev-ref HEAD)\n"
+    <> "  printf '[{\"number\":1,\"url\":\"https://example.test/pr/1\",\"headRefName\":\"%s\",\"title\":\"Night Shift PR\"}]\\n' \"$BRANCH\"\n"
+    <> "  exit 0\n"
+    <> "fi\n"
+    <> "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"edit\" ]; then\n"
+    <> "  exit 0\n"
+    <> "fi\n"
+    <> "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"create\" ]; then\n"
+    <> "  printf 'https://example.test/pr/1\\n'\n"
+    <> "  exit 0\n"
+    <> "fi\n"
+    <> "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"view\" ]; then\n"
+    <> "  printf '{\"number\":1,\"title\":\"Night Shift PR\",\"body\":\"Review body\",\"headRefName\":\"night-shift/demo\",\"baseRefName\":\"main\",\"url\":\"https://example.test/pr/1\",\"reviewDecision\":\"REVIEW_REQUIRED\",\"statusCheckRollup\":[],\"reviews\":[],\"comments\":[]}'\n"
+    <> "  exit 0\n"
+    <> "fi\n"
+    <> "printf 'unsupported gh invocation: %s %s\\n' \"$1\" \"$2\" >&2\n"
+    <> "exit 1\n",
+    to: path,
+  )
 }

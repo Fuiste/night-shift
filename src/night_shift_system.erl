@@ -1,6 +1,6 @@
 -module(night_shift_system).
 
--export([argv/0, cwd/0, home_directory/0, state_directory/0, get_env/1, timestamp/0, unique_id/0]).
+-export([argv/0, cwd/0, home_directory/0, state_directory/0, get_env/1, set_env/2, timestamp/0, unique_id/0]).
 
 argv() ->
     lists:map(fun to_binary/1, init:get_plain_arguments()).
@@ -26,6 +26,10 @@ get_env(Name) ->
         false -> <<>>;
         Value -> to_binary(Value)
     end.
+
+set_env(Name, Value) ->
+    true = os:putenv(binary_to_list(Name), binary_to_list(Value)),
+    nil.
 
 timestamp() ->
     to_binary(calendar:system_time_to_rfc3339(erlang:system_time(second), [{unit, second}])).

@@ -13,6 +13,9 @@ pub fn state_directory() -> String
 @external(erlang, "night_shift_system", "get_env")
 pub fn get_env(name: String) -> String
 
+@external(erlang, "night_shift_system", "set_env")
+pub fn set_env(name: String, value: String) -> Nil
+
 @external(erlang, "night_shift_system", "timestamp")
 pub fn timestamp() -> String
 
