@@ -2,9 +2,10 @@ import filepath
 import gleam/list
 import gleam/string
 import night_shift/shell
+import night_shift/system
 
 pub fn repo_root(cwd: String) -> String {
-  let log_path = filepath.join(cwd, ".night-shift.git-root.log")
+  let log_path = filepath.join(system.state_directory(), "night-shift/git-root.log")
   let result = shell.run("git rev-parse --show-toplevel", cwd, log_path)
   case shell.succeeded(result) {
     True -> string.trim(result.output)
