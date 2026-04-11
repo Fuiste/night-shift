@@ -8,9 +8,11 @@ import night_shift/git
 import night_shift/github
 import night_shift/journal
 import night_shift/provider
+import night_shift/project
 import night_shift/shell
 import night_shift/system
 import night_shift/types
+import night_shift/worktree_setup
 
 pub fn start(
   run: types.RunRecord,
@@ -133,7 +135,7 @@ fn finish_run(run: types.RunRecord) -> Result(types.RunRecord, String) {
   let message = case status {
     types.RunCompleted -> "Night Shift completed all queued work."
     types.RunFailed -> "Night Shift encountered failed tasks."
-    types.RunBlocked -> "Night Shift is awaiting manual review."
+    types.RunBlocked -> blocked_run_message(run.tasks)
     _ -> "Night Shift stopped."
   }
 
@@ -168,6 +170,8 @@ fn launch_batch_loop(
       }
       let git_log =
         filepath.join(run.run_path, "logs/" <> task.id <> ".git.log")
+      let env_log =
+        filepath.join(run.run_path, "logs/" <> task.id <> ".env.log")
       let worktree_result = case task.branch_name {
         "" ->
           git.create_worktree(
@@ -209,18 +213,31 @@ fn launch_batch_loop(
             updated_run,
             event,
           ))
-          use start_head <- result.try(git.head_commit(worktree_path, git_log))
-          use task_run <- result.try(provider.start_task(
-            persisted_run.execution_agent,
-            persisted_run.repo_root,
-            persisted_run.run_path,
-            running_task,
-            worktree_path,
-            start_head,
-            branch_name,
-            base_ref,
-          ))
-          launch_batch_loop(config, persisted_run, rest, [task_run, ..acc])
+          case
+            start_task_run(
+              persisted_run,
+              running_task,
+              worktree_path,
+              branch_name,
+              base_ref,
+              git_log,
+              env_log,
+            )
+          {
+            Ok(#(started_run, task_run)) ->
+              launch_batch_loop(config, started_run, rest, [task_run, ..acc])
+
+            Error(message) -> {
+              use failed_run <- result.try(mark_task_with_event(
+                persisted_run,
+                running_task,
+                types.Failed,
+                message,
+                "task_failed",
+              ))
+              launch_batch_loop(config, failed_run, rest, acc)
+            }
+          }
         }
         Error(message) -> {
           let failed_task =
@@ -229,7 +246,7 @@ fn launch_batch_loop(
             types.RunRecord(..run, tasks: replace_task(run.tasks, failed_task))
           let event =
             types.RunEvent(
-              kind: "task_blocked",
+              kind: "task_failed",
               at: system.timestamp(),
               message: message,
               task_id: Some(task.id),
@@ -284,23 +301,14 @@ fn finalize_non_success(
   task: types.Task,
   execution_result: types.ExecutionResult,
 ) -> Result(types.RunRecord, String) {
-  let updated_task =
-    types.Task(
-      ..task,
-      state: execution_result.status,
-      summary: execution_result.summary,
-    )
-  let updated_run =
-    types.RunRecord(..run, tasks: replace_task(run.tasks, updated_task))
-  let event =
-    types.RunEvent(
-      kind: "task_blocked",
-      at: system.timestamp(),
-      message: execution_result.summary,
-      task_id: Some(task.id),
-    )
-
-  journal.append_event(updated_run, event)
+  let event_kind = event_kind_for_state(execution_result.status)
+  mark_task_with_event(
+    run,
+    task,
+    execution_result.status,
+    execution_result.summary,
+    event_kind,
+  )
 }
 
 fn finalize_success(
@@ -311,10 +319,16 @@ fn finalize_success(
 ) -> Result(types.RunRecord, String) {
   let verification_log =
     filepath.join(run.run_path, "logs/" <> task_run.task.id <> ".verify.log")
+  use env_vars <- result.try(worktree_setup.env_vars_for(
+    run.repo_root,
+    run.environment_name,
+    project.worktree_setup_path(run.repo_root),
+  ))
   let verify_result =
     verify_commands(
       config.verification_commands,
       task_run.worktree_path,
+      env_vars,
       verification_log,
     )
 
@@ -326,6 +340,7 @@ fn finalize_success(
           run.execution_agent,
           run.repo_root,
           task_run.worktree_path,
+          env_vars,
           run.run_path,
           task_run.task,
           output,
@@ -336,6 +351,7 @@ fn finalize_success(
             verify_commands(
               config.verification_commands,
               task_run.worktree_path,
+              env_vars,
               verification_log,
             )
           {
@@ -381,22 +397,12 @@ fn finalize_success(
 
       case delivered_head == task_run.start_head {
         True -> {
-          let task =
-            types.Task(
-              ..task_run.task,
-              state: types.ManualAttention,
-              summary: "Provider reported completion but the task worktree produced no committed or uncommitted changes.",
-            )
-          let updated_run =
-            types.RunRecord(..run, tasks: replace_task(run.tasks, task))
-          journal.append_event(
-            updated_run,
-            types.RunEvent(
-              kind: "task_blocked",
-              at: system.timestamp(),
-              message: task.summary,
-              task_id: Some(task.id),
-            ),
+          mark_task_with_event(
+            run,
+            task_run.task,
+            types.ManualAttention,
+            "Primary blocker: provider reported completion but the task worktree produced no committed or uncommitted changes.\n\nEnvironment notes: verification completed, but there was nothing new to deliver.",
+            "task_manual_attention",
           )
         }
         False -> {
@@ -473,22 +479,13 @@ fn finalize_success(
       }
     }
     Error(output) -> {
-      let failed_task =
-        types.Task(
-          ..task_run.task,
-          state: types.Failed,
-          summary: "Verification failed:\n" <> output,
-        )
-      let failed_run =
-        types.RunRecord(..run, tasks: replace_task(run.tasks, failed_task))
-      journal.append_event(
-        failed_run,
-        types.RunEvent(
-          kind: "task_blocked",
-          at: system.timestamp(),
-          message: failed_task.summary,
-          task_id: Some(task_run.task.id),
-        ),
+      mark_task_with_event(
+        run,
+        task_run.task,
+        types.Failed,
+        "Primary blocker: verification failed.\n\nEnvironment notes:\n"
+          <> output,
+        "task_failed",
       )
     }
   }
@@ -497,28 +494,30 @@ fn finalize_success(
 fn verify_commands(
   commands: List(String),
   cwd: String,
+  env_vars: List(#(String, String)),
   log_path: String,
 ) -> Result(String, String) {
   case commands {
     [] -> Ok("No verification commands configured.")
-    _ -> verify_loop(commands, cwd, log_path, [])
+    _ -> verify_loop(commands, cwd, env_vars, log_path, [])
   }
 }
 
 fn verify_loop(
   commands: List(String),
   cwd: String,
+  env_vars: List(#(String, String)),
   log_path: String,
   acc: List(String),
 ) -> Result(String, String) {
   case commands {
     [] -> Ok(string.join(list.reverse(acc), "\n\n"))
     [command, ..rest] -> {
-      let output = shell.run(command, cwd, log_path)
+      let output = shell.run(shell.with_env(command, env_vars), cwd, log_path)
       let transcript = "$ " <> command <> "\n" <> output.output
 
       case shell.succeeded(output) {
-        True -> verify_loop(rest, cwd, log_path, [transcript, ..acc])
+        True -> verify_loop(rest, cwd, env_vars, log_path, [transcript, ..acc])
         False -> Error(string.join(list.reverse([transcript, ..acc]), "\n\n"))
       }
     }
@@ -555,18 +554,10 @@ fn refresh_ready_states(tasks: List(types.Task)) -> List(types.Task) {
 }
 
 fn next_batch(tasks: List(types.Task), max_workers: Int) -> List(types.Task) {
-  let ready_parallel =
-    tasks
-    |> list.filter(fn(task) { task.state == types.Ready && task.parallel_safe })
-    |> list.take(up_to: max_workers)
-
-  case ready_parallel {
-    [] ->
-      tasks
-      |> list.filter(fn(task) { task.state == types.Ready })
-      |> list.take(up_to: 1)
-    _ -> ready_parallel
-  }
+  tasks
+  |> list.filter(fn(task) { task.state == types.Ready })
+  |> build_batch(max_workers, [], False)
+  |> list.reverse
 }
 
 fn replace_task(
@@ -598,7 +589,7 @@ fn merge_follow_up_tasks(
           dependencies: follow_up.dependencies,
           acceptance: follow_up.acceptance,
           demo_plan: follow_up.demo_plan,
-          parallel_safe: follow_up.parallel_safe,
+          execution_mode: follow_up.execution_mode,
           state: types.Queued,
           worktree_path: "",
           branch_name: "",
@@ -740,11 +731,142 @@ fn review_task_from_pr(pr: github.ReviewWorkItem) -> types.Task {
       "Leave the PR in a green or clearly blocked state.",
     ],
     demo_plan: ["Summarize the fixes and checks in the PR body."],
-    parallel_safe: False,
+    execution_mode: types.Exclusive,
     state: types.Ready,
     worktree_path: "",
     branch_name: pr.head_ref_name,
     pr_number: int.to_string(pr.number),
     summary: "",
   )
+}
+
+fn start_task_run(
+  run: types.RunRecord,
+  task: types.Task,
+  worktree_path: String,
+  branch_name: String,
+  base_ref: String,
+  git_log: String,
+  env_log: String,
+) -> Result(#(types.RunRecord, provider.TaskRun), String) {
+  let bootstrap_phase = case task.branch_name {
+    "" -> worktree_setup.SetupPhase
+    _ -> worktree_setup.MaintenancePhase
+  }
+  use _ <- result.try(worktree_setup.prepare_worktree(
+    run.repo_root,
+    run.environment_name,
+    project.worktree_setup_path(run.repo_root),
+    worktree_path,
+    branch_name,
+    bootstrap_phase,
+    env_log,
+  ))
+  use env_vars <- result.try(worktree_setup.env_vars_for(
+    run.repo_root,
+    run.environment_name,
+    project.worktree_setup_path(run.repo_root),
+  ))
+  use start_head <- result.try(git.head_commit(worktree_path, git_log))
+  use task_run <- result.try(provider.start_task(
+    run.execution_agent,
+    run.repo_root,
+    run.run_path,
+    task,
+    worktree_path,
+    env_vars,
+    start_head,
+    branch_name,
+    base_ref,
+  ))
+  Ok(#(run, task_run))
+}
+
+fn mark_task_with_event(
+  run: types.RunRecord,
+  task: types.Task,
+  state: types.TaskState,
+  summary: String,
+  event_kind: String,
+) -> Result(types.RunRecord, String) {
+  let updated_task = types.Task(..task, state: state, summary: summary)
+  let updated_run =
+    types.RunRecord(..run, tasks: replace_task(run.tasks, updated_task))
+  journal.append_event(
+    updated_run,
+    types.RunEvent(
+      kind: event_kind,
+      at: system.timestamp(),
+      message: summary,
+      task_id: Some(task.id),
+    ),
+  )
+}
+
+fn event_kind_for_state(state: types.TaskState) -> String {
+  case state {
+    types.ManualAttention -> "task_manual_attention"
+    types.Failed -> "task_failed"
+    types.Blocked -> "task_blocked"
+    _ -> "task_failed"
+  }
+}
+
+fn build_batch(
+  ready_tasks: List(types.Task),
+  max_workers: Int,
+  acc: List(types.Task),
+  has_serial: Bool,
+) -> List(types.Task) {
+  case ready_tasks, list.length(acc) >= max_workers {
+    _, True -> acc
+    [], False -> acc
+    [task, ..rest], False ->
+      case task.execution_mode, acc {
+        types.Exclusive, [] -> [task]
+        types.Exclusive, _ -> acc
+        types.Parallel, _ ->
+          build_batch(rest, max_workers, [task, ..acc], has_serial)
+        types.Serial, _ ->
+          case has_serial {
+            True -> acc
+            False -> build_batch(rest, max_workers, [task, ..acc], True)
+          }
+      }
+  }
+}
+
+fn blocked_run_message(tasks: List(types.Task)) -> String {
+  let pr_count =
+    tasks
+    |> list.filter(fn(task) { task.pr_number != "" })
+    |> list.length
+  let manual_attention_count =
+    tasks
+    |> list.filter(fn(task) { task.state == types.ManualAttention })
+    |> list.length
+  let blocked_count =
+    tasks
+    |> list.filter(fn(task) { task.state == types.Blocked })
+    |> list.length
+
+  "Night Shift opened "
+  <> pluralize(pr_count, "PR")
+  <> " and is awaiting manual review for "
+  <> pluralize(manual_attention_count, "task")
+  <> blocked_suffix(blocked_count)
+}
+
+fn blocked_suffix(blocked_count: Int) -> String {
+  case blocked_count {
+    0 -> "."
+    _ -> " while " <> pluralize(blocked_count, "task") <> " remain blocked."
+  }
+}
+
+fn pluralize(count: Int, noun: String) -> String {
+  case count == 1 {
+    True -> "1 " <> noun
+    False -> int.to_string(count) <> " " <> noun <> "s"
+  }
 }

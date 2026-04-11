@@ -9,6 +9,7 @@ import night_shift/journal
 import night_shift/shell
 import night_shift/system
 import night_shift/types
+import night_shift/worktree_setup
 import simplifile
 
 const start_marker = "NIGHT_SHIFT_RESULT_START"
@@ -74,6 +75,48 @@ pub fn plan_document(
   }
 }
 
+pub fn generate_worktree_setup(
+  agent: types.ResolvedAgentConfig,
+  repo_root: String,
+  output_path: String,
+) -> Result(#(String, String), String) {
+  let artifact_path = planning_artifact_path(repo_root)
+  let prompt_path = filepath.join(artifact_path, "worktree-setup.prompt.md")
+  let log_path = filepath.join(artifact_path, "worktree-setup.log")
+  use _ <- result.try(create_directory(artifact_path))
+  use _ <- result.try(write_file(
+    prompt_path,
+    worktree_setup_prompt(output_path),
+  ))
+  use command <- result.try(planning_command(agent, repo_root, prompt_path))
+  let command_result =
+    run_planner_command(
+      command,
+      repo_root,
+      log_path,
+      shell.stream_metadata(
+        label: "worktree-setup",
+        prompt_path: prompt_path,
+        harness: types.provider_to_string(agent.provider),
+        phase: "generate_worktree_setup",
+      ),
+    )
+
+  case shell.succeeded(command_result) {
+    True -> {
+      use document <- result.try(extract_payload(command_result.output))
+      use _ <- result.try(
+        worktree_setup.parse(document)
+        |> result.map_error(fn(message) {
+          "Generated worktree setup was invalid: " <> message <> ". See " <> log_path
+        }),
+      )
+      Ok(#(document, artifact_path))
+    }
+    False -> Error("Worktree setup generation failed. See " <> log_path)
+  }
+}
+
 pub fn plan_tasks(
   agent: types.ResolvedAgentConfig,
   repo_root: String,
@@ -114,6 +157,7 @@ pub fn start_task(
   run_path: String,
   task: types.Task,
   worktree_path: String,
+  env_vars: List(#(String, String)),
   start_head: String,
   branch_name: String,
   base_ref: String,
@@ -129,7 +173,7 @@ pub fn start_task(
   ))
   let handle =
     start_provider_command(
-      command,
+      shell.with_env(command, env_vars),
       worktree_path,
       log_path,
       shell.stream_metadata(
@@ -175,6 +219,7 @@ pub fn repair_task(
   agent: types.ResolvedAgentConfig,
   repo_root: String,
   worktree_path: String,
+  env_vars: List(#(String, String)),
   run_path: String,
   task: types.Task,
   verification_output: String,
@@ -194,7 +239,7 @@ pub fn repair_task(
   ))
   let command_result =
     run_provider_command(
-      command,
+      shell.with_env(command, env_vars),
       worktree_path,
       log_path,
       shell.stream_metadata(
@@ -489,7 +534,8 @@ fn planner_prompt(brief_contents: String) -> String {
   <> "Stay strictly within the brief. Do not create adjacent scope.\n"
   <> "If ambiguity would change public behavior, create a single task whose description asks for manual attention.\n"
   <> "Return only one JSON object between the exact sentinel markers below.\n"
-  <> "Each task must include: id, title, description, dependencies, acceptance, demo_plan, parallel_safe.\n"
+  <> "Each task must include: id, title, description, dependencies, acceptance, demo_plan, execution_mode.\n"
+  <> "Use execution_mode = parallel for independent low-conflict work, serial for normal implementation work that may share context, and exclusive only when the task must run alone.\n"
   <> "Use lowercase kebab-case ids.\n"
   <> "\n"
   <> start_marker
@@ -559,12 +605,46 @@ fn execution_prompt(task: types.Task) -> String {
   <> "The JSON shape is:\n"
   <> start_marker
   <> "\n"
-  <> "{\"status\":\"completed\",\"summary\":\"...\",\"files_touched\":[\"...\"],\"demo_evidence\":[\"...\"],\"pr\":{\"title\":\"...\",\"summary\":\"...\",\"demo\":[\"...\"],\"risks\":[\"...\"]},\"follow_up_tasks\":[{\"id\":\"...\",\"title\":\"...\",\"description\":\"...\",\"dependencies\":[\"...\"],\"acceptance\":[\"...\"],\"demo_plan\":[\"...\"],\"parallel_safe\":false}]}\n"
+  <> "{\"status\":\"completed\",\"summary\":\"...\",\"files_touched\":[\"...\"],\"demo_evidence\":[\"...\"],\"pr\":{\"title\":\"...\",\"summary\":\"...\",\"demo\":[\"...\"],\"risks\":[\"...\"]},\"follow_up_tasks\":[{\"id\":\"...\",\"title\":\"...\",\"description\":\"...\",\"dependencies\":[\"...\"],\"acceptance\":[\"...\"],\"demo_plan\":[\"...\"],\"execution_mode\":\"serial\"}]}\n"
   <> end_marker
   <> "\n"
   <> "\n"
   <> "Task:\n"
   <> render_task(task)
+}
+
+fn worktree_setup_prompt(output_path: String) -> String {
+  "You are Night Shift's project setup provider.\n"
+  <> "Draft a repo-scoped worktree environment file for Night Shift.\n"
+  <> "Inspect the repository to infer likely setup and maintenance commands, but stay conservative.\n"
+  <> "Prefer explicit, reproducible commands that prepare a fresh worktree for coding and verification.\n"
+  <> "Do not include secrets. Do not write files or execute mutating commands.\n"
+  <> "Return only TOML between the exact sentinel markers below.\n"
+  <> "The TOML must parse against this v1 schema:\n"
+  <> "version = 1\n"
+  <> "default_environment = \"default\"\n"
+  <> "[environments.<name>.env]\n"
+  <> "KEY = \"value\"\n"
+  <> "[environments.<name>.setup]\n"
+  <> "default = [\"...\"]\n"
+  <> "macos = []\n"
+  <> "linux = []\n"
+  <> "windows = []\n"
+  <> "[environments.<name>.maintenance]\n"
+  <> "default = [\"...\"]\n"
+  <> "macos = []\n"
+  <> "linux = []\n"
+  <> "windows = []\n"
+  <> "\n"
+  <> "If you are unsure, keep commands empty instead of guessing.\n"
+  <> "\n"
+  <> start_marker
+  <> "\n"
+  <> worktree_setup.default_template()
+  <> end_marker
+  <> "\n\n"
+  <> "Destination path:\n"
+  <> output_path
 }
 
 fn repair_prompt(task: types.Task, verification_output: String) -> String {
@@ -696,7 +776,7 @@ fn planned_task_decoder() -> decode.Decoder(types.Task) {
   use dependencies <- decode.field("dependencies", decode.list(decode.string))
   use acceptance <- decode.field("acceptance", decode.list(decode.string))
   use demo_plan <- decode.field("demo_plan", decode.list(decode.string))
-  use parallel_safe <- decode.field("parallel_safe", decode.bool)
+  use execution_mode <- decode.then(execution_mode_decoder())
   decode.success(types.Task(
     id: id,
     title: title,
@@ -704,7 +784,7 @@ fn planned_task_decoder() -> decode.Decoder(types.Task) {
     dependencies: dependencies,
     acceptance: acceptance,
     demo_plan: demo_plan,
-    parallel_safe: parallel_safe,
+    execution_mode: execution_mode,
     state: types.Queued,
     worktree_path: "",
     branch_name: "",
@@ -753,7 +833,7 @@ fn follow_up_task_decoder() -> decode.Decoder(types.FollowUpTask) {
   use dependencies <- decode.field("dependencies", decode.list(decode.string))
   use acceptance <- decode.field("acceptance", decode.list(decode.string))
   use demo_plan <- decode.field("demo_plan", decode.list(decode.string))
-  use parallel_safe <- decode.field("parallel_safe", decode.bool)
+  use execution_mode <- decode.then(execution_mode_decoder())
   decode.success(types.FollowUpTask(
     id: id,
     title: title,
@@ -761,7 +841,7 @@ fn follow_up_task_decoder() -> decode.Decoder(types.FollowUpTask) {
     dependencies: dependencies,
     acceptance: acceptance,
     demo_plan: demo_plan,
-    parallel_safe: parallel_safe,
+    execution_mode: execution_mode,
   ))
 }
 
@@ -776,8 +856,37 @@ fn execution_status_decoder() -> decode.Decoder(types.TaskState) {
   }
 }
 
+fn execution_mode_decoder() -> decode.Decoder(types.ExecutionMode) {
+  decode.one_of(field_execution_mode_decoder(), or: [legacy_parallel_safe_decoder()])
+}
+
+fn field_execution_mode_decoder() -> decode.Decoder(types.ExecutionMode) {
+  use raw <- decode.field("execution_mode", decode.string)
+  case types.execution_mode_from_string(raw) {
+    Ok(mode) -> decode.success(mode)
+    Error(_) -> decode.failure(types.Serial, "ExecutionMode")
+  }
+}
+
+fn legacy_parallel_safe_decoder() -> decode.Decoder(types.ExecutionMode) {
+  use parallel_safe <- decode.field("parallel_safe", decode.bool)
+  case parallel_safe {
+    True -> decode.success(types.Parallel)
+    False -> decode.success(types.Exclusive)
+  }
+}
+
 fn planning_artifact_path(repo_root: String) -> String {
-  filepath.join(journal.repo_state_path_for(repo_root), "planning")
+  filepath.join(
+    journal.planning_root_for(repo_root),
+    system.timestamp()
+      |> string.replace(each: ":", with: "-")
+      |> string.replace(each: "T", with: "_")
+      |> string.replace(each: "+", with: "_")
+      |> string.replace(each: "Z", with: "")
+      |> string.append("-")
+      |> string.append(system.unique_id()),
+  )
 }
 
 fn create_directory(path: String) -> Result(Nil, String) {

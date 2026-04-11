@@ -8,12 +8,13 @@ pub fn usage() -> String {
   <> "\n"
   <> "Commands:\n"
   <> "  --demo [--ui]\n"
+  <> "  init [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>] [--yes] [--generate-setup]\n"
   <> "  plan --notes <path> [--doc <path>] [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>]\n"
-  <> "  start [--brief <path>] [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>] [--max-workers <n>] [--ui]\n"
+  <> "  start [--brief <path>] [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>] [--environment <name>] [--max-workers <n>] [--ui]\n"
   <> "  status [--run <id>|latest]\n"
   <> "  report [--run <id>|latest]\n"
   <> "  resume [--run <id>|latest] [--ui]\n"
-  <> "  review [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>]\n"
+  <> "  review [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>] [--environment <name>]\n"
 }
 
 pub fn parse(args: List(String)) -> Result(types.Command, String) {
@@ -23,6 +24,7 @@ pub fn parse(args: List(String)) -> Result(types.Command, String) {
       case args {
         [] -> Ok(types.Help)
         ["help", ..] -> Ok(types.Help)
+        ["init", ..rest] -> parse_init(rest)
         ["plan", ..rest] -> parse_plan(rest)
         ["start", ..rest] -> parse_start(rest)
         ["status", ..rest] -> parse_run_lookup(rest, types.Status)
@@ -118,11 +120,64 @@ fn parse_demo(
   }
 }
 
+fn parse_init(args: List(String)) -> Result(types.Command, String) {
+  parse_init_flags(args, types.empty_agent_overrides(), False, False)
+}
+
+fn parse_init_flags(
+  args: List(String),
+  agent_overrides: types.AgentOverrides,
+  generate_setup: Bool,
+  assume_yes: Bool,
+) -> Result(types.Command, String) {
+  case args {
+    [] -> Ok(types.Init(agent_overrides, generate_setup, assume_yes))
+    ["--profile", profile_name, ..rest] ->
+      parse_init_flags(
+        rest,
+        types.AgentOverrides(..agent_overrides, profile: Some(profile_name)),
+        generate_setup,
+        assume_yes,
+      )
+    ["--provider", raw_provider, ..rest] -> {
+      use provider <- result.try(types.provider_from_string(raw_provider))
+      parse_init_flags(
+        rest,
+        types.AgentOverrides(..agent_overrides, provider: Some(provider)),
+        generate_setup,
+        assume_yes,
+      )
+    }
+    ["--model", model, ..rest] ->
+      parse_init_flags(
+        rest,
+        types.AgentOverrides(..agent_overrides, model: Some(model)),
+        generate_setup,
+        assume_yes,
+      )
+    ["--reasoning", raw_reasoning, ..rest] -> {
+      use reasoning <- result.try(types.reasoning_from_string(raw_reasoning))
+      parse_init_flags(
+        rest,
+        types.AgentOverrides(..agent_overrides, reasoning: Some(reasoning)),
+        generate_setup,
+        assume_yes,
+      )
+    }
+    ["--generate-setup", ..rest] ->
+      parse_init_flags(rest, agent_overrides, True, assume_yes)
+    ["--yes", ..rest] ->
+      parse_init_flags(rest, agent_overrides, generate_setup, True)
+    [flag, ..] -> Error("Unsupported init flag: " <> flag)
+  }
+}
+
 fn parse_start(args: List(String)) -> Result(types.Command, String) {
   parse_start_flags(
     args,
     None,
     types.empty_agent_overrides(),
+    None,
     Error(Nil),
     False,
   )
@@ -132,17 +187,26 @@ fn parse_start_flags(
   args: List(String),
   brief_path: Option(String),
   agent_overrides: types.AgentOverrides,
+  environment_name: Option(String),
   max_workers: Result(Int, Nil),
   ui_enabled: Bool,
 ) -> Result(types.Command, String) {
   case args {
-    [] -> Ok(types.Start(brief_path, agent_overrides, max_workers, ui_enabled))
+    [] ->
+      Ok(types.Start(
+        brief_path,
+        agent_overrides,
+        environment_name,
+        max_workers,
+        ui_enabled,
+      ))
 
     ["--brief", path, ..rest] ->
       parse_start_flags(
         rest,
         Some(path),
         agent_overrides,
+        environment_name,
         max_workers,
         ui_enabled,
       )
@@ -152,6 +216,7 @@ fn parse_start_flags(
         rest,
         brief_path,
         types.AgentOverrides(..agent_overrides, profile: Some(profile_name)),
+        environment_name,
         max_workers,
         ui_enabled,
       )
@@ -162,6 +227,7 @@ fn parse_start_flags(
         rest,
         brief_path,
         types.AgentOverrides(..agent_overrides, provider: Some(provider)),
+        environment_name,
         max_workers,
         ui_enabled,
       )
@@ -172,6 +238,7 @@ fn parse_start_flags(
         rest,
         brief_path,
         types.AgentOverrides(..agent_overrides, model: Some(model)),
+        environment_name,
         max_workers,
         ui_enabled,
       )
@@ -182,10 +249,21 @@ fn parse_start_flags(
         rest,
         brief_path,
         types.AgentOverrides(..agent_overrides, reasoning: Some(reasoning)),
+        environment_name,
         max_workers,
         ui_enabled,
       )
     }
+
+    ["--environment", name, ..rest] ->
+      parse_start_flags(
+        rest,
+        brief_path,
+        agent_overrides,
+        Some(name),
+        max_workers,
+        ui_enabled,
+      )
 
     ["--max-workers", raw_count, ..rest] -> {
       use parsed_count <- result.try(parse_positive_int(raw_count))
@@ -193,13 +271,21 @@ fn parse_start_flags(
         rest,
         brief_path,
         agent_overrides,
+        environment_name,
         Ok(parsed_count),
         ui_enabled,
       )
     }
 
     ["--ui", ..rest] ->
-      parse_start_flags(rest, brief_path, agent_overrides, max_workers, True)
+      parse_start_flags(
+        rest,
+        brief_path,
+        agent_overrides,
+        environment_name,
+        max_workers,
+        True,
+      )
 
     [flag, ..] -> Error("Unsupported start flag: " <> flag)
   }
@@ -226,39 +312,46 @@ fn parse_resume_flags(
 }
 
 fn parse_review(args: List(String)) -> Result(types.Command, String) {
-  parse_review_flags(args, types.empty_agent_overrides())
+  parse_review_flags(args, types.empty_agent_overrides(), None)
 }
 
 fn parse_review_flags(
   args: List(String),
   agent_overrides: types.AgentOverrides,
+  environment_name: Option(String),
 ) -> Result(types.Command, String) {
   case args {
-    [] -> Ok(types.Review(agent_overrides))
+    [] -> Ok(types.Review(agent_overrides, environment_name))
     ["--profile", profile_name, ..rest] ->
       parse_review_flags(
         rest,
         types.AgentOverrides(..agent_overrides, profile: Some(profile_name)),
+        environment_name,
       )
     ["--provider", raw_provider, ..rest] -> {
       use provider <- result.try(types.provider_from_string(raw_provider))
       parse_review_flags(
         rest,
         types.AgentOverrides(..agent_overrides, provider: Some(provider)),
+        environment_name,
       )
     }
     ["--model", model, ..rest] ->
       parse_review_flags(
         rest,
         types.AgentOverrides(..agent_overrides, model: Some(model)),
+        environment_name,
       )
     ["--reasoning", raw_reasoning, ..rest] -> {
       use reasoning <- result.try(types.reasoning_from_string(raw_reasoning))
       parse_review_flags(
         rest,
         types.AgentOverrides(..agent_overrides, reasoning: Some(reasoning)),
+        environment_name,
       )
     }
+    ["--environment", name, ..rest] ->
+      parse_review_flags(rest, agent_overrides, Some(name))
     [flag, ..] -> Error("Unsupported review flag: " <> flag)
   }
 }

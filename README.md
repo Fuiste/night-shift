@@ -39,7 +39,31 @@ asdf install
 
 ## Configuration
 
-Repository defaults live in `.night-shift.toml`.
+Night Shift now keeps project-owned state in `./.night-shift/`.
+
+Tracked project config lives in:
+
+- `./.night-shift/config.toml`
+- `./.night-shift/worktree-setup.toml`
+
+Runtime artifacts stay in the same repo-local home:
+
+- `./.night-shift/runs/<run-id>/`
+- `./.night-shift/planning/<timestamp>/`
+- `./.night-shift/active.lock`
+
+The easiest way to scaffold this is:
+
+```sh
+night-shift init
+```
+
+That command creates `./.night-shift/`, writes a starter `config.toml`,
+creates `worktree-setup.toml`, and installs a local `.gitignore` inside
+`.night-shift/` so runtime artifacts stay untracked while the TOML files stay
+shareable.
+
+Repository defaults live in `./.night-shift/config.toml`.
 
 ```toml
 default_profile = "default"
@@ -96,8 +120,8 @@ The phase selectors control which profile is used by default:
 - `execution_profile`: used by `night-shift start`
 - `review_profile`: used by `night-shift review`
 
-An empty `.night-shift.toml` still works. Night Shift will use a built-in
-`default` profile that targets Codex with provider defaults.
+An empty `./.night-shift/config.toml` still works. Night Shift will use a
+built-in `default` profile that targets Codex with provider defaults.
 
 ### Precedence
 
@@ -142,12 +166,54 @@ Example configs live in:
 The CLI surface is:
 
 - `night-shift --demo [--ui]`
+- `night-shift init [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>] [--yes] [--generate-setup]`
 - `night-shift plan --notes <path> [--doc <path>] [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>]`
-- `night-shift start [--brief <path>] [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>] [--max-workers <n>] [--ui]`
+- `night-shift start [--brief <path>] [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>] [--environment <name>] [--max-workers <n>] [--ui]`
 - `night-shift status [--run <id>|latest]`
 - `night-shift report [--run <id>|latest]`
 - `night-shift resume [--run <id>|latest] [--ui]`
-- `night-shift review [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>]`
+- `night-shift review [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>] [--environment <name>]`
+
+## Worktree Environments
+
+`./.night-shift/worktree-setup.toml` lets the repo define deterministic
+worktree setup and maintenance commands, following the same broad pattern as
+Codex environments.
+
+The v0 schema is:
+
+```toml
+version = 1
+default_environment = "default"
+
+[environments.default.env]
+
+[environments.default.setup]
+default = []
+macos = []
+linux = []
+windows = []
+
+[environments.default.maintenance]
+default = []
+macos = []
+linux = []
+windows = []
+```
+
+Behavior:
+
+- `start --environment <name>` and `review --environment <name>` select an
+  environment explicitly
+- if omitted, Night Shift uses `default_environment`
+- `resume` reuses the environment stored in the run journal
+- `setup` runs when a task worktree is first created
+- `maintenance` runs when Night Shift reattaches to an existing task worktree
+- configured env vars are injected into setup, maintenance, provider
+  execution, and verification commands
+
+If `worktree-setup.toml` is absent, environment setup is a no-op. If it is
+present but invalid, Night Shift fails before any task worktrees launch.
 
 ## Planning Brief
 
@@ -187,11 +253,12 @@ Passing `--brief <path>` still works and overrides the default brief location.
 If no default brief exists, Night Shift tells you to create one with
 `night-shift plan --notes <path>` or pass `--brief`.
 
-You can also override the resolved profiles at runtime:
+You can also override the resolved profiles or environment at runtime:
 
 ```sh
 night-shift start --profile fast
 night-shift start --provider codex --model gpt-5.4 --reasoning high
+night-shift start --environment default
 night-shift plan --provider cursor --model sonnet-4
 ```
 
@@ -250,16 +317,10 @@ $HOME/.local/state/night-shift-demo/
 
 ## Run Journal
 
-Night Shift stores durable state outside the target repo under:
+Night Shift stores durable run state inside the repo under:
 
 ```text
-$XDG_STATE_HOME/night-shift/<repo-key>/<run-id>/
-```
-
-If `XDG_STATE_HOME` is unset, it falls back to:
-
-```text
-$HOME/.local/state/night-shift/<repo-key>/<run-id>/
+./.night-shift/runs/<run-id>/
 ```
 
 Each run directory includes:
@@ -269,12 +330,16 @@ Each run directory includes:
 - `events.jsonl`
 - `report.md`
 - `logs/`
+- `worktrees/`
 
-An `active.lock` file is kept at the repo state root so only one active run can
-operate on a repo at a time.
+Planning artifacts are written to:
 
-New run state persists fully resolved planning and execution configs. Older
-run journals that still store a single `harness` field remain readable.
+```text
+./.night-shift/planning/<timestamp>/
+```
+
+An `active.lock` file is kept at `./.night-shift/active.lock` so only one
+active run can operate on a repo at a time.
 
 ## Provider Contract
 
@@ -298,15 +363,6 @@ implements:
 - `fake-provider plan <prompt-file>`
 - `fake-provider plan-doc <prompt-file>`
 - `fake-provider execute <prompt-file> <worktree> <repo-root>`
-
-## Migration
-
-Night Shift now uses `profile` and `provider` terminology instead of
-`harness`.
-
-- Replace `default_harness = "codex"` with a profile table and phase selectors.
-- Replace `--harness codex` with `--provider codex` or `--profile <name>`.
-- Prefer `reasoning` in config and CLI when you want to control thinking level.
 
 ## Delivery Model
 

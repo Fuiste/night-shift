@@ -3,6 +3,7 @@ import gleam/int
 import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/result
 import gleam/string
 import night_shift/agent_config
 import night_shift/cli
@@ -12,16 +13,19 @@ import night_shift/demo
 import night_shift/git
 import night_shift/journal
 import night_shift/orchestrator
+import night_shift/project
 import night_shift/provider
 import night_shift/system
 import night_shift/types
+import night_shift/worktree_setup
 import simplifile
 
 pub fn run(command: types.Command) -> Nil {
-  case config.load(".night-shift.toml") {
-    Error(message) -> io.println("Invalid .night-shift.toml: " <> message)
+  let repo_root = git.repo_root(system.cwd())
+
+  case load_repo_config(repo_root) {
+    Error(message) -> io.println(message)
     Ok(config) -> {
-      let repo_root = git.repo_root(system.cwd())
 
       case command {
         types.Help ->
@@ -31,6 +35,8 @@ pub fn run(command: types.Command) -> Nil {
             <> "\n"
             <> crate_summary(config),
           )
+        types.Init(agent_overrides, generate_setup, assume_yes) ->
+          io.println(init(repo_root, config, agent_overrides, generate_setup, assume_yes))
         types.Plan(notes_path, doc_path, agent_overrides) ->
           io.println(
             case agent_config.resolve_plan_agent(config, agent_overrides) {
@@ -39,7 +45,13 @@ pub fn run(command: types.Command) -> Nil {
               Error(message) -> message
             },
           )
-        types.Start(brief_path, agent_overrides, max_workers, False) -> {
+        types.Start(
+          brief_path,
+          agent_overrides,
+          environment_name,
+          max_workers,
+          False,
+        ) -> {
           let resolved_brief = resolve_start_brief_path(repo_root, brief_path)
           let resolved_workers = choose_max_workers(max_workers, config)
 
@@ -47,39 +59,56 @@ pub fn run(command: types.Command) -> Nil {
             case
               resolved_brief,
               ensure_clean_repo_for_start(repo_root),
+              resolve_environment_name(repo_root, environment_name),
               agent_config.resolve_start_agents(config, agent_overrides)
             {
-              Ok(path), Ok(Nil), Ok(#(planning_agent, execution_agent)) ->
+              Ok(path), Ok(Nil), Ok(selected_environment), Ok(#(
+                planning_agent,
+                execution_agent,
+              )) ->
                 start(
                   repo_root,
                   path,
                   planning_agent,
                   execution_agent,
+                  selected_environment,
                   resolved_workers,
                   config,
                 )
-              Error(message), _, _ -> message
-              _, Error(message), _ -> message
-              _, _, Error(message) -> message
+              Error(message), _, _, _ -> message
+              _, Error(message), _, _ -> message
+              _, _, Error(message), _ -> message
+              _, _, _, Error(message) -> message
             },
           )
         }
-        types.Start(brief_path, agent_overrides, max_workers, True) -> {
+        types.Start(
+          brief_path,
+          agent_overrides,
+          environment_name,
+          max_workers,
+          True,
+        ) -> {
           let resolved_brief = resolve_start_brief_path(repo_root, brief_path)
           let resolved_workers = choose_max_workers(max_workers, config)
 
           case
             resolved_brief,
             ensure_clean_repo_for_start(repo_root),
+            resolve_environment_name(repo_root, environment_name),
             agent_config.resolve_start_agents(config, agent_overrides)
           {
-            Ok(path), Ok(Nil), Ok(#(planning_agent, execution_agent)) ->
+            Ok(path), Ok(Nil), Ok(selected_environment), Ok(#(
+              planning_agent,
+              execution_agent,
+            )) ->
               case
                 journal.start_run(
                   repo_root,
                   path,
                   planning_agent,
                   execution_agent,
+                  selected_environment,
                   resolved_workers,
                 )
               {
@@ -106,17 +135,18 @@ pub fn run(command: types.Command) -> Nil {
                   }
                 Error(message) -> io.println(message)
               }
-            Error(message), _, _ -> io.println(message)
-            _, Error(message), _ -> io.println(message)
-            _, _, Error(message) -> io.println(message)
+            Error(message), _, _, _ -> io.println(message)
+            _, Error(message), _, _ -> io.println(message)
+            _, _, Error(message), _ -> io.println(message)
+            _, _, _, Error(message) -> io.println(message)
           }
         }
         types.Status(run) -> io.println(status(repo_root, run))
         types.Report(run) -> io.println(report(repo_root, run))
         types.Resume(run, False) -> io.println(resume(repo_root, run, config))
         types.Resume(run, True) -> resume_with_ui(repo_root, run, config)
-        types.Review(agent_overrides) ->
-          io.println(review(repo_root, agent_overrides, config))
+        types.Review(agent_overrides, environment_name) ->
+          io.println(review(repo_root, agent_overrides, environment_name, config))
         types.Demo(ui) ->
           case demo.run(ui) {
             Ok(summary) -> io.println(summary)
@@ -124,6 +154,52 @@ pub fn run(command: types.Command) -> Nil {
           }
       }
     }
+  }
+}
+
+fn load_repo_config(repo_root: String) -> Result(types.Config, String) {
+  let config_path = project.config_path(repo_root)
+  case config.load(config_path) {
+    Ok(parsed) -> Ok(parsed)
+    Error(message) -> Error("Invalid " <> config_path <> ": " <> message)
+  }
+}
+
+fn init(
+  repo_root: String,
+  config: types.Config,
+  agent_overrides: types.AgentOverrides,
+  generate_setup: Bool,
+  assume_yes: Bool,
+) -> String {
+  let config_path = project.config_path(repo_root)
+  let setup_path = project.worktree_setup_path(repo_root)
+  let setup_requested = case generate_setup, assume_yes {
+    True, _ -> True
+    False, True -> False
+    False, False ->
+      prompt_yes_no("Draft worktree-setup.toml with the configured provider?")
+  }
+
+  case
+    init_project_home(repo_root),
+    ensure_file(config_path, config.render(config)),
+    ensure_file(project.gitignore_path(repo_root), project_gitignore_contents()),
+    ensure_worktree_setup_file(
+      repo_root,
+      config,
+      agent_overrides,
+      setup_requested,
+      setup_path,
+    )
+  {
+    Ok(Nil), Ok(config_status), Ok(_gitignore_status), Ok(setup_status) ->
+      "Initialized " <> project.home(repo_root) <> "\nConfig: " <> config_status
+      <> "\nWorktree setup: " <> setup_status
+    Error(message), _, _, _ -> message
+    _, Error(message), _, _ -> message
+    _, _, Error(message), _ -> message
+    _, _, _, Error(message) -> message
   }
 }
 
@@ -164,6 +240,7 @@ fn start(
   brief_path: String,
   planning_agent: types.ResolvedAgentConfig,
   execution_agent: types.ResolvedAgentConfig,
+  environment_name: String,
   max_workers: Int,
   config: types.Config,
 ) -> String {
@@ -173,6 +250,7 @@ fn start(
       brief_path,
       planning_agent,
       execution_agent,
+      environment_name,
       max_workers,
     )
   {
@@ -213,6 +291,33 @@ fn resolve_doc_path(repo_root: String, doc_path: Option(String)) -> String {
   }
 }
 
+fn resolve_environment_name(
+  repo_root: String,
+  requested: Option(String),
+) -> Result(String, String) {
+  use maybe_config <- result.try(worktree_setup.load(
+    project.worktree_setup_path(repo_root),
+  ))
+  use selected <- result.try(worktree_setup.choose_environment(
+    maybe_config,
+    requested,
+  ))
+  case selected {
+    Some(environment) -> Ok(environment.name)
+    None -> Ok("")
+  }
+}
+
+fn ensure_saved_environment_is_valid(
+  repo_root: String,
+  environment_name: String,
+) -> Result(Nil, String) {
+  case environment_name {
+    "" -> Ok(Nil)
+    name -> resolve_environment_name(repo_root, Some(name)) |> result.map(fn(_) { Nil })
+  }
+}
+
 fn ensure_clean_repo_for_start(repo_root: String) -> Result(Nil, String) {
   let log_path =
     filepath.join(system.state_directory(), "night-shift/start-clean.log")
@@ -238,6 +343,77 @@ fn write_string(path: String, contents: String) -> Result(Nil, String) {
       Error(
         "Unable to write " <> path <> ": " <> simplifile.describe_error(error),
       )
+  }
+}
+
+fn init_project_home(repo_root: String) -> Result(Nil, String) {
+  use _ <- result.try(create_directory(project.home(repo_root)))
+  use _ <- result.try(create_directory(project.runs_root(repo_root)))
+  create_directory(project.planning_root(repo_root))
+}
+
+fn ensure_file(path: String, contents: String) -> Result(String, String) {
+  case simplifile.read(path) {
+    Ok(_) -> Ok("kept " <> path)
+    Error(_) ->
+      write_string(path, contents)
+      |> result.map(fn(_) { "created " <> path })
+  }
+}
+
+fn ensure_worktree_setup_file(
+  repo_root: String,
+  config: types.Config,
+  agent_overrides: types.AgentOverrides,
+  setup_requested: Bool,
+  path: String,
+) -> Result(String, String) {
+  case simplifile.read(path) {
+    Ok(_) -> Ok("kept " <> path)
+    Error(_) ->
+      case setup_requested {
+        True ->
+          case agent_config.resolve_plan_agent(config, agent_overrides) {
+            Ok(agent) ->
+              case provider.generate_worktree_setup(agent, repo_root, path) {
+                Ok(#(contents, artifact_path)) ->
+                  write_string(path, contents)
+                  |> result.map(fn(_) {
+                    "generated " <> path <> " from " <> artifact_path
+                  })
+                Error(message) -> Error(message)
+              }
+            Error(message) -> Error(message)
+          }
+        False ->
+          write_string(path, worktree_setup.default_template())
+          |> result.map(fn(_) { "created " <> path })
+      }
+  }
+}
+
+fn create_directory(path: String) -> Result(Nil, String) {
+  case simplifile.create_directory_all(path) {
+    Ok(Nil) -> Ok(Nil)
+    Error(error) ->
+      Error(
+        "Unable to create directory "
+        <> path
+        <> ": "
+        <> simplifile.describe_error(error),
+      )
+  }
+}
+
+fn project_gitignore_contents() -> String {
+  "*\n!config.toml\n!worktree-setup.toml\n!.gitignore\n"
+}
+
+fn prompt_yes_no(prompt: String) -> Bool {
+  io.print(prompt <> " [y/N]: ")
+  case string.lowercase(string.trim(system.read_line())) {
+    "y" | "yes" -> True
+    _ -> False
   }
 }
 
@@ -301,8 +477,15 @@ fn resume(
 ) -> String {
   case journal.load(repo_root, run) {
     Ok(#(saved_run, _)) ->
-      case orchestrator.resume(saved_run, config) {
-        Ok(updated_run) -> render_run_summary(updated_run)
+      case ensure_saved_environment_is_valid(
+        repo_root,
+        saved_run.environment_name,
+      ) {
+        Ok(Nil) ->
+          case orchestrator.resume(saved_run, config) {
+            Ok(updated_run) -> render_run_summary(updated_run)
+            Error(message) -> message
+          }
         Error(message) -> message
       }
     Error(message) -> message
@@ -312,16 +495,21 @@ fn resume(
 fn review(
   repo_root: String,
   agent_overrides: types.AgentOverrides,
+  environment_name: Option(String),
   config: types.Config,
 ) -> String {
-  case agent_config.resolve_review_agent(config, agent_overrides) {
-    Ok(review_agent) ->
+  case
+    resolve_environment_name(repo_root, environment_name),
+    agent_config.resolve_review_agent(config, agent_overrides)
+  {
+    Ok(selected_environment), Ok(review_agent) ->
       case
         journal.start_run(
           repo_root,
-          ".night-shift.toml",
+          project.config_path(repo_root),
           review_agent,
           review_agent,
+          selected_environment,
           1,
         )
       {
@@ -332,7 +520,8 @@ fn review(
           }
         Error(message) -> message
       }
-    Error(message) -> message
+    Error(message), _ -> message
+    _, Error(message) -> message
   }
 }
 
@@ -375,18 +564,25 @@ fn resume_with_ui(
 ) -> Nil {
   case journal.load(repo_root, run) {
     Ok(#(saved_run, _)) ->
-      case
-        dashboard.start_resume_session(
-          repo_root,
-          saved_run.run_id,
-          saved_run,
-          config,
-        )
-      {
-        Ok(session) -> {
-          io.println(render_dashboard_summary(session.url, saved_run.run_id))
-          system.wait_forever()
-        }
+      case ensure_saved_environment_is_valid(
+        repo_root,
+        saved_run.environment_name,
+      ) {
+        Ok(Nil) ->
+          case
+            dashboard.start_resume_session(
+              repo_root,
+              saved_run.run_id,
+              saved_run,
+              config,
+            )
+          {
+            Ok(session) -> {
+              io.println(render_dashboard_summary(session.url, saved_run.run_id))
+              system.wait_forever()
+            }
+            Error(message) -> io.println(message)
+          }
         Error(message) -> io.println(message)
       }
     Error(message) -> io.println(message)

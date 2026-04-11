@@ -2,9 +2,10 @@ import filepath
 import gleam/dynamic/decode
 import gleam/json
 import gleam/list
-import gleam/option.{None}
+import gleam/option.{None, Some}
 import gleam/result
 import gleam/string
+import night_shift/project
 import night_shift/report
 import night_shift/system
 import night_shift/types
@@ -15,18 +16,20 @@ pub fn start_run(
   brief_path: String,
   planning_agent: types.ResolvedAgentConfig,
   execution_agent: types.ResolvedAgentConfig,
+  environment_name: String,
   max_workers: Int,
 ) -> Result(types.RunRecord, String) {
   let run_id = make_run_id()
-  let repo_path = repo_state_path(repo_root)
-  let run_path = filepath.join(repo_path, run_id)
+  let project_home = repo_state_path(repo_root)
+  let runs_path = runs_root(repo_root)
+  let run_path = filepath.join(runs_path, run_id)
   let brief_copy_path = filepath.join(run_path, "brief.md")
   let state_path = filepath.join(run_path, "state.json")
   let events_path = filepath.join(run_path, "events.jsonl")
   let report_path = filepath.join(run_path, "report.md")
-  let lock_path = filepath.join(repo_path, "active.lock")
+  let lock_path = project.active_lock_path(repo_root)
 
-  use _ <- result.try(ensure_repo_ready(repo_path, lock_path))
+  use _ <- result.try(ensure_repo_ready(repo_root, project_home, runs_path, lock_path))
   use _ <- result.try(create_run_directories(run_path))
   use _ <- result.try(copy_brief(brief_path, brief_copy_path))
 
@@ -43,6 +46,7 @@ pub fn start_run(
       lock_path: lock_path,
       planning_agent: planning_agent,
       execution_agent: execution_agent,
+      environment_name: environment_name,
       max_workers: max_workers,
       status: types.RunActive,
       created_at: timestamp,
@@ -68,7 +72,7 @@ pub fn load(
   repo_root: String,
   selector: types.RunSelector,
 ) -> Result(#(types.RunRecord, List(types.RunEvent)), String) {
-  let repo_path = repo_state_path(repo_root)
+  let repo_path = runs_root(repo_root)
 
   use run_id <- result.try(case selector {
     types.LatestRun -> latest_run_id(repo_path)
@@ -85,7 +89,7 @@ pub fn load(
 }
 
 pub fn list_runs(repo_root: String) -> Result(List(types.RunRecord), String) {
-  let repo_path = repo_state_path(repo_root)
+  let repo_path = runs_root(repo_root)
   use run_ids <- result.try(list_run_ids(repo_path))
   Ok(
     run_ids
@@ -154,7 +158,7 @@ pub fn read_report(
 }
 
 pub fn active_run_id(repo_root: String) -> Result(String, String) {
-  let lock_path = filepath.join(repo_state_path(repo_root), "active.lock")
+  let lock_path = project.active_lock_path(repo_root)
   case simplifile.read(lock_path) {
     Ok(run_id) -> Ok(string.trim(run_id))
     Error(_) ->
@@ -170,11 +174,19 @@ pub fn repo_state_path_for(repo_root: String) -> String {
   repo_state_path(repo_root)
 }
 
+pub fn planning_root_for(repo_root: String) -> String {
+  planning_root(repo_root)
+}
+
 fn ensure_repo_ready(
-  repo_path: String,
+  repo_root: String,
+  project_home: String,
+  runs_path: String,
   lock_path: String,
 ) -> Result(Nil, String) {
-  use _ <- result.try(create_directory(repo_path))
+  use _ <- result.try(create_directory(project_home))
+  use _ <- result.try(create_directory(runs_path))
+  use _ <- result.try(create_directory(planning_root(repo_root)))
   case simplifile.read(lock_path) {
     Ok(existing_run) ->
       Error(
@@ -312,14 +324,15 @@ fn make_run_id() -> String {
 }
 
 fn repo_state_path(repo_root: String) -> String {
-  filepath.join(state_root(), sanitize_repo_root(repo_root))
+  project.home(repo_root)
 }
 
-fn sanitize_repo_root(repo_root: String) -> String {
-  repo_root
-  |> string.replace(each: "/", with: "__")
-  |> string.replace(each: ":", with: "_")
-  |> string.replace(each: " ", with: "_")
+fn runs_root(repo_root: String) -> String {
+  project.runs_root(repo_root)
+}
+
+fn planning_root(repo_root: String) -> String {
+  project.planning_root(repo_root)
 }
 
 fn status_event_kind(status: types.RunStatus) -> String {
@@ -344,6 +357,7 @@ fn encode_run(run: types.RunRecord) -> String {
     #("lock_path", json.string(run.lock_path)),
     #("planning_agent", encode_resolved_agent(run.planning_agent)),
     #("execution_agent", encode_resolved_agent(run.execution_agent)),
+    #("environment_name", json.string(run.environment_name)),
     #("max_workers", json.int(run.max_workers)),
     #("status", json.string(types.run_status_to_string(run.status))),
     #("created_at", json.string(run.created_at)),
@@ -386,7 +400,7 @@ fn encode_task(task: types.Task) -> json.Json {
     #("dependencies", json.array(task.dependencies, json.string)),
     #("acceptance", json.array(task.acceptance, json.string)),
     #("demo_plan", json.array(task.demo_plan, json.string)),
-    #("parallel_safe", json.bool(task.parallel_safe)),
+    #("execution_mode", json.string(types.execution_mode_to_string(task.execution_mode))),
     #("state", json.string(types.task_state_to_string(task.state))),
     #("worktree_path", json.string(task.worktree_path)),
     #("branch_name", json.string(task.branch_name)),
@@ -419,6 +433,10 @@ fn run_decoder() -> decode.Decoder(types.RunRecord) {
     "execution_agent",
     resolved_agent_decoder(),
   )
+  use maybe_environment_name <- decode.field(
+    "environment_name",
+    decode.optional(decode.string),
+  )
   use max_workers <- decode.field("max_workers", decode.int)
   use status <- decode.field("status", run_status_decoder())
   use created_at <- decode.field("created_at", decode.string)
@@ -435,6 +453,10 @@ fn run_decoder() -> decode.Decoder(types.RunRecord) {
     lock_path: lock_path,
     planning_agent: planning_agent,
     execution_agent: execution_agent,
+    environment_name: case maybe_environment_name {
+      Some(name) -> name
+      None -> ""
+    },
     max_workers: max_workers,
     status: status,
     created_at: created_at,
@@ -470,6 +492,7 @@ fn legacy_run_decoder() -> decode.Decoder(types.RunRecord) {
     lock_path: lock_path,
     planning_agent: resolved_agent,
     execution_agent: resolved_agent,
+    environment_name: "",
     max_workers: max_workers,
     status: status,
     created_at: created_at,
@@ -536,7 +559,7 @@ fn task_decoder() -> decode.Decoder(types.Task) {
   use dependencies <- decode.field("dependencies", decode.list(decode.string))
   use acceptance <- decode.field("acceptance", decode.list(decode.string))
   use demo_plan <- decode.field("demo_plan", decode.list(decode.string))
-  use parallel_safe <- decode.field("parallel_safe", decode.bool)
+  use execution_mode <- decode.then(task_execution_mode_decoder())
   use state <- decode.field("state", task_state_decoder())
   use worktree_path <- decode.field("worktree_path", decode.string)
   use branch_name <- decode.field("branch_name", decode.string)
@@ -549,13 +572,33 @@ fn task_decoder() -> decode.Decoder(types.Task) {
     dependencies: dependencies,
     acceptance: acceptance,
     demo_plan: demo_plan,
-    parallel_safe: parallel_safe,
+    execution_mode: execution_mode,
     state: state,
     worktree_path: worktree_path,
     branch_name: branch_name,
     pr_number: pr_number,
     summary: summary,
   ))
+}
+
+fn task_execution_mode_decoder() -> decode.Decoder(types.ExecutionMode) {
+  decode.one_of(task_mode_field_decoder(), or: [task_parallel_safe_decoder()])
+}
+
+fn task_mode_field_decoder() -> decode.Decoder(types.ExecutionMode) {
+  use raw <- decode.field("execution_mode", decode.string)
+  case types.execution_mode_from_string(raw) {
+    Ok(mode) -> decode.success(mode)
+    Error(_) -> decode.failure(types.Serial, "ExecutionMode")
+  }
+}
+
+fn task_parallel_safe_decoder() -> decode.Decoder(types.ExecutionMode) {
+  use parallel_safe <- decode.field("parallel_safe", decode.bool)
+  case parallel_safe {
+    True -> decode.success(types.Parallel)
+    False -> decode.success(types.Exclusive)
+  }
 }
 
 fn decode_event(line: String) -> Result(types.RunEvent, String) {

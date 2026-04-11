@@ -1,6 +1,6 @@
 -module(night_shift_system).
 
--export([argv/0, cwd/0, home_directory/0, state_directory/0, get_env/1, set_env/2, unset_env/1, timestamp/0, unique_id/0, sleep/1, wait_forever/0, stdout_is_tty/0, terminal_columns/0, color_enabled/0, os_name/0]).
+-export([argv/0, cwd/0, home_directory/0, state_directory/0, get_env/1, set_env/2, unset_env/1, timestamp/0, unique_id/0, sleep/1, wait_forever/0, stdout_is_tty/0, read_line/0, terminal_columns/0, color_enabled/0, os_name/0]).
 
 argv() ->
     lists:map(fun to_binary/1, init:get_plain_arguments()).
@@ -59,6 +59,12 @@ stdout_is_tty() ->
         true -> true;
         false -> false;
         _ -> false
+    end.
+
+read_line() ->
+    case io:get_line("") of
+        eof -> <<>>;
+        Value -> to_binary(string:trim(Value))
     end.
 
 terminal_columns() ->

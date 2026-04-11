@@ -24,6 +24,41 @@ pub fn load(path: String) -> Result(types.Config, String) {
   }
 }
 
+pub fn render(config: types.Config) -> String {
+  let root_lines = [
+    "default_profile = " <> render_string(config.default_profile),
+    "planning_profile = " <> render_string(config.planning_profile),
+    "execution_profile = " <> render_string(config.execution_profile),
+    "review_profile = " <> render_string(config.review_profile),
+    "",
+    "base_branch = " <> render_string(config.base_branch),
+    "max_workers = " <> int.to_string(config.max_workers),
+    "branch_prefix = " <> render_string(config.branch_prefix),
+    "pr_title_prefix = " <> render_string(config.pr_title_prefix),
+    "notifiers = " <> render_string_list(
+      config.notifiers |> list.map(types.notifier_to_string),
+    ),
+  ]
+
+  let profile_lines =
+    config.profiles
+    |> list.map(render_profile)
+    |> string.join(with: "\n\n")
+
+  let verification_lines = case config.verification_commands {
+    [] -> ""
+    _ ->
+      "\n\n[verification]\ncommands = "
+      <> render_string_list(config.verification_commands)
+  }
+
+  string.join(root_lines, with: "\n")
+  <> "\n\n"
+  <> profile_lines
+  <> verification_lines
+  <> "\n"
+}
+
 pub fn parse(contents: String) -> Result(types.Config, String) {
   let initial = ParseState(types.default_config(), RootSection)
 
@@ -315,6 +350,59 @@ fn parse_optional_string(raw_value: String) -> Option(String) {
   case parse_string(raw_value) {
     "" -> None
     value -> Some(value)
+  }
+}
+
+fn render_profile(profile: types.AgentProfile) -> String {
+  let base_lines = [
+    "[profiles." <> profile.name <> "]",
+    "provider = " <> render_string(types.provider_to_string(profile.provider)),
+  ]
+
+  let model_lines = case profile.model {
+    Some(model) -> ["model = " <> render_string(model)]
+    None -> []
+  }
+
+  let reasoning_lines = case profile.reasoning {
+    Some(reasoning) ->
+      ["reasoning = " <> render_string(types.reasoning_to_string(reasoning))]
+    None -> []
+  }
+
+  let override_lines = case profile.provider_overrides {
+    [] -> []
+    overrides ->
+      list.append(
+        ["", "[profiles." <> profile.name <> ".provider_overrides]"],
+        overrides
+        |> list.map(fn(override) {
+          override.key <> " = " <> render_string(override.value)
+        }),
+      )
+  }
+
+  string.join(
+    list.flatten([base_lines, model_lines, reasoning_lines, override_lines]),
+    with: "\n",
+  )
+}
+
+fn render_string(value: String) -> String {
+  "\"" <> string.replace(in: value, each: "\"", with: "\\\"") <> "\""
+}
+
+fn render_string_list(values: List(String)) -> String {
+  case values {
+    [] -> "[]"
+    _ ->
+      "["
+      <> {
+        values
+        |> list.map(render_string)
+        |> string.join(with: ", ")
+      }
+      <> "]"
   }
 }
 

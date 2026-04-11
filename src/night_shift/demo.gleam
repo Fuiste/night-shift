@@ -2,6 +2,7 @@ import filepath
 import gleam/list
 import gleam/result
 import gleam/string
+import night_shift/project
 import night_shift/dashboard
 import night_shift/shell
 import night_shift/system
@@ -226,16 +227,21 @@ fn setup_demo_environment(
     "Unable to configure the demo git email.",
   ))
   use _ <- result.try(write_file(brief_path, "# Demo\n"))
+  use _ <- result.try(create_directory(project.home(repo_root)))
   use _ <- result.try(write_file(
-    filepath.join(repo_root, ".night-shift.toml"),
+    project.config_path(repo_root),
     "",
+  ))
+  use _ <- result.try(write_file(
+    project.gitignore_path(repo_root),
+    "*\n!config.toml\n!worktree-setup.toml\n!.gitignore\n",
   ))
   use _ <- result.try(write_file(
     filepath.join(repo_root, "README.md"),
     "# Demo\n",
   ))
   use _ <- result.try(run_checked(
-    "git add README.md .night-shift.toml "
+    "git add README.md .night-shift "
       <> shell.quote(types.default_brief_filename)
       <> " && git commit -m 'chore: seed demo repo'",
     repo_root,
@@ -465,12 +471,12 @@ fn reset_demo_root(
 
 fn write_fake_provider(path: String) -> Result(Nil, String) {
   write_file(
-    path,
-    "#!/bin/sh\n"
+      path,
+      "#!/bin/sh\n"
       <> "MODE=$1\n"
       <> "PROMPT_FILE=$2\n"
       <> "if [ \"$MODE\" = \"plan\" ]; then\n"
-      <> "  printf 'planning\\nNIGHT_SHIFT_RESULT_START\\n{\"tasks\":[{\"id\":\"demo-task\",\"title\":\"Implement demo task\",\"description\":\"Create a file to prove execution\",\"dependencies\":[],\"acceptance\":[\"Create IMPLEMENTED.md\"],\"demo_plan\":[\"Show the new file\"],\"parallel_safe\":false}]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "  printf 'planning\\nNIGHT_SHIFT_RESULT_START\\n{\"tasks\":[{\"id\":\"demo-task\",\"title\":\"Implement demo task\",\"description\":\"Create a file to prove execution\",\"dependencies\":[],\"acceptance\":[\"Create IMPLEMENTED.md\"],\"demo_plan\":[\"Show the new file\"],\"execution_mode\":\"serial\"}]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
       <> "elif [ \"$MODE\" = \"plan-doc\" ]; then\n"
       <> "  printf 'planning-doc\\nNIGHT_SHIFT_RESULT_START\\n# Night Shift Brief\\n## Objective\\nShip the demo task.\\n## Scope\\n- Implement the demo task fixture.\\n## Constraints\\n- Stay within the fake provider contract.\\n## Deliverables\\n- Create IMPLEMENTED.md.\\n## Acceptance Criteria\\n- IMPLEMENTED.md exists after execution.\\n## Risks and Open Questions\\n- None.\\nNIGHT_SHIFT_RESULT_END\\n'\n"
       <> "else\n"

@@ -87,7 +87,9 @@ fn gleam_to_erlang_module_name(path: String) -> String {
 }
 
 pub fn parse_start_command_test() {
-  let assert Ok(types.Start(Some("brief.md"), agent_overrides, Ok(2), False)) =
+  let assert Ok(
+    types.Start(Some("brief.md"), agent_overrides, None, Ok(2), False),
+  ) =
     cli.parse([
       "start",
       "--brief",
@@ -96,6 +98,19 @@ pub fn parse_start_command_test() {
       "cursor",
       "--max-workers",
       "2",
+    ])
+
+  assert agent_overrides.provider == Some(types.Cursor)
+}
+
+pub fn parse_init_command_test() {
+  let assert Ok(types.Init(agent_overrides, True, True)) =
+    cli.parse([
+      "init",
+      "--provider",
+      "cursor",
+      "--generate-setup",
+      "--yes",
     ])
 
   assert agent_overrides.provider == Some(types.Cursor)
@@ -127,13 +142,22 @@ pub fn parse_status_defaults_to_latest_test() {
 }
 
 pub fn parse_start_command_with_ui_test() {
-  let assert Ok(types.Start(Some("brief.md"), agent_overrides, Error(Nil), True)) =
+  let assert Ok(
+    types.Start(Some("brief.md"), agent_overrides, None, Error(Nil), True),
+  ) =
     cli.parse(["start", "--brief", "brief.md", "--ui"])
   assert agent_overrides == types.empty_agent_overrides()
 }
 
+pub fn parse_start_command_with_environment_test() {
+  let assert Ok(
+    types.Start(None, agent_overrides, Some("dev"), Error(Nil), False),
+  ) = cli.parse(["start", "--environment", "dev"])
+  assert agent_overrides == types.empty_agent_overrides()
+}
+
 pub fn parse_start_command_without_brief_test() {
-  let assert Ok(types.Start(None, agent_overrides, Error(Nil), False)) =
+  let assert Ok(types.Start(None, agent_overrides, None, Error(Nil), False)) =
     cli.parse(["start"])
   assert agent_overrides == types.empty_agent_overrides()
 }
@@ -146,6 +170,18 @@ pub fn parse_plan_requires_notes_test() {
 pub fn parse_resume_command_with_ui_test() {
   let assert Ok(types.Resume(types.RunId("run-123"), True)) =
     cli.parse(["resume", "--run", "run-123", "--ui"])
+}
+
+pub fn parse_resume_rejects_environment_flag_test() {
+  let assert Error(message) =
+    cli.parse(["resume", "--environment", "dev"])
+  assert message == "Unsupported flag: --environment"
+}
+
+pub fn parse_review_command_with_environment_test() {
+  let assert Ok(types.Review(agent_overrides, Some("dev"))) =
+    cli.parse(["review", "--environment", "dev"])
+  assert agent_overrides == types.empty_agent_overrides()
 }
 
 pub fn parse_demo_command_test() {
@@ -1151,7 +1187,7 @@ pub fn orchestrator_start_runs_fake_provider_test() {
       dependencies: [],
       acceptance: [],
       demo_plan: [],
-      parallel_safe: False,
+      execution_mode: types.Serial,
       state: types.Failed,
       worktree_path: "",
       branch_name: "",
@@ -1271,7 +1307,7 @@ pub fn orchestrator_start_delivers_provider_created_commit_test() {
       dependencies: [],
       acceptance: [],
       demo_plan: [],
-      parallel_safe: False,
+      execution_mode: types.Serial,
       state: types.Failed,
       worktree_path: "",
       branch_name: "",
@@ -1327,7 +1363,7 @@ pub fn start_task_runs_codex_execution_in_worktree_test() {
       dependencies: [],
       acceptance: ["Create EXECUTED.txt in the task worktree."],
       demo_plan: ["Show EXECUTED.txt."],
-      parallel_safe: False,
+      execution_mode: types.Serial,
       state: types.Ready,
       worktree_path: worktree_path,
       branch_name: "night-shift/demo",
@@ -1342,6 +1378,7 @@ pub fn start_task_runs_codex_execution_in_worktree_test() {
       run_path,
       task,
       worktree_path,
+      [],
       "seed-head",
       "night-shift/demo",
       "main",
@@ -1594,6 +1631,7 @@ fn start_run(
     brief_path,
     agent_for(provider_name),
     agent_for(provider_name),
+    "",
     max_workers,
   )
 }
@@ -1604,7 +1642,7 @@ fn write_fake_provider(path: String) -> Result(Nil, simplifile.FileError) {
       <> "MODE=$1\n"
       <> "PROMPT_FILE=$2\n"
       <> "if [ \"$MODE\" = \"plan\" ]; then\n"
-      <> "  printf 'planning\\nNIGHT_SHIFT_RESULT_START\\n{\"tasks\":[{\"id\":\"demo-task\",\"title\":\"Implement demo task\",\"description\":\"Create a file to prove execution\",\"dependencies\":[],\"acceptance\":[\"Create IMPLEMENTED.md\"],\"demo_plan\":[\"Show the new file\"],\"parallel_safe\":false}]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "  printf 'planning\\nNIGHT_SHIFT_RESULT_START\\n{\"tasks\":[{\"id\":\"demo-task\",\"title\":\"Implement demo task\",\"description\":\"Create a file to prove execution\",\"dependencies\":[],\"acceptance\":[\"Create IMPLEMENTED.md\"],\"demo_plan\":[\"Show the new file\"],\"execution_mode\":\"serial\"}]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
       <> "elif [ \"$MODE\" = \"plan-doc\" ]; then\n"
       <> "  if grep -q 'fail-plan-doc-exit' \"$PROMPT_FILE\"; then\n"
       <> "    printf 'forced failure\\n' >&2\n"
@@ -1642,7 +1680,7 @@ fn write_committing_fake_provider(
       <> "PROMPT_FILE=$2\n"
       <> "WORKTREE=$3\n"
       <> "if [ \"$MODE\" = \"plan\" ]; then\n"
-      <> "  printf 'planning\\nNIGHT_SHIFT_RESULT_START\\n{\"tasks\":[{\"id\":\"demo-task\",\"title\":\"Implement demo task\",\"description\":\"Create a file to prove execution\",\"dependencies\":[],\"acceptance\":[\"Create IMPLEMENTED.md\"],\"demo_plan\":[\"Show the new file\"],\"parallel_safe\":false}]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "  printf 'planning\\nNIGHT_SHIFT_RESULT_START\\n{\"tasks\":[{\"id\":\"demo-task\",\"title\":\"Implement demo task\",\"description\":\"Create a file to prove execution\",\"dependencies\":[],\"acceptance\":[\"Create IMPLEMENTED.md\"],\"demo_plan\":[\"Show the new file\"],\"execution_mode\":\"serial\"}]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
       <> "elif [ \"$MODE\" = \"plan-doc\" ]; then\n"
       <> "  printf 'planning-doc\\nNIGHT_SHIFT_RESULT_START\\n# Night Shift Brief\\n## Objective\\nPrepare the first work item for execution.\\n## Scope\\n- Alpha task\\n## Constraints\\n- Keep the brief cumulative.\\n## Deliverables\\n- Alpha implementation plan\\n## Acceptance Criteria\\n- Alpha task documented\\n## Risks and Open Questions\\n- None.\\nNIGHT_SHIFT_RESULT_END\\n'\n"
       <> "  exit 0\n"
@@ -1732,7 +1770,7 @@ fn write_fake_streaming_codex(path: String) -> Result(Nil, simplifile.FileError)
       <> "      fi\n"
       <> "      if printf '%s' \"$INPUT\" | grep -q 'Break the supplied brief into a task DAG.'; then\n"
       <> "        printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"planner\"}'\n"
-      <> "        printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"NIGHT_SHIFT_RESULT_START\\n{\\\"tasks\\\":[{\\\"id\\\":\\\"alpha\\\",\\\"title\\\":\\\"Alpha task\\\",\\\"description\\\":\\\"Create alpha proof\\\",\\\"dependencies\\\":[],\\\"acceptance\\\":[\\\"Create ALPHA.txt\\\"],\\\"demo_plan\\\":[\\\"Show ALPHA.txt\\\"],\\\"parallel_safe\\\":true},{\\\"id\\\":\\\"beta\\\",\\\"title\\\":\\\"Beta task\\\",\\\"description\\\":\\\"Create beta proof\\\",\\\"dependencies\\\":[],\\\"acceptance\\\":[\\\"Create BETA.txt\\\"],\\\"demo_plan\\\":[\\\"Show BETA.txt\\\"],\\\"parallel_safe\\\":true}]}\\nNIGHT_SHIFT_RESULT_END\"}}'\n"
+      <> "        printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"NIGHT_SHIFT_RESULT_START\\n{\\\"tasks\\\":[{\\\"id\\\":\\\"alpha\\\",\\\"title\\\":\\\"Alpha task\\\",\\\"description\\\":\\\"Create alpha proof\\\",\\\"dependencies\\\":[],\\\"acceptance\\\":[\\\"Create ALPHA.txt\\\"],\\\"demo_plan\\\":[\\\"Show ALPHA.txt\\\"],\\\"execution_mode\\\":\\\"parallel\\\"},{\\\"id\\\":\\\"beta\\\",\\\"title\\\":\\\"Beta task\\\",\\\"description\\\":\\\"Create beta proof\\\",\\\"dependencies\\\":[],\\\"acceptance\\\":[\\\"Create BETA.txt\\\"],\\\"demo_plan\\\":[\\\"Show BETA.txt\\\"],\\\"execution_mode\\\":\\\"parallel\\\"}]}\\nNIGHT_SHIFT_RESULT_END\"}}'\n"
       <> "        exit 0\n"
       <> "      fi\n"
       <> "      if printf '%s' \"$INPUT\" | grep -q 'ID: alpha'; then\n"
