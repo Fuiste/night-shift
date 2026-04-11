@@ -9,6 +9,7 @@ pub fn usage() -> String {
   <> "  --demo [--ui]\n"
   <> "  init [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>] [--yes] [--generate-setup]\n"
   <> "    Prompts interactively for provider, model, and initial worktree setup when those answers are not supplied.\n"
+  <> "  reset [--yes] [--force]\n"
   <> "  plan --notes <file-or-inline-text> [--doc <path>] [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>]\n"
   <> "  start [--run <id>|latest] [--ui]\n"
   <> "  status [--run <id>|latest]\n"
@@ -26,6 +27,7 @@ pub fn parse(args: List(String)) -> Result(types.Command, String) {
         [] -> Ok(types.Help)
         ["help", ..] -> Ok(types.Help)
         ["init", ..rest] -> parse_init(rest)
+        ["reset", ..rest] -> parse_reset(rest)
         ["plan", ..rest] -> parse_plan(rest)
         ["start", ..rest] -> parse_start(rest)
         ["status", ..rest] -> parse_run_lookup(rest, types.Status)
@@ -176,6 +178,23 @@ fn parse_init_flags(
 
 fn parse_start(args: List(String)) -> Result(types.Command, String) {
   parse_start_flags(args, types.LatestRun, False)
+}
+
+fn parse_reset(args: List(String)) -> Result(types.Command, String) {
+  parse_reset_flags(args, False, False)
+}
+
+fn parse_reset_flags(
+  args: List(String),
+  assume_yes: Bool,
+  force: Bool,
+) -> Result(types.Command, String) {
+  case args {
+    [] -> Ok(types.Reset(assume_yes, force))
+    ["--yes", ..rest] -> parse_reset_flags(rest, True, force)
+    ["--force", ..rest] -> parse_reset_flags(rest, assume_yes, True)
+    [flag, ..] -> Error("Unsupported reset flag: " <> flag)
+  }
 }
 
 fn parse_start_flags(

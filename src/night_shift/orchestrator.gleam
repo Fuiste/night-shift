@@ -127,7 +127,13 @@ fn plan_with_event(
     |> apply_decision_states(run.decisions)
     |> refresh_ready_states
   let status = planning_status(run.decisions, merged_tasks)
-  let updated_run = types.RunRecord(..run, tasks: merged_tasks, status: status)
+  let updated_run =
+    types.RunRecord(
+      ..run,
+      tasks: merged_tasks,
+      planning_dirty: False,
+      status: status,
+    )
   let unresolved_count = unresolved_decision_count(run.decisions, merged_tasks)
   let plan_event =
     types.RunEvent(

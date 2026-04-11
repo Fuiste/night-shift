@@ -17,15 +17,16 @@ pub fn render(run: types.RunRecord, events: List(types.RunEvent)) -> String {
     "- Execution: " <> agent_config.summary(run.execution_agent),
     "- Environment: " <> render_environment_label(run.environment_name),
     "- Max workers: " <> int.to_string(run.max_workers),
+    "- Planning sync pending: " <> render_bool(run.planning_dirty),
     "- Created at: " <> run.created_at,
     "- Updated at: " <> run.updated_at,
     "- Brief: " <> run.brief_path,
     "",
     "## Summary",
-    render_summary(run.decisions, run.tasks),
+    render_summary(run.decisions, run.planning_dirty, run.tasks),
     "",
     "## Tasks",
-    render_tasks(run.decisions, run.tasks),
+    render_tasks(run.decisions, run.planning_dirty, run.tasks),
     "",
     "## Timeline",
     render_events(events),
@@ -35,6 +36,7 @@ pub fn render(run: types.RunRecord, events: List(types.RunEvent)) -> String {
 
 fn render_summary(
   decisions: List(types.RecordedDecision),
+  planning_dirty: Bool,
   tasks: List(types.Task),
 ) -> String {
   let completed_count =
@@ -49,6 +51,16 @@ fn render_summary(
     tasks
     |> list.filter(fn(task) { types.task_requires_manual_attention(decisions, task) })
     |> list.length
+  let blocked_count =
+    tasks
+    |> list.filter(fn(task) {
+      task.kind == types.ImplementationTask && task.state == types.Blocked
+    })
+    |> list.length
+  let derived_blocked_count = case planning_dirty && manual_attention_count == 0 && blocked_count == 0 {
+    True -> 1
+    False -> manual_attention_count + blocked_count
+  }
   let failed_count =
     tasks
     |> list.filter(fn(task) { task.state == types.Failed })
@@ -71,6 +83,7 @@ fn render_summary(
   [
     "- Completed tasks: " <> int.to_string(completed_count),
     "- Opened PRs: " <> int.to_string(pr_count),
+    "- Blocked tasks: " <> int.to_string(derived_blocked_count),
     "- Manual-attention tasks: " <> int.to_string(manual_attention_count),
     "- Outstanding decisions: " <> int.to_string(outstanding_decisions),
     "- Failed tasks: " <> int.to_string(failed_count),
@@ -81,28 +94,30 @@ fn render_summary(
 
 fn render_tasks(
   decisions: List(types.RecordedDecision),
+  planning_dirty: Bool,
   tasks: List(types.Task),
 ) -> String {
   case tasks {
     [] -> "- No tasks have been planned yet."
     _ ->
       tasks
-      |> list.map(render_task(decisions, _))
+      |> list.map(render_task(decisions, planning_dirty, _))
       |> string.join(with: "\n")
   }
 }
 
 fn render_task(
   decisions: List(types.RecordedDecision),
+  planning_dirty: Bool,
   task: types.Task,
 ) -> String {
   "- ["
-  <> types.task_state_to_string(render_task_state(decisions, task))
+  <> types.task_state_to_string(render_task_state(decisions, planning_dirty, task))
   <> "] "
   <> task.id
   <> ": "
   <> task.title
-  <> render_task_details(decisions, task)
+  <> render_task_details(decisions, planning_dirty, task)
 }
 
 fn render_events(events: List(types.RunEvent)) -> String {
@@ -133,6 +148,7 @@ fn render_event(event: types.RunEvent) -> String {
 
 fn render_task_details(
   decisions: List(types.RecordedDecision),
+  planning_dirty: Bool,
   task: types.Task,
 ) -> String {
   let pr_fragment = case task.pr_number {
@@ -151,21 +167,35 @@ fn render_task_details(
     False -> ""
   }
 
+  let planning_fragment = case task.kind == types.ManualAttentionTask && planning_dirty {
+    True ->
+      case types.task_requires_manual_attention(decisions, task) {
+        True -> ""
+        False -> "\n  Decision recorded; Night Shift still needs to replan this run."
+      }
+    False -> ""
+  }
+
   let summary_fragment = case string.trim(task.summary) {
     "" -> ""
     summary -> "\n  " <> string.replace(in: summary, each: "\n", with: "\n  ")
   }
 
-  pr_fragment <> decision_fragment <> summary_fragment
+  pr_fragment <> decision_fragment <> planning_fragment <> summary_fragment
 }
 
 fn render_task_state(
   decisions: List(types.RecordedDecision),
+  planning_dirty: Bool,
   task: types.Task,
 ) -> types.TaskState {
   case types.task_requires_manual_attention(decisions, task) {
     True -> types.ManualAttention
-    False -> task.state
+    False ->
+      case task.kind == types.ManualAttentionTask && planning_dirty {
+        True -> types.Blocked
+        False -> task.state
+      }
   }
 }
 
@@ -173,5 +203,12 @@ fn render_environment_label(environment_name: String) -> String {
   case environment_name {
     "" -> "(none)"
     value -> value
+  }
+}
+
+fn render_bool(value: Bool) -> String {
+  case value {
+    True -> "yes"
+    False -> "no"
   }
 }

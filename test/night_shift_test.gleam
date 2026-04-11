@@ -106,6 +106,11 @@ pub fn parse_init_command_test() {
   assert agent_overrides.provider == Some(types.Cursor)
 }
 
+pub fn parse_reset_command_test() {
+  let assert Ok(types.Reset(True, True)) =
+    cli.parse(["reset", "--yes", "--force"])
+}
+
 pub fn parse_plan_command_test() {
   let assert Ok(types.Plan("notes.md", None, agent_overrides)) =
     cli.parse(["plan", "--notes", "notes.md"])
@@ -771,7 +776,7 @@ pub fn start_without_brief_requires_default_doc_test() {
   let assert Ok(message) = output
   assert string.contains(
     does: message,
-    contain: "No pending Night Shift run was found.",
+    contain: "No open Night Shift run was found.",
   )
   assert string.contains(
     does: message,
@@ -1265,6 +1270,343 @@ pub fn resolve_command_recovers_and_loops_until_pending_test() {
     does: events_contents,
     contain: "Which README sections should stay in README vs move or duplicate to the wiki first-pass? -> keep-core",
   )
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn resolve_command_recovers_from_planning_sync_pending_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-resolve-recovery-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let notes_path = filepath.join(base_dir, "notes.md")
+  let fake_provider = filepath.join(bin_dir, "fake-provider")
+  let state_home = filepath.join(base_dir, "state")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
+  let old_state_home = system.get_env("XDG_STATE_HOME")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) = initialize_project_home(repo_root)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = write_resolve_loop_fake_provider(fake_provider)
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_provider),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+  let assert Ok(_) =
+    simplifile.write("Add a first-pass docs wiki.\n", to: notes_path)
+
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
+  system.set_env("XDG_STATE_HOME", state_home)
+
+  let _ =
+    run_local_cli_command(
+      ["plan", "--notes", notes_path],
+      repo_root,
+      filepath.join(base_dir, "plan.log"),
+    )
+  let assert Ok(#(run, _)) = journal.load(repo_root, types.LatestRun)
+  let stale_run =
+    types.RunRecord(
+      ..run,
+      decisions: [
+        types.RecordedDecision(
+          key: "wiki-location",
+          question: "Where should the new markdown wiki live?",
+          answer: "docs/wiki",
+          answered_at: system.timestamp(),
+        ),
+      ],
+      planning_dirty: True,
+      status: types.RunBlocked,
+    )
+  let assert Ok(_) = journal.rewrite_run(stale_run)
+
+  let resolve_result =
+    run_local_cli_tty_command_with_input(
+      ["resolve"],
+      "\n",
+      repo_root,
+      filepath.join(base_dir, "resolve.log"),
+    )
+  let assert Ok(#(updated_run, _events)) = journal.load(repo_root, types.LatestRun)
+
+  restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
+  restore_env("XDG_STATE_HOME", old_state_home)
+
+  let assert Ok(resolve_output) = resolve_result
+
+  assert updated_run.status == types.RunPending
+  assert updated_run.planning_dirty == False
+  assert string.contains(
+    does: resolve_output,
+    contain: "Planning sync pending: no",
+  )
+  assert string.contains(does: resolve_output, contain: "Question 1/1")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn stale_blocked_run_status_and_start_guidance_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-stale-blocked-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let notes_path = filepath.join(base_dir, "notes.md")
+  let fake_provider = filepath.join(bin_dir, "fake-provider")
+  let state_home = filepath.join(base_dir, "state")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
+  let old_state_home = system.get_env("XDG_STATE_HOME")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) = initialize_project_home(repo_root)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = write_resolve_loop_fake_provider(fake_provider)
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_provider),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+  let assert Ok(_) =
+    simplifile.write("Add a first-pass docs wiki.\n", to: notes_path)
+
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
+  system.set_env("XDG_STATE_HOME", state_home)
+
+  let _ =
+    run_local_cli_command(
+      ["plan", "--notes", notes_path],
+      repo_root,
+      filepath.join(base_dir, "plan.log"),
+    )
+  let assert Ok(#(run, _)) = journal.load(repo_root, types.LatestRun)
+  let stale_run =
+    types.RunRecord(
+      ..run,
+      decisions: [
+        types.RecordedDecision(
+          key: "wiki-location",
+          question: "Where should the new markdown wiki live?",
+          answer: "docs/wiki",
+          answered_at: system.timestamp(),
+        ),
+      ],
+      planning_dirty: True,
+      status: types.RunBlocked,
+    )
+  let assert Ok(_) = journal.rewrite_run(stale_run)
+
+  let status_result =
+    run_local_cli_command(
+      ["status"],
+      repo_root,
+      filepath.join(base_dir, "status.log"),
+    )
+  let start_result =
+    run_local_cli_command(
+      ["start"],
+      repo_root,
+      filepath.join(base_dir, "start.log"),
+    )
+  let assert Ok(report_contents) =
+    simplifile.read(filepath.join(stale_run.run_path, "report.md"))
+
+  restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
+  restore_env("XDG_STATE_HOME", old_state_home)
+
+  let assert Ok(status_output) = status_result
+  let assert Ok(start_output) = start_result
+
+  assert string.contains(does: status_output, contain: "Blocked tasks: 1")
+  assert string.contains(does: status_output, contain: "Outstanding decisions: 0")
+  assert string.contains(does: status_output, contain: "Planning sync pending: yes")
+  assert string.contains(does: status_output, contain: "Next action: night-shift resolve")
+  assert string.contains(
+    does: start_output,
+    contain: "recorded new planning answers or notes but has not been replanned yet",
+  )
+  assert string.contains(
+    does: report_contents,
+    contain: "Decision recorded; Night Shift still needs to replan this run.",
+  )
+  assert string.contains(does: report_contents, contain: "- Blocked tasks: 1")
+  assert string.contains(
+    does: report_contents,
+    contain: "- Manual-attention tasks: 0",
+  )
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn start_dirty_night_shift_config_suggests_reset_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-dirty-config-start-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let notes_path = filepath.join(base_dir, "notes.md")
+  let fake_provider = filepath.join(bin_dir, "fake-provider")
+  let state_home = filepath.join(base_dir, "state")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
+  let old_state_home = system.get_env("XDG_STATE_HOME")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) = initialize_project_home(repo_root)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = write_fake_provider(fake_provider)
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_provider),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+  seed_git_repo(repo_root, base_dir)
+  let assert Ok(_) =
+    simplifile.write("Add a docs page.\n", to: notes_path)
+
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
+  system.set_env("XDG_STATE_HOME", state_home)
+
+  let _ =
+    run_local_cli_command(
+      ["plan", "--notes", notes_path],
+      repo_root,
+      filepath.join(base_dir, "plan.log"),
+    )
+  let assert Ok(_) = simplifile.write(
+    worktree_setup.default_template(),
+    to: project.worktree_setup_path(repo_root),
+  )
+  let start_result =
+    run_local_cli_command(
+      ["start"],
+      repo_root,
+      filepath.join(base_dir, "start.log"),
+    )
+
+  restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
+  restore_env("XDG_STATE_HOME", old_state_home)
+
+  let assert Ok(start_output) = start_result
+
+  assert string.contains(
+    does: start_output,
+    contain: ".night-shift/worktree-setup.toml",
+  )
+  assert string.contains(does: start_output, contain: "night-shift reset")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn reset_command_removes_project_home_and_worktrees_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-reset-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let worktree_path = filepath.join(base_dir, "task-worktree")
+  let state_home = filepath.join(base_dir, "state")
+  let old_demo_command = system.get_env("NIGHT_SHIFT_DEMO_COMMAND")
+  let old_state_home = system.get_env("XDG_STATE_HOME")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) = initialize_project_home(repo_root)
+  seed_git_repo(repo_root, base_dir)
+  let _ =
+    shell.run(
+      "git worktree add -b night-shift/reset-demo "
+        <> shell.quote(worktree_path)
+        <> " main",
+      repo_root,
+      filepath.join(base_dir, "worktree.log"),
+    )
+
+  let brief_path = project.default_brief_path(repo_root)
+  let assert Ok(_) = simplifile.write("# Brief\n", to: brief_path)
+  let assert Ok(run) =
+    journal.create_pending_run(
+      repo_root,
+      brief_path,
+      agent_for(types.Codex),
+      agent_for(types.Codex),
+      "",
+      1,
+      None,
+    )
+  let run_with_worktree =
+    types.RunRecord(
+      ..run,
+      tasks: [
+        types.Task(
+          id: "demo-task",
+          title: "Demo task",
+          description: "Demo",
+          dependencies: [],
+          acceptance: [],
+          demo_plan: [],
+          decision_requests: [],
+          kind: types.ImplementationTask,
+          execution_mode: types.Serial,
+          state: types.Ready,
+          worktree_path: worktree_path,
+          branch_name: "night-shift/reset-demo",
+          pr_number: "",
+          summary: "",
+        ),
+      ],
+    )
+  let assert Ok(_) = journal.rewrite_run(run_with_worktree)
+
+  system.set_env("NIGHT_SHIFT_DEMO_COMMAND", local_demo_command())
+  system.set_env("XDG_STATE_HOME", state_home)
+
+  let reset_result =
+    run_local_cli_command(
+      ["reset", "--yes"],
+      repo_root,
+      filepath.join(base_dir, "reset.log"),
+    )
+
+  system.set_env("NIGHT_SHIFT_DEMO_COMMAND", old_demo_command)
+  system.set_env("XDG_STATE_HOME", old_state_home)
+
+  let assert Ok(reset_output) = reset_result
+
+  assert string.contains(does: reset_output, contain: "Night Shift reset complete")
+  assert simplifile.read_directory(at: project.home(repo_root))
+    |> result.is_error
+  assert simplifile.read_directory(at: worktree_path)
+    |> result.is_error
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }

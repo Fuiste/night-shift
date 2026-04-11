@@ -366,6 +366,7 @@ pub type RunRecord {
     max_workers: Int,
     notes_source: Option(NotesSource),
     decisions: List(RecordedDecision),
+    planning_dirty: Bool,
     status: RunStatus,
     created_at: String,
     updated_at: String,
@@ -417,6 +418,7 @@ pub type Command {
     generate_setup: Bool,
     assume_yes: Bool,
   )
+  Reset(assume_yes: Bool, force: Bool)
   Plan(
     notes_value: String,
     doc_path: Option(String),

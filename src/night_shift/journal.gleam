@@ -71,6 +71,7 @@ pub fn create_pending_run(
       max_workers: max_workers,
       notes_source: notes_source,
       decisions: [],
+      planning_dirty: False,
       status: types.RunPending,
       created_at: timestamp,
       updated_at: timestamp,
@@ -433,6 +434,7 @@ fn encode_run(run: types.RunRecord) -> String {
     #("max_workers", json.int(run.max_workers)),
     #("notes_source", json.nullable(from: run.notes_source, of: encode_notes_source)),
     #("decisions", json.array(run.decisions, encode_recorded_decision)),
+    #("planning_dirty", json.bool(run.planning_dirty)),
     #("status", json.string(types.run_status_to_string(run.status))),
     #("created_at", json.string(run.created_at)),
     #("updated_at", json.string(run.updated_at)),
@@ -564,6 +566,10 @@ fn run_decoder() -> decode.Decoder(types.RunRecord) {
     "decisions",
     decode.optional(decode.list(recorded_decision_decoder())),
   )
+  use planning_dirty <- decode.field(
+    "planning_dirty",
+    decode.optional(decode.bool),
+  )
   use status <- decode.field("status", run_status_decoder())
   use created_at <- decode.field("created_at", decode.string)
   use updated_at <- decode.field("updated_at", decode.string)
@@ -588,6 +594,10 @@ fn run_decoder() -> decode.Decoder(types.RunRecord) {
     decisions: case decisions {
       Some(entries) -> entries
       None -> []
+    },
+    planning_dirty: case planning_dirty {
+      Some(value) -> value
+      None -> False
     },
     status: status,
     created_at: created_at,
@@ -627,6 +637,7 @@ fn legacy_run_decoder() -> decode.Decoder(types.RunRecord) {
     max_workers: max_workers,
     notes_source: None,
     decisions: [],
+    planning_dirty: False,
     status: status,
     created_at: created_at,
     updated_at: updated_at,
