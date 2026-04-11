@@ -31,14 +31,14 @@ pub type TaskRun {
 pub fn plan_document(
   agent: types.ResolvedAgentConfig,
   repo_root: String,
-  notes_path: String,
+  notes_source: types.NotesSource,
   doc_path: String,
-) -> Result(#(String, String), String) {
+) -> Result(#(String, String, types.NotesSource), String) {
   let artifact_path = planning_artifact_path(repo_root)
   let prompt_path = filepath.join(artifact_path, "planner.prompt.md")
   let log_path = filepath.join(artifact_path, "planner.log")
   use _ <- result.try(create_directory(artifact_path))
-  use notes_contents <- result.try(read_file(notes_path))
+  use notes_contents <- result.try(read_notes_source(notes_source))
   let existing_doc_contents = read_existing_file_or_empty(doc_path)
   use _ <- result.try(write_file(
     prompt_path,
@@ -68,7 +68,7 @@ pub fn plan_document(
       case string.trim(document) {
         "" ->
           Error("Planning provider returned an empty brief. See " <> log_path)
-        trimmed -> Ok(#(trimmed, artifact_path))
+        trimmed -> Ok(#(trimmed, artifact_path, notes_source))
       }
     }
     False -> Error("Planning provider failed. See " <> log_path)
@@ -138,11 +138,16 @@ pub fn plan_tasks(
   repo_root: String,
   brief_path: String,
   run_path: String,
+  decisions: List(types.RecordedDecision),
+  completed_tasks: List(types.Task),
 ) -> Result(List(types.Task), String) {
   let prompt_path = filepath.join(run_path, "planner.prompt.md")
   let log_path = filepath.join(run_path, "logs/planner.log")
   use brief_contents <- result.try(read_file(brief_path))
-  use _ <- result.try(write_file(prompt_path, planner_prompt(brief_contents)))
+  use _ <- result.try(write_file(
+    prompt_path,
+    planner_prompt(brief_contents, decisions, completed_tasks),
+  ))
   use command <- result.try(planner_command(agent, repo_root, prompt_path))
   let command_result =
     run_planner_command(
@@ -542,18 +547,27 @@ fn cursor_mode(
   }
 }
 
-fn planner_prompt(brief_contents: String) -> String {
+fn planner_prompt(
+  brief_contents: String,
+  decisions: List(types.RecordedDecision),
+  completed_tasks: List(types.Task),
+) -> String {
   "You are Night Shift's planning provider.\n"
   <> "Break the supplied brief into a task DAG.\n"
   <> "Do not write files, apply patches, or make any repository changes.\n"
   <> "Read only the files you need to plan the work.\n"
   <> "Stay strictly within the brief. Do not create adjacent scope.\n"
-  <> "If ambiguity would change public behavior, create a single task whose description asks for manual attention.\n"
+  <> "Bias toward making a reasonable best-effort decision when the brief allows autonomy or calls the work a first pass.\n"
+  <> "Use manual attention only for truly high-impact ambiguity that cannot be resolved from the repository or supplied brief.\n"
   <> "Return only one JSON object between the exact sentinel markers below.\n"
-  <> "Each task must include: id, title, description, dependencies, acceptance, demo_plan, task_kind, execution_mode.\n"
+  <> "Each task must include: id, title, description, dependencies, acceptance, demo_plan, decision_requests, task_kind, execution_mode.\n"
   <> "Use task_kind = manual_attention only when the next step is a human decision or missing product direction. Manual-attention tasks will pause execution before any worktree bootstrap or coding work begins.\n"
+  <> "For manual-attention tasks, include decision_requests with stable keys and enough structure for an interactive resolver: key, question, rationale, options, recommended_option, allow_freeform.\n"
+  <> "For implementation tasks, set decision_requests to an empty list.\n"
   <> "Use task_kind = implementation for normal coding or research work.\n"
   <> "Use execution_mode = parallel for independent low-conflict work, serial for normal implementation work that may share context, and exclusive only when the task must run alone.\n"
+  <> "Do not re-ask recorded decisions. Treat them as final unless the brief now explicitly conflicts.\n"
+  <> "Do not emit tasks whose ids are already completed.\n"
   <> "Use lowercase kebab-case ids.\n"
   <> "\n"
   <> start_marker
@@ -562,6 +576,12 @@ fn planner_prompt(brief_contents: String) -> String {
   <> end_marker
   <> "\n"
   <> "\n"
+  <> "Recorded decisions:\n"
+  <> render_recorded_decisions(decisions)
+  <> "\n\n"
+  <> "Completed tasks to preserve:\n"
+  <> render_completed_tasks(completed_tasks)
+  <> "\n\n"
   <> "Brief:\n"
   <> brief_contents
 }
@@ -623,7 +643,7 @@ fn execution_prompt(task: types.Task) -> String {
   <> "The JSON shape is:\n"
   <> start_marker
   <> "\n"
-  <> "{\"status\":\"completed\",\"summary\":\"...\",\"files_touched\":[\"...\"],\"demo_evidence\":[\"...\"],\"pr\":{\"title\":\"...\",\"summary\":\"...\",\"demo\":[\"...\"],\"risks\":[\"...\"]},\"follow_up_tasks\":[{\"id\":\"...\",\"title\":\"...\",\"description\":\"...\",\"dependencies\":[\"...\"],\"acceptance\":[\"...\"],\"demo_plan\":[\"...\"],\"task_kind\":\"implementation\",\"execution_mode\":\"serial\"}]}\n"
+  <> "{\"status\":\"completed\",\"summary\":\"...\",\"files_touched\":[\"...\"],\"demo_evidence\":[\"...\"],\"pr\":{\"title\":\"...\",\"summary\":\"...\",\"demo\":[\"...\"],\"risks\":[\"...\"]},\"follow_up_tasks\":[{\"id\":\"...\",\"title\":\"...\",\"description\":\"...\",\"dependencies\":[\"...\"],\"acceptance\":[\"...\"],\"demo_plan\":[\"...\"],\"decision_requests\":[],\"task_kind\":\"implementation\",\"execution_mode\":\"serial\"}]}\n"
   <> end_marker
   <> "\n"
   <> "\n"
@@ -683,6 +703,8 @@ fn render_task(task: types.Task) -> String {
   <> render_lines(task.acceptance)
   <> "\n- Demo plan:\n"
   <> render_lines(task.demo_plan)
+  <> "\n- Decision requests:\n"
+  <> render_decision_requests(task.decision_requests)
 }
 
 fn render_lines(lines: List(String)) -> String {
@@ -691,6 +713,46 @@ fn render_lines(lines: List(String)) -> String {
     _ ->
       lines
       |> list.map(fn(line) { "  - " <> line })
+      |> string.join(with: "\n")
+  }
+}
+
+fn render_decision_requests(requests: List(types.DecisionRequest)) -> String {
+  case requests {
+    [] -> "  - None"
+    _ ->
+      requests
+      |> list.map(fn(request) {
+        "  - "
+        <> request.key
+        <> ": "
+        <> request.question
+      })
+      |> string.join(with: "\n")
+  }
+}
+
+fn render_recorded_decisions(decisions: List(types.RecordedDecision)) -> String {
+  case decisions {
+    [] -> "(none)"
+    _ ->
+      decisions
+      |> list.map(fn(decision) {
+        "- "
+        <> decision.key
+        <> ": "
+        <> decision.answer
+      })
+      |> string.join(with: "\n")
+  }
+}
+
+fn render_completed_tasks(tasks: List(types.Task)) -> String {
+  case tasks {
+    [] -> "(none)"
+    _ ->
+      tasks
+      |> list.map(fn(task) { "- " <> task.id <> ": " <> task.title })
       |> string.join(with: "\n")
   }
 }
@@ -794,6 +856,7 @@ fn planned_task_decoder() -> decode.Decoder(types.Task) {
   use dependencies <- decode.field("dependencies", decode.list(decode.string))
   use acceptance <- decode.field("acceptance", decode.list(decode.string))
   use demo_plan <- decode.field("demo_plan", decode.list(decode.string))
+  use decision_requests <- decode.then(optional_decision_requests_decoder())
   use kind <- decode.then(task_kind_decoder())
   use execution_mode <- decode.then(execution_mode_decoder())
   decode.success(types.Task(
@@ -803,6 +866,7 @@ fn planned_task_decoder() -> decode.Decoder(types.Task) {
     dependencies: dependencies,
     acceptance: acceptance,
     demo_plan: demo_plan,
+    decision_requests: decision_requests,
     kind: kind,
     execution_mode: execution_mode,
     state: types.Queued,
@@ -853,6 +917,7 @@ fn follow_up_task_decoder() -> decode.Decoder(types.FollowUpTask) {
   use dependencies <- decode.field("dependencies", decode.list(decode.string))
   use acceptance <- decode.field("acceptance", decode.list(decode.string))
   use demo_plan <- decode.field("demo_plan", decode.list(decode.string))
+  use decision_requests <- decode.then(optional_decision_requests_decoder())
   use kind <- decode.then(task_kind_decoder())
   use execution_mode <- decode.then(execution_mode_decoder())
   decode.success(types.FollowUpTask(
@@ -862,6 +927,7 @@ fn follow_up_task_decoder() -> decode.Decoder(types.FollowUpTask) {
     dependencies: dependencies,
     acceptance: acceptance,
     demo_plan: demo_plan,
+    decision_requests: decision_requests,
     kind: kind,
     execution_mode: execution_mode,
   ))
@@ -898,6 +964,29 @@ fn legacy_task_kind_decoder() -> decode.Decoder(types.TaskKind) {
   decode.success(types.ImplementationTask)
 }
 
+fn decision_request_decoder() -> decode.Decoder(types.DecisionRequest) {
+  use key <- decode.field("key", decode.string)
+  use question <- decode.field("question", decode.string)
+  use rationale <- decode.field("rationale", decode.string)
+  use options <- decode.then(optional_decision_options_decoder())
+  use recommended_option <- decode.then(optional_recommended_option_decoder())
+  use allow_freeform <- decode.then(optional_allow_freeform_decoder())
+  decode.success(types.DecisionRequest(
+    key: key,
+    question: question,
+    rationale: rationale,
+    options: options,
+    recommended_option: recommended_option,
+    allow_freeform: allow_freeform,
+  ))
+}
+
+fn decision_option_decoder() -> decode.Decoder(types.DecisionOption) {
+  use label <- decode.field("label", decode.string)
+  use description <- decode.field("description", decode.string)
+  decode.success(types.DecisionOption(label: label, description: description))
+}
+
 fn field_execution_mode_decoder() -> decode.Decoder(types.ExecutionMode) {
   use raw <- decode.field("execution_mode", decode.string)
   case types.execution_mode_from_string(raw) {
@@ -912,6 +1001,52 @@ fn legacy_parallel_safe_decoder() -> decode.Decoder(types.ExecutionMode) {
     True -> decode.success(types.Parallel)
     False -> decode.success(types.Exclusive)
   }
+}
+
+fn optional_decision_requests_decoder() -> decode.Decoder(List(types.DecisionRequest)) {
+  decode.one_of(
+    {
+      use requests <- decode.field(
+        "decision_requests",
+        decode.list(decision_request_decoder()),
+      )
+      decode.success(requests)
+    },
+    or: [decode.success([])],
+  )
+}
+
+fn optional_decision_options_decoder() -> decode.Decoder(List(types.DecisionOption)) {
+  decode.one_of(
+    {
+      use options <- decode.field("options", decode.list(decision_option_decoder()))
+      decode.success(options)
+    },
+    or: [decode.success([])],
+  )
+}
+
+fn optional_recommended_option_decoder() -> decode.Decoder(Option(String)) {
+  decode.one_of(
+    {
+      use option <- decode.field(
+        "recommended_option",
+        decode.optional(decode.string),
+      )
+      decode.success(option)
+    },
+    or: [decode.success(None)],
+  )
+}
+
+fn optional_allow_freeform_decoder() -> decode.Decoder(Bool) {
+  decode.one_of(
+    {
+      use allow_freeform <- decode.field("allow_freeform", decode.bool)
+      decode.success(allow_freeform)
+    },
+    or: [decode.success(True)],
+  )
 }
 
 fn planning_artifact_path(repo_root: String) -> String {
@@ -954,6 +1089,13 @@ fn read_existing_file_or_empty(path: String) -> String {
   case simplifile.read(path) {
     Ok(contents) -> contents
     Error(_) -> ""
+  }
+}
+
+fn read_notes_source(source: types.NotesSource) -> Result(String, String) {
+  case source {
+    types.NotesFile(path) -> read_file(path)
+    types.InlineNotes(path) -> read_file(path)
   }
 }
 

@@ -191,6 +191,42 @@ pub fn task_kind_to_string(kind: TaskKind) -> String {
   }
 }
 
+pub type DecisionOption {
+  DecisionOption(label: String, description: String)
+}
+
+pub type DecisionRequest {
+  DecisionRequest(
+    key: String,
+    question: String,
+    rationale: String,
+    options: List(DecisionOption),
+    recommended_option: Option(String),
+    allow_freeform: Bool,
+  )
+}
+
+pub type RecordedDecision {
+  RecordedDecision(
+    key: String,
+    question: String,
+    answer: String,
+    answered_at: String,
+  )
+}
+
+pub type NotesSource {
+  NotesFile(path: String)
+  InlineNotes(path: String)
+}
+
+pub fn notes_source_label(source: NotesSource) -> String {
+  case source {
+    NotesFile(path) -> "file: " <> path
+    InlineNotes(path) -> "inline: " <> path
+  }
+}
+
 pub type FollowUpTask {
   FollowUpTask(
     id: String,
@@ -199,6 +235,7 @@ pub type FollowUpTask {
     dependencies: List(String),
     acceptance: List(String),
     demo_plan: List(String),
+    decision_requests: List(DecisionRequest),
     kind: TaskKind,
     execution_mode: ExecutionMode,
   )
@@ -212,6 +249,7 @@ pub type Task {
     dependencies: List(String),
     acceptance: List(String),
     demo_plan: List(String),
+    decision_requests: List(DecisionRequest),
     kind: TaskKind,
     execution_mode: ExecutionMode,
     state: TaskState,
@@ -289,6 +327,8 @@ pub type RunRecord {
     execution_agent: ResolvedAgentConfig,
     environment_name: String,
     max_workers: Int,
+    notes_source: Option(NotesSource),
+    decisions: List(RecordedDecision),
     status: RunStatus,
     created_at: String,
     updated_at: String,
@@ -334,25 +374,20 @@ pub fn default_config() -> Config {
 }
 
 pub type Command {
-  Start(
-    brief_path: Option(String),
-    agent_overrides: AgentOverrides,
-    environment_name: Option(String),
-    max_workers: Result(Int, Nil),
-    ui_enabled: Bool,
-  )
+  Start(run: RunSelector, ui_enabled: Bool)
   Init(
     agent_overrides: AgentOverrides,
     generate_setup: Bool,
     assume_yes: Bool,
   )
   Plan(
-    notes_path: String,
+    notes_value: String,
     doc_path: Option(String),
     agent_overrides: AgentOverrides,
   )
   Status(run: RunSelector)
   Report(run: RunSelector)
+  Resolve(run: RunSelector)
   Resume(run: RunSelector, ui_enabled: Bool)
   Review(agent_overrides: AgentOverrides, environment_name: Option(String))
   Demo(ui_enabled: Bool)

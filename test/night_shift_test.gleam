@@ -89,20 +89,8 @@ fn gleam_to_erlang_module_name(path: String) -> String {
 }
 
 pub fn parse_start_command_test() {
-  let assert Ok(
-    types.Start(Some("brief.md"), agent_overrides, None, Ok(2), False),
-  ) =
-    cli.parse([
-      "start",
-      "--brief",
-      "brief.md",
-      "--provider",
-      "cursor",
-      "--max-workers",
-      "2",
-    ])
-
-  assert agent_overrides.provider == Some(types.Cursor)
+  let assert Ok(types.Start(types.RunId("run-123"), False)) =
+    cli.parse(["start", "--run", "run-123"])
 }
 
 pub fn parse_init_command_test() {
@@ -144,29 +132,21 @@ pub fn parse_status_defaults_to_latest_test() {
 }
 
 pub fn parse_start_command_with_ui_test() {
-  let assert Ok(
-    types.Start(Some("brief.md"), agent_overrides, None, Error(Nil), True),
-  ) =
-    cli.parse(["start", "--brief", "brief.md", "--ui"])
-  assert agent_overrides == types.empty_agent_overrides()
-}
-
-pub fn parse_start_command_with_environment_test() {
-  let assert Ok(
-    types.Start(None, agent_overrides, Some("dev"), Error(Nil), False),
-  ) = cli.parse(["start", "--environment", "dev"])
-  assert agent_overrides == types.empty_agent_overrides()
+  let assert Ok(types.Start(types.LatestRun, True)) =
+    cli.parse(["start", "--ui"])
 }
 
 pub fn parse_start_command_without_brief_test() {
-  let assert Ok(types.Start(None, agent_overrides, None, Error(Nil), False)) =
-    cli.parse(["start"])
-  assert agent_overrides == types.empty_agent_overrides()
+  let assert Ok(types.Start(types.LatestRun, False)) = cli.parse(["start"])
 }
 
 pub fn parse_plan_requires_notes_test() {
   let assert Error(message) = cli.parse(["plan"])
-  assert message == "The plan command requires --notes <path>."
+  assert message == "The plan command requires --notes <file-or-inline-text>."
+}
+
+pub fn parse_resolve_defaults_to_latest_test() {
+  let assert Ok(types.Resolve(types.LatestRun)) = cli.parse(["resolve"])
 }
 
 pub fn parse_resume_command_with_ui_test() {
@@ -573,7 +553,7 @@ pub fn plan_command_non_tty_streaming_stays_plain_test() {
   let assert Ok(output) = result
   assert !string.contains(does: output, contain: "\u{001b}")
   assert string.contains(does: output, contain: "[brief] prompt hidden; see ")
-  assert string.contains(does: output, contain: "Updated planning brief:")
+  assert string.contains(does: output, contain: "Planned run ")
   assert !string.contains(
     does: output,
     contain: "You are Night Shift's planning provider.",
@@ -683,7 +663,7 @@ pub fn plan_document_handles_large_structured_json_line_test() {
     provider.plan_document(
       types.resolved_agent_from_provider(types.Codex),
       repo_root,
-      notes_path,
+      types.NotesFile(notes_path),
       doc_path,
     )
 
@@ -691,7 +671,7 @@ pub fn plan_document_handles_large_structured_json_line_test() {
   restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
   restore_env("XDG_STATE_HOME", old_state_home)
 
-  let assert Ok(#(document, _artifact_path)) = result
+  let assert Ok(#(document, _artifact_path, _notes_source)) = result
   assert string.contains(does: document, contain: "# Night Shift Brief")
   assert string.contains(does: document, contain: "Large streaming payload")
   assert string.contains(does: document, contain: "AAAAAAAAAAAAAAAA")
@@ -737,11 +717,11 @@ pub fn start_without_brief_requires_default_doc_test() {
   let assert Ok(message) = output
   assert string.contains(
     does: message,
-    contain: "No default brief was found at",
+    contain: "No pending Night Shift run was found.",
   )
   assert string.contains(
     does: message,
-    contain: project.default_brief_path(repo_root),
+    contain: "night-shift plan --notes",
   )
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
@@ -951,6 +931,16 @@ pub fn start_rejects_dirty_source_repo_test() {
       repo_root,
       filepath.join(base_dir, "seed.log"),
     )
+  let assert Ok(_pending_run) =
+    journal.create_pending_run(
+      repo_root,
+      project.default_brief_path(repo_root),
+      agent_for(types.Codex),
+      agent_for(types.Codex),
+      "",
+      1,
+      None,
+    )
   let assert Ok(_) =
     simplifile.write(
       "# Demo\nDirty\n",
@@ -1045,10 +1035,10 @@ pub fn plan_command_creates_and_updates_default_brief_test() {
   let assert Ok(second_output) = second_result
   let assert Ok(document) = simplifile.read(default_doc)
 
-  assert string.contains(does: first_output, contain: "Updated planning brief:")
+  assert string.contains(does: first_output, contain: "Planned run ")
   assert string.contains(
     does: second_output,
-    contain: "Updated planning brief:",
+    contain: "Planned run ",
   )
   assert string.contains(does: document, contain: "Alpha task")
   assert string.contains(does: document, contain: "Beta task")
@@ -1157,7 +1147,7 @@ pub fn plan_document_reports_missing_markers_test() {
     provider.plan_document(
       agent_for(types.Codex),
       repo_root,
-      notes_path,
+      types.NotesFile(notes_path),
       doc_path,
     )
 
@@ -1207,7 +1197,7 @@ pub fn plan_document_reports_empty_payload_test() {
     provider.plan_document(
       agent_for(types.Codex),
       repo_root,
-      notes_path,
+      types.NotesFile(notes_path),
       doc_path,
     )
 
@@ -1312,7 +1302,7 @@ pub fn codex_plan_document_reads_prompt_from_stdin_test() {
     provider.plan_document(
       agent_for(types.Codex),
       repo_root,
-      notes_path,
+      types.NotesFile(notes_path),
       doc_path,
     )
 
@@ -1320,7 +1310,7 @@ pub fn codex_plan_document_reads_prompt_from_stdin_test() {
   restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
   restore_env("XDG_STATE_HOME", old_state_home)
 
-  let assert Ok(#(document, _artifact_path)) = result
+  let assert Ok(#(document, _artifact_path, _notes_source)) = result
   assert string.contains(does: document, contain: "# Night Shift Brief")
   assert string.contains(does: document, contain: "Add the hello script.")
 
@@ -1421,7 +1411,7 @@ pub fn orchestrator_start_runs_fake_provider_test() {
       max_workers: 1,
     )
 
-  let assert Ok(run) = start_run(repo_root, brief_path, types.Codex, 1)
+  let assert Ok(run) = planned_run(repo_root, brief_path, types.Codex, 1)
   let assert Ok(completed_run) = orchestrator.start(run, config)
 
   system.set_env("PATH", old_path)
@@ -1438,6 +1428,7 @@ pub fn orchestrator_start_runs_fake_provider_test() {
       dependencies: [],
       acceptance: [],
       demo_plan: [],
+      decision_requests: [],
       kind: types.ImplementationTask,
       execution_mode: types.Serial,
       state: types.Failed,
@@ -1542,7 +1533,7 @@ pub fn orchestrator_start_delivers_provider_created_commit_test() {
       max_workers: 1,
     )
 
-  let assert Ok(run) = start_run(repo_root, brief_path, types.Codex, 1)
+  let assert Ok(run) = planned_run(repo_root, brief_path, types.Codex, 1)
   let assert Ok(completed_run) = orchestrator.start(run, config)
 
   system.set_env("PATH", old_path)
@@ -1559,6 +1550,7 @@ pub fn orchestrator_start_delivers_provider_created_commit_test() {
       dependencies: [],
       acceptance: [],
       demo_plan: [],
+      decision_requests: [],
       kind: types.ImplementationTask,
       execution_mode: types.Serial,
       state: types.Failed,
@@ -1616,6 +1608,7 @@ pub fn start_task_runs_codex_execution_in_worktree_test() {
       dependencies: [],
       acceptance: ["Create EXECUTED.txt in the task worktree."],
       demo_plan: ["Show EXECUTED.txt."],
+      decision_requests: [],
       kind: types.ImplementationTask,
       execution_mode: types.Serial,
       state: types.Ready,
@@ -1699,7 +1692,13 @@ pub fn orchestrator_start_blocks_manual_attention_before_bootstrap_test() {
     )
 
   let assert Ok(run) =
-    start_run_in_environment(repo_root, brief_path, types.Codex, "default", 1)
+    planned_run_in_environment(
+      repo_root,
+      brief_path,
+      types.Codex,
+      "default",
+      1,
+    )
   let assert Ok(blocked_run) = orchestrator.start(run, config)
 
   system.set_env("PATH", old_path)
@@ -1716,6 +1715,7 @@ pub fn orchestrator_start_blocks_manual_attention_before_bootstrap_test() {
       dependencies: [],
       acceptance: [],
       demo_plan: [],
+      decision_requests: [],
       kind: types.ManualAttentionTask,
       execution_mode: types.Exclusive,
       state: types.Failed,
@@ -1791,7 +1791,13 @@ pub fn orchestrator_start_fails_environment_preflight_before_task_launch_test() 
     )
 
   let assert Ok(run) =
-    start_run_in_environment(repo_root, brief_path, types.Codex, "default", 1)
+    planned_run_in_environment(
+      repo_root,
+      brief_path,
+      types.Codex,
+      "default",
+      1,
+    )
   let assert Ok(failed_run) = orchestrator.start(run, config)
 
   system.set_env("PATH", old_path)
@@ -1885,7 +1891,13 @@ pub fn orchestrator_start_uses_setup_phase_for_new_worktrees_test() {
     )
 
   let assert Ok(run) =
-    start_run_in_environment(repo_root, brief_path, types.Codex, "default", 1)
+    planned_run_in_environment(
+      repo_root,
+      brief_path,
+      types.Codex,
+      "default",
+      1,
+    )
   let assert Ok(completed_run) = orchestrator.start(run, config)
 
   system.set_env("PATH", old_path)
@@ -2000,7 +2012,7 @@ pub fn dashboard_start_session_tracks_completed_run_test() {
       max_workers: 1,
     )
 
-  let assert Ok(run) = start_run(repo_root, brief_path, types.Codex, 1)
+  let assert Ok(run) = planned_run(repo_root, brief_path, types.Codex, 1)
   let assert Ok(session) =
     dashboard.start_start_session(repo_root, run.run_id, run, config)
   let final_payload = wait_for_run_payload(session.url, run.run_id, 20)
@@ -2021,46 +2033,49 @@ pub fn dashboard_start_session_tracks_completed_run_test() {
 
 pub fn demo_run_succeeds_without_ui_test() {
   let old_demo_command = system.get_env("NIGHT_SHIFT_DEMO_COMMAND")
+  let old_repo_root = system.get_env("NIGHT_SHIFT_REPO_ROOT")
   system.set_env("NIGHT_SHIFT_DEMO_COMMAND", local_demo_command())
+  system.unset_env("NIGHT_SHIFT_REPO_ROOT")
 
   let first_result = demo.run(False)
-  let second_result = demo.run(False)
 
   system.set_env("NIGHT_SHIFT_DEMO_COMMAND", old_demo_command)
+  restore_env("NIGHT_SHIFT_REPO_ROOT", old_repo_root)
+
   let _ = simplifile.delete(file_or_dir_at: demo.demo_root())
 
   let assert Ok(first_summary) = first_result
-  let assert Ok(second_summary) = second_result
 
   assert string.contains(
     does: first_summary,
-    contain: "Validated CLI flows: start, status, report",
+    contain: "Validated CLI flows: plan, start, status, report",
   )
   assert string.contains(
     does: first_summary,
     contain: "Proof file: "
       <> filepath.join(demo.demo_root(), "repo/IMPLEMENTED.md"),
   )
-  assert string.contains(
-    does: second_summary,
-    contain: "Artifacts: " <> demo.demo_root(),
-  )
+  assert string.contains(does: first_summary, contain: "Artifacts: " <> demo.demo_root())
 }
 
 pub fn demo_run_succeeds_with_ui_test() {
   let old_demo_command = system.get_env("NIGHT_SHIFT_DEMO_COMMAND")
+  let old_repo_root = system.get_env("NIGHT_SHIFT_REPO_ROOT")
   system.set_env("NIGHT_SHIFT_DEMO_COMMAND", local_demo_command())
+  system.unset_env("NIGHT_SHIFT_REPO_ROOT")
 
   let result = demo.run(True)
 
   system.set_env("NIGHT_SHIFT_DEMO_COMMAND", old_demo_command)
+  restore_env("NIGHT_SHIFT_REPO_ROOT", old_repo_root)
+
   let _ = simplifile.delete(file_or_dir_at: demo.demo_root())
 
   let assert Ok(summary) = result
 
   assert string.contains(
     does: summary,
-    contain: "Validated UI flows: start --ui, dashboard payload, status",
+    contain: "Validated UI flows: plan, start --ui, dashboard payload, status",
   )
   assert string.contains(does: summary, contain: "Dashboard: http://127.0.0.1:")
   assert string.contains(
@@ -2163,6 +2178,21 @@ fn start_run(
   start_run_in_environment(repo_root, brief_path, provider_name, "", max_workers)
 }
 
+fn planned_run(
+  repo_root: String,
+  brief_path: String,
+  provider_name: types.Provider,
+  max_workers: Int,
+) -> Result(types.RunRecord, String) {
+  planned_run_in_environment(
+    repo_root,
+    brief_path,
+    provider_name,
+    "",
+    max_workers,
+  )
+}
+
 fn start_run_in_environment(
   repo_root: String,
   brief_path: String,
@@ -2178,6 +2208,25 @@ fn start_run_in_environment(
     environment_name,
     max_workers,
   )
+}
+
+fn planned_run_in_environment(
+  repo_root: String,
+  brief_path: String,
+  provider_name: types.Provider,
+  environment_name: String,
+  max_workers: Int,
+) -> Result(types.RunRecord, String) {
+  use pending_run <- result.try(journal.create_pending_run(
+    repo_root,
+    brief_path,
+    agent_for(provider_name),
+    agent_for(provider_name),
+    environment_name,
+    max_workers,
+    None,
+  ))
+  orchestrator.plan(pending_run)
 }
 
 fn seed_git_repo(repo_root: String, base_dir: String) -> Nil {

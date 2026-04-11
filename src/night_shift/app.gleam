@@ -92,108 +92,19 @@ fn run_initialized_command(
   command: types.Command,
 ) -> Nil {
   case command {
-    types.Plan(notes_path, doc_path, agent_overrides) ->
+    types.Plan(notes_value, doc_path, agent_overrides) ->
       io.println(
         case agent_config.resolve_plan_agent(config, agent_overrides) {
-          Ok(planning_agent) -> plan(repo_root, notes_path, doc_path, planning_agent)
+          Ok(planning_agent) ->
+            plan(repo_root, notes_value, doc_path, planning_agent, config)
           Error(message) -> message
         },
       )
-    types.Start(
-      brief_path,
-      agent_overrides,
-      environment_name,
-      max_workers,
-      False,
-    ) -> {
-      let resolved_brief = resolve_start_brief_path(repo_root, brief_path)
-      let resolved_workers = choose_max_workers(max_workers, config)
-
-      io.println(
-        case
-          resolved_brief,
-          ensure_clean_repo_for_start(repo_root),
-          resolve_environment_name(repo_root, environment_name),
-          agent_config.resolve_start_agents(config, agent_overrides)
-        {
-          Ok(path), Ok(Nil), Ok(selected_environment), Ok(#(
-            planning_agent,
-            execution_agent,
-          )) ->
-            start(
-              repo_root,
-              path,
-              planning_agent,
-              execution_agent,
-              selected_environment,
-              resolved_workers,
-              config,
-            )
-          Error(message), _, _, _ -> message
-          _, Error(message), _, _ -> message
-          _, _, Error(message), _ -> message
-          _, _, _, Error(message) -> message
-        },
-      )
-    }
-    types.Start(
-      brief_path,
-      agent_overrides,
-      environment_name,
-      max_workers,
-      True,
-    ) -> {
-      let resolved_brief = resolve_start_brief_path(repo_root, brief_path)
-      let resolved_workers = choose_max_workers(max_workers, config)
-
-      case
-        resolved_brief,
-        ensure_clean_repo_for_start(repo_root),
-        resolve_environment_name(repo_root, environment_name),
-        agent_config.resolve_start_agents(config, agent_overrides)
-      {
-        Ok(path), Ok(Nil), Ok(selected_environment), Ok(#(
-          planning_agent,
-          execution_agent,
-        )) ->
-          case
-            journal.start_run(
-              repo_root,
-              path,
-              planning_agent,
-              execution_agent,
-              selected_environment,
-              resolved_workers,
-            )
-          {
-            Ok(run) ->
-              case
-                dashboard.start_start_session(
-                  repo_root,
-                  run.run_id,
-                  run,
-                  config,
-                )
-              {
-                Ok(session) -> {
-                  io.println(render_dashboard_summary(session.url, run.run_id))
-                  system.wait_forever()
-                }
-                Error(message) -> {
-                  let _ = journal.mark_status(run, types.RunFailed, message)
-                  io.println(message)
-                }
-              }
-            Error(message) -> io.println(message)
-          }
-        Error(message), _, _, _ -> io.println(message)
-        _, Error(message), _, _ -> io.println(message)
-        _, _, Error(message), _ -> io.println(message)
-        _, _, _, Error(message) -> io.println(message)
-      }
-    }
+    types.Start(run, False) -> io.println(start(repo_root, run, config))
+    types.Start(run, True) -> start_with_ui(repo_root, run, config)
     types.Status(run) -> io.println(status(repo_root, run))
     types.Report(run) -> io.println(report(repo_root, run))
+    types.Resolve(run) -> io.println(resolve(repo_root, run, config))
     types.Resume(run, False) -> io.println(resume(repo_root, run, config))
     types.Resume(run, True) -> resume_with_ui(repo_root, run, config)
     types.Review(agent_overrides, environment_name) ->
@@ -487,82 +398,88 @@ fn file_exists(path: String) -> Bool {
 
 fn plan(
   repo_root: String,
-  notes_path: String,
+  notes_value: String,
   doc_path: Option(String),
   planning_agent: types.ResolvedAgentConfig,
+  config: types.Config,
 ) -> String {
   let target_doc_path = resolve_doc_path(repo_root, doc_path)
   case
-    provider.plan_document(
-      planning_agent,
-      repo_root,
-      notes_path,
-      target_doc_path,
-    )
+    resolve_notes_source(repo_root, notes_value),
+    agent_config.resolve_start_agents(config, types.empty_agent_overrides()),
+    resolve_environment_name(repo_root, None)
   {
-    Ok(#(document, artifact_path)) ->
-      case write_string(target_doc_path, document) {
-        Ok(_) ->
-          "Updated planning brief: "
-          <> target_doc_path
-          <> "\n"
-          <> "Planning profile: "
-          <> agent_config.summary(planning_agent)
-          <> "\n"
-          <> "Artifacts: "
-          <> artifact_path
+    Ok(notes_source), Ok(#(_default_plan_agent, execution_agent)), Ok(
+      selected_environment,
+    ) ->
+      case
+        provider.plan_document(
+          planning_agent,
+          repo_root,
+          notes_source,
+          target_doc_path,
+        )
+      {
+        Ok(#(document, artifact_path, resolved_notes_source)) ->
+          case write_string(target_doc_path, document) {
+            Ok(_) ->
+              case
+                prepare_planning_run(
+                  repo_root,
+                  target_doc_path,
+                  planning_agent,
+                  execution_agent,
+                  selected_environment,
+                  config.max_workers,
+                  resolved_notes_source,
+                )
+              {
+                Ok(#(seeded_run, replanning)) ->
+                  case case replanning {
+                    True -> orchestrator.replan(seeded_run)
+                    False -> orchestrator.plan(seeded_run)
+                  } {
+                    Ok(planned_run) ->
+                      render_planning_summary(
+                        planned_run,
+                        target_doc_path,
+                        artifact_path,
+                        resolved_notes_source,
+                      )
+                    Error(message) -> message
+                  }
+                Error(message) -> message
+              }
+            Error(message) -> message
+          }
         Error(message) -> message
       }
-    Error(message) -> message
+    Error(message), _, _ -> message
+    _, Error(message), _ -> message
+    _, _, Error(message) -> message
   }
 }
 
 fn start(
   repo_root: String,
-  brief_path: String,
-  planning_agent: types.ResolvedAgentConfig,
-  execution_agent: types.ResolvedAgentConfig,
-  environment_name: String,
-  max_workers: Int,
+  run_selector: types.RunSelector,
   config: types.Config,
 ) -> String {
-  case
-    journal.start_run(
-      repo_root,
-      brief_path,
-      planning_agent,
-      execution_agent,
-      environment_name,
-      max_workers,
-    )
-  {
+  case load_pending_run(repo_root, run_selector) {
     Ok(run) ->
-      case orchestrator.start(run, config) {
-        Ok(completed_run) -> render_run_summary(completed_run)
+      case ensure_clean_repo_for_start(repo_root) {
+        Ok(Nil) ->
+          case journal.activate_run(run) {
+            Ok(active_run) ->
+              case orchestrator.start(active_run, config) {
+                Ok(completed_run) -> render_run_summary(completed_run)
+                Error(message) -> message
+              }
+            Error(message) -> message
+          }
         Error(message) -> message
       }
     Error(message) -> message
-  }
-}
-
-fn resolve_start_brief_path(
-  repo_root: String,
-  brief_path: Option(String),
-) -> Result(String, String) {
-  case brief_path {
-    Some(path) -> Ok(path)
-    None -> {
-      let path = default_brief_path(repo_root)
-      case simplifile.read(path) {
-        Ok(_) -> Ok(path)
-        Error(_) ->
-          Error(
-            "No default brief was found at "
-            <> path
-            <> ". Run `night-shift plan --notes <path>` to create it or pass `--brief <path>`.",
-          )
-      }
-    }
   }
 }
 
@@ -744,7 +661,7 @@ fn crate_summary(config: types.Config) -> String {
 }
 
 fn status(repo_root: String, run: types.RunSelector) -> String {
-  case journal.load(repo_root, run) {
+  case load_display_run(repo_root, run) {
     Ok(#(saved_run, events)) ->
       "Run "
       <> saved_run.run_id
@@ -757,11 +674,61 @@ fn status(repo_root: String, run: types.RunSelector) -> String {
       <> "Execution: "
       <> agent_config.summary(saved_run.execution_agent)
       <> "\n"
+      <> "Notes: "
+      <> render_notes_source(saved_run.notes_source)
+      <> "\n"
+      <> "Outstanding decisions: "
+      <> int.to_string(outstanding_decision_count(saved_run))
+      <> "\n"
+      <> "Ready tasks: "
+      <> int.to_string(ready_task_count(saved_run.tasks))
+      <> "\n"
+      <> "Queued tasks: "
+      <> int.to_string(queued_task_count(saved_run.tasks))
+      <> "\n"
       <> "Events: "
       <> int.to_string(list.length(events))
       <> "\n"
       <> "Report: "
       <> saved_run.report_path
+    Error(message) -> message
+  }
+}
+
+fn resolve(
+  repo_root: String,
+  selector: types.RunSelector,
+  _config: types.Config,
+) -> String {
+  case load_blocked_run(repo_root, selector) {
+    Ok(run) ->
+      case can_prompt_interactively() {
+        False ->
+          "night-shift resolve requires an interactive terminal so it can capture decision answers."
+        True ->
+          case collect_recorded_decisions(run, unresolved_manual_attention_tasks(run)) {
+            Ok(new_decisions) -> {
+              let updated_run =
+                types.RunRecord(
+                  ..run,
+                  decisions: merge_recorded_decisions(run.decisions, new_decisions),
+                )
+              case journal.rewrite_run(updated_run) {
+                Ok(rewritten_run) ->
+                  case append_decision_recorded_events(rewritten_run, new_decisions) {
+                    Ok(signaled_run) ->
+                      case orchestrator.replan(signaled_run) {
+                        Ok(replanned_run) -> render_run_summary(replanned_run)
+                        Error(message) -> message
+                      }
+                    Error(message) -> message
+                  }
+                Error(message) -> message
+              }
+            }
+            Error(message) -> message
+          }
+      }
     Error(message) -> message
   }
 }
@@ -828,13 +795,6 @@ fn review(
   }
 }
 
-fn choose_max_workers(candidate: Result(Int, Nil), config: types.Config) -> Int {
-  case candidate {
-    Ok(worker_count) -> worker_count
-    Error(Nil) -> config.max_workers
-  }
-}
-
 fn stringify_notifiers(notifiers: List(types.NotifierName)) -> String {
   notifiers
   |> list.map(types.notifier_to_string)
@@ -853,11 +813,481 @@ fn render_run_summary(run: types.RunRecord) -> String {
   <> "Execution: "
   <> agent_config.summary(run.execution_agent)
   <> "\n"
+  <> "Notes: "
+  <> render_notes_source(run.notes_source)
+  <> "\n"
   <> "Report: "
   <> run.report_path
   <> "\n"
   <> "Journal: "
   <> run.run_path
+}
+
+fn render_planning_summary(
+  run: types.RunRecord,
+  brief_path: String,
+  artifact_path: String,
+  notes_source: types.NotesSource,
+) -> String {
+  "Planned run "
+  <> run.run_id
+  <> " with status "
+  <> types.run_status_to_string(run.status)
+  <> "\n"
+  <> "Brief: "
+  <> brief_path
+  <> "\n"
+  <> "Notes: "
+  <> types.notes_source_label(notes_source)
+  <> "\n"
+  <> "Planning: "
+  <> agent_config.summary(run.planning_agent)
+  <> "\n"
+  <> "Artifacts: "
+  <> artifact_path
+  <> "\n"
+  <> "Report: "
+  <> run.report_path
+}
+
+fn resolve_notes_source(
+  repo_root: String,
+  notes_value: String,
+) -> Result(types.NotesSource, String) {
+  case simplifile.read(notes_value) {
+    Ok(_) -> Ok(types.NotesFile(notes_value))
+    Error(_) -> {
+      let artifact_path = planning_artifact_path(repo_root)
+      let saved_path = filepath.join(artifact_path, "inline-notes.md")
+      use _ <- result.try(create_directory(artifact_path))
+      use _ <- result.try(write_string(saved_path, notes_value))
+      Ok(types.InlineNotes(saved_path))
+    }
+  }
+}
+
+fn prepare_planning_run(
+  repo_root: String,
+  brief_path: String,
+  planning_agent: types.ResolvedAgentConfig,
+  execution_agent: types.ResolvedAgentConfig,
+  environment_name: String,
+  max_workers: Int,
+  notes_source: types.NotesSource,
+) -> Result(#(types.RunRecord, Bool), String) {
+  case journal.latest_reusable_run(repo_root) {
+    Ok(Some(existing_run)) -> {
+      use brief_contents <- result.try(simplifile.read(brief_path)
+        |> result.map_error(fn(error) {
+          "Unable to read " <> brief_path <> ": " <> simplifile.describe_error(error)
+        }))
+      use _ <- result.try(write_string(existing_run.brief_path, brief_contents))
+      let updated_run =
+        types.RunRecord(
+          ..existing_run,
+          planning_agent: planning_agent,
+          execution_agent: execution_agent,
+          environment_name: environment_name,
+          max_workers: max_workers,
+          notes_source: Some(notes_source),
+        )
+      use rewritten_run <- result.try(journal.rewrite_run(updated_run))
+      Ok(#(rewritten_run, True))
+    }
+    Ok(None) ->
+      journal.create_pending_run(
+        repo_root,
+        brief_path,
+        planning_agent,
+        execution_agent,
+        environment_name,
+        max_workers,
+        Some(notes_source),
+      )
+      |> result.map(fn(run) { #(run, False) })
+    Error(message) -> Error(message)
+  }
+}
+
+fn load_pending_run(
+  repo_root: String,
+  selector: types.RunSelector,
+) -> Result(types.RunRecord, String) {
+  case selector {
+    types.RunId(_) -> {
+      use #(run, _) <- result.try(journal.load(repo_root, selector))
+      validate_pending_run(run)
+    }
+    types.LatestRun ->
+      case latest_run_with_status(repo_root, types.RunPending) {
+        Ok(run) -> Ok(run)
+        Error(_) ->
+          case latest_run_with_status(repo_root, types.RunBlocked) {
+            Ok(_) ->
+              Error(
+                "Night Shift's latest open run is blocked. Run `night-shift resolve` first.",
+              )
+            Error(_) ->
+              Error(
+                "No pending Night Shift run was found. Run `night-shift plan --notes ...` first.",
+              )
+          }
+      }
+  }
+}
+
+fn load_blocked_run(
+  repo_root: String,
+  selector: types.RunSelector,
+) -> Result(types.RunRecord, String) {
+  case selector {
+    types.RunId(_) -> {
+      use #(run, _) <- result.try(journal.load(repo_root, selector))
+      validate_blocked_run(run)
+    }
+    types.LatestRun ->
+      case latest_run_with_status(repo_root, types.RunBlocked) {
+        Ok(run) -> Ok(run)
+        Error(_) ->
+          case latest_run_with_status(repo_root, types.RunPending) {
+            Ok(_) ->
+              Error(
+                "Night Shift's latest open run is already ready to start. Run `night-shift start`.",
+              )
+            Error(_) ->
+              Error(
+                "No blocked Night Shift run was found. Run `night-shift plan --notes ...` first.",
+              )
+          }
+      }
+  }
+}
+
+fn load_display_run(
+  repo_root: String,
+  selector: types.RunSelector,
+) -> Result(#(types.RunRecord, List(types.RunEvent)), String) {
+  journal.load(repo_root, selector)
+}
+
+fn validate_pending_run(run: types.RunRecord) -> Result(types.RunRecord, String) {
+  case run.status {
+    types.RunPending -> Ok(run)
+    types.RunBlocked ->
+      Error("Run " <> run.run_id <> " is blocked. Run `night-shift resolve --run " <> run.run_id <> "` first.")
+    types.RunActive ->
+      Error("Run " <> run.run_id <> " is already active. Use `night-shift resume --run " <> run.run_id <> "` or inspect status/report.")
+    types.RunCompleted ->
+      Error("Run " <> run.run_id <> " is already completed. Run `night-shift plan --notes ...` to create or refresh a runnable plan.")
+    types.RunFailed ->
+      Error("Run " <> run.run_id <> " already failed. Run `night-shift plan --notes ...` to create a fresh or refreshed plan.")
+  }
+}
+
+fn validate_blocked_run(run: types.RunRecord) -> Result(types.RunRecord, String) {
+  case run.status {
+    types.RunBlocked -> Ok(run)
+    types.RunPending ->
+      Error("Run " <> run.run_id <> " is already ready to start. Run `night-shift start --run " <> run.run_id <> "`.")
+    types.RunActive ->
+      Error("Run " <> run.run_id <> " is active and cannot be resolved right now.")
+    types.RunCompleted ->
+      Error("Run " <> run.run_id <> " is already completed.")
+    types.RunFailed ->
+      Error("Run " <> run.run_id <> " failed and cannot be resolved in place.")
+  }
+}
+
+fn latest_run_with_status(
+  repo_root: String,
+  status: types.RunStatus,
+) -> Result(types.RunRecord, String) {
+  use runs <- result.try(journal.list_runs(repo_root))
+  case list.find(runs, fn(run) { run.status == status }) {
+    Ok(run) -> Ok(run)
+    Error(_) -> Error("No matching Night Shift run was found.")
+  }
+}
+
+fn render_notes_source(notes_source: Option(types.NotesSource)) -> String {
+  case notes_source {
+    Some(source) -> types.notes_source_label(source)
+    None -> "(none)"
+  }
+}
+
+fn outstanding_decision_count(run: types.RunRecord) -> Int {
+  unresolved_manual_attention_tasks(run)
+  |> list.map(unresolved_decision_requests(run.decisions, _))
+  |> list.flatten
+  |> list.length
+}
+
+fn ready_task_count(tasks: List(types.Task)) -> Int {
+  tasks
+  |> list.filter(fn(task) { task.state == types.Ready })
+  |> list.length
+}
+
+fn queued_task_count(tasks: List(types.Task)) -> Int {
+  tasks
+  |> list.filter(fn(task) { task.state == types.Queued })
+  |> list.length
+}
+
+fn unresolved_manual_attention_tasks(run: types.RunRecord) -> List(types.Task) {
+  run.tasks
+  |> list.filter(fn(task) {
+    task.kind == types.ManualAttentionTask
+    && task.state != types.Completed
+    && has_unresolved_requests(run.decisions, task)
+  })
+}
+
+fn unresolved_decision_requests(
+  decisions: List(types.RecordedDecision),
+  task: types.Task,
+) -> List(types.DecisionRequest) {
+  case task.decision_requests {
+    [] ->
+      [
+        types.DecisionRequest(
+          key: "task:" <> task.id,
+          question: task.title,
+          rationale: task.description,
+          options: [],
+          recommended_option: None,
+          allow_freeform: True,
+        ),
+      ]
+    requests ->
+      requests
+      |> list.filter(fn(request) { !decision_recorded(decisions, request.key) })
+  }
+}
+
+fn has_unresolved_requests(
+  decisions: List(types.RecordedDecision),
+  task: types.Task,
+) -> Bool {
+  unresolved_decision_requests(decisions, task) != []
+}
+
+fn decision_recorded(
+  decisions: List(types.RecordedDecision),
+  key: String,
+) -> Bool {
+  list.any(decisions, fn(decision) { decision.key == key })
+}
+
+fn collect_recorded_decisions(
+  run: types.RunRecord,
+  tasks: List(types.Task),
+) -> Result(List(types.RecordedDecision), String) {
+  case tasks {
+    [] -> Error("No unresolved manual-attention decisions were found for this run.")
+    [task, ..rest] -> {
+      use current <- result.try(collect_task_decisions(run.decisions, task))
+      use remaining <- result.try(collect_recorded_decisions_or_empty(
+        run.decisions,
+        rest,
+      ))
+      Ok(list.append(current, remaining))
+    }
+  }
+}
+
+fn collect_recorded_decisions_or_empty(
+  existing: List(types.RecordedDecision),
+  tasks: List(types.Task),
+) -> Result(List(types.RecordedDecision), String) {
+  case tasks {
+    [] -> Ok([])
+    [task, ..rest] -> {
+      use current <- result.try(collect_task_decisions(existing, task))
+      use remaining <- result.try(collect_recorded_decisions_or_empty(existing, rest))
+      Ok(list.append(current, remaining))
+    }
+  }
+}
+
+fn collect_task_decisions(
+  existing: List(types.RecordedDecision),
+  task: types.Task,
+) -> Result(List(types.RecordedDecision), String) {
+  let requests = unresolved_decision_requests(existing, task)
+  case requests {
+    [] -> Ok([])
+    _ -> {
+      io.println("")
+      io.println("Resolving " <> task.id <> ": " <> task.title)
+      io.println(task.description)
+      collect_request_answers(task, requests, [])
+    }
+  }
+}
+
+fn collect_request_answers(
+  task: types.Task,
+  requests: List(types.DecisionRequest),
+  acc: List(types.RecordedDecision),
+) -> Result(List(types.RecordedDecision), String) {
+  case requests {
+    [] -> Ok(list.reverse(acc))
+    [request, ..rest] -> {
+      use answer <- result.try(prompt_for_decision(task, request))
+      let recorded =
+        types.RecordedDecision(
+          key: request.key,
+          question: request.question,
+          answer: answer,
+          answered_at: system.timestamp(),
+        )
+      collect_request_answers(task, rest, [recorded, ..acc])
+    }
+  }
+}
+
+fn prompt_for_decision(
+  task: types.Task,
+  request: types.DecisionRequest,
+) -> Result(String, String) {
+  io.println("")
+  io.println("Task: " <> task.title)
+  io.println("Question: " <> request.question)
+  case string.trim(request.rationale) {
+    "" -> Nil
+    rationale -> io.println("Why this matters: " <> rationale)
+  }
+
+  case request.options {
+    [] ->
+      case request.allow_freeform {
+        True -> prompt_for_freeform_answer(request)
+        False ->
+          Error(
+            "Night Shift could not collect an answer for `"
+            <> request.key
+            <> "` because the planner returned no options and disallowed freeform input.",
+          )
+      }
+    options -> {
+      let labels =
+        options
+        |> list.map(fn(option) {
+          case request.recommended_option {
+            Some(recommended) if recommended == option.label ->
+              option.label <> " (recommended) - " <> option.description
+            _ -> option.label <> " - " <> option.description
+          }
+        })
+      let final_labels = case request.allow_freeform {
+        True -> list.append(labels, ["Enter a custom answer"])
+        False -> labels
+      }
+      let selected = select_from_labels("Choose an answer:", final_labels, 0)
+      case request.allow_freeform && selected == list.length(final_labels) - 1 {
+        True -> prompt_for_freeform_answer(request)
+        False ->
+          case list.drop(options, selected) {
+            [choice, ..] -> Ok(choice.label)
+            [] -> Error("The selected decision option was out of range.")
+          }
+      }
+    }
+  }
+}
+
+fn prompt_for_freeform_answer(
+  request: types.DecisionRequest,
+) -> Result(String, String) {
+  io.println("Answer:")
+  case string.trim(system.read_line()) {
+    "" -> Error("Night Shift needs a non-empty answer for `" <> request.key <> "`.")
+    answer -> Ok(answer)
+  }
+}
+
+fn merge_recorded_decisions(
+  existing: List(types.RecordedDecision),
+  new_decisions: List(types.RecordedDecision),
+) -> List(types.RecordedDecision) {
+  case new_decisions {
+    [] -> existing
+    [decision, ..rest] -> {
+      let filtered =
+        existing
+        |> list.filter(fn(current) { current.key != decision.key })
+      merge_recorded_decisions(list.append(filtered, [decision]), rest)
+    }
+  }
+}
+
+fn append_decision_recorded_events(
+  run: types.RunRecord,
+  decisions: List(types.RecordedDecision),
+) -> Result(types.RunRecord, String) {
+  case decisions {
+    [] -> Ok(run)
+    [decision, ..rest] -> {
+      use updated_run <- result.try(journal.append_event(
+        run,
+        types.RunEvent(
+          kind: "decision_recorded",
+          at: decision.answered_at,
+          message: decision.question <> " -> " <> decision.answer,
+          task_id: None,
+        ),
+      ))
+      append_decision_recorded_events(updated_run, rest)
+    }
+  }
+}
+
+fn planning_artifact_path(repo_root: String) -> String {
+  filepath.join(
+    project.planning_root(repo_root),
+    system.timestamp()
+      |> string.replace(each: ":", with: "-")
+      |> string.replace(each: "T", with: "_")
+      |> string.replace(each: "+", with: "_")
+      |> string.replace(each: "Z", with: "")
+      |> string.append("-")
+      |> string.append(system.unique_id()),
+  )
+}
+
+fn start_with_ui(
+  repo_root: String,
+  selector: types.RunSelector,
+  config: types.Config,
+) -> Nil {
+  case load_pending_run(repo_root, selector) {
+    Ok(run) ->
+      case ensure_clean_repo_for_start(repo_root) {
+        Ok(Nil) ->
+          case journal.activate_run(run) {
+            Ok(active_run) ->
+              case
+                dashboard.start_start_session(
+                  repo_root,
+                  active_run.run_id,
+                  active_run,
+                  config,
+                )
+              {
+                Ok(session) -> {
+                  io.println(render_dashboard_summary(session.url, active_run.run_id))
+                  system.wait_forever()
+                }
+                Error(message) -> io.println(message)
+              }
+            Error(message) -> io.println(message)
+          }
+        Error(message) -> io.println(message)
+      }
+    Error(message) -> io.println(message)
+  }
 }
 
 fn resume_with_ui(

@@ -9,7 +9,7 @@ import night_shift/system
 import simplifile
 
 pub fn run(ui_enabled: Bool) -> Result(String, String) {
-  let host_state_dir = system.state_directory()
+  let host_state_dir = stable_demo_state_root()
   let demo_root = filepath.join(host_state_dir, "night-shift-demo")
   let repo_root = filepath.join(demo_root, "repo")
   let remote_root = filepath.join(demo_root, "remote.git")
@@ -22,6 +22,7 @@ pub fn run(ui_enabled: Bool) -> Result(String, String) {
   let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
   let old_demo_command = system.get_env("NIGHT_SHIFT_DEMO_COMMAND")
   let old_state_home = system.get_env("XDG_STATE_HOME")
+  let old_repo_override = system.get_env("NIGHT_SHIFT_REPO_ROOT")
 
   use _ <- result.try(create_directory(host_state_dir))
   use _ <- result.try(reset_demo_root(host_state_dir, demo_root))
@@ -39,6 +40,7 @@ pub fn run(ui_enabled: Bool) -> Result(String, String) {
   system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
   system.set_env("PATH", bin_dir <> ":" <> old_path)
   system.set_env("XDG_STATE_HOME", demo_state_home)
+  system.set_env("NIGHT_SHIFT_REPO_ROOT", repo_root)
 
   let outcome = case ui_enabled {
     True -> run_ui_demo(repo_root, demo_root)
@@ -49,39 +51,41 @@ pub fn run(ui_enabled: Bool) -> Result(String, String) {
   restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
   restore_env("NIGHT_SHIFT_DEMO_COMMAND", old_demo_command)
   restore_env("XDG_STATE_HOME", old_state_home)
+  restore_env("NIGHT_SHIFT_REPO_ROOT", old_repo_override)
   outcome
 }
 
 pub fn demo_root() -> String {
-  filepath.join(system.state_directory(), "night-shift-demo")
+  filepath.join(stable_demo_state_root(), "night-shift-demo")
+}
+
+fn stable_demo_state_root() -> String {
+  filepath.join(system.home_directory(), ".local/state")
 }
 
 fn run_headless_demo(
   repo_root: String,
   demo_root: String,
 ) -> Result(String, String) {
-  use start_output <- result.try(run_cli_command(
+  use _plan_output <- result.try(run_cli_command(
+    ["plan", "--notes", "Implement the demo task with a proof file."],
+    repo_root,
+    filepath.join(demo_root, "headless-plan.log"),
+    "Headless demo failed while running `plan`.",
+  ))
+
+  use _start_output <- result.try(run_cli_command(
     ["start"],
     repo_root,
     filepath.join(demo_root, "headless-start.log"),
     "Headless demo failed while running `start`.",
   ))
-  use _ <- result.try(assert_contains(
-    start_output,
-    "finished with status completed",
-    "Headless demo start flow did not complete successfully.",
-  ))
 
-  use status_output <- result.try(run_cli_command(
+  use _status_output <- result.try(run_cli_command(
     ["status"],
     repo_root,
     filepath.join(demo_root, "headless-status.log"),
     "Headless demo failed while running `status`.",
-  ))
-  use _ <- result.try(assert_contains(
-    status_output,
-    " is completed",
-    "Headless demo status flow did not report a completed run.",
   ))
 
   use report_output <- result.try(run_cli_command(
@@ -97,13 +101,18 @@ fn run_headless_demo(
   ))
   use _ <- result.try(assert_contains(
     report_output,
+    "- Status: completed",
+    "Headless demo report did not show a completed run.",
+  ))
+  use _ <- result.try(assert_contains(
+    report_output,
     "Implement demo task",
     "Headless demo report did not include the fixture task entry.",
   ))
 
   Ok(
     "Demo succeeded.\n"
-    <> "Validated CLI flows: start, status, report\n"
+    <> "Validated CLI flows: plan, start, status, report\n"
     <> "Proof file: "
     <> filepath.join(repo_root, "IMPLEMENTED.md")
     <> "\n"
@@ -111,6 +120,8 @@ fn run_headless_demo(
     <> demo_root
     <> "\n"
     <> "Logs: "
+    <> filepath.join(demo_root, "headless-plan.log")
+    <> ", "
     <> filepath.join(demo_root, "headless-start.log")
     <> ", "
     <> filepath.join(demo_root, "headless-status.log")
@@ -123,6 +134,12 @@ fn run_ui_demo(repo_root: String, demo_root: String) -> Result(String, String) {
   let log_path = filepath.join(demo_root, "ui-start.log")
   let pid_path = filepath.join(demo_root, "ui-start.pid")
 
+  use _plan_output <- result.try(run_cli_command(
+    ["plan", "--notes", "Implement the demo task with a proof file."],
+    repo_root,
+    filepath.join(demo_root, "ui-plan.log"),
+    "UI demo failed while running `plan`.",
+  ))
   use _ <- result.try(start_ui_command(repo_root, demo_root, log_path, pid_path))
   use #(url, run_id) <- result.try(wait_for_ui_details(log_path, 40))
   use payload <- result.try(wait_for_completed_dashboard_payload(
@@ -161,7 +178,7 @@ fn run_ui_demo(repo_root: String, demo_root: String) -> Result(String, String) {
   }
   |> result.map(fn(_) {
     "Demo succeeded.\n"
-    <> "Validated UI flows: start --ui, dashboard payload, status\n"
+    <> "Validated UI flows: plan, start --ui, dashboard payload, status\n"
     <> "Dashboard: "
     <> url
     <> "\n"
@@ -175,6 +192,8 @@ fn run_ui_demo(repo_root: String, demo_root: String) -> Result(String, String) {
     <> demo_root
     <> "\n"
     <> "Logs: "
+    <> filepath.join(demo_root, "ui-plan.log")
+    <> ", "
     <> log_path
     <> ", "
     <> filepath.join(demo_root, "ui-status.log")

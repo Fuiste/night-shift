@@ -18,36 +18,21 @@ pub fn start(
   run: types.RunRecord,
   config: types.Config,
 ) -> Result(types.RunRecord, String) {
-  use planned_tasks <- result.try(provider.plan_tasks(
-    run.planning_agent,
-    run.repo_root,
-    run.brief_path,
-    run.run_path,
-  ))
-
-  let normalized_tasks = normalize_tasks(planned_tasks)
-  let planned_run = types.RunRecord(..run, tasks: normalized_tasks)
-  let planned_event =
-    types.RunEvent(
-      kind: "task_progress",
-      at: system.timestamp(),
-      message: "Planner produced "
-        <> int.to_string(list.length(normalized_tasks))
-        <> " tasks.",
-      task_id: None,
-    )
-
-  use persisted_run <- result.try(journal.append_event(
-    planned_run,
-    planned_event,
-  ))
   use #(prepared_run, proceed) <- result.try(prepare_run_for_execution(
-    persisted_run,
+    run,
   ))
   case proceed {
     True -> scheduler_loop(config, prepared_run)
     False -> Ok(prepared_run)
   }
+}
+
+pub fn plan(run: types.RunRecord) -> Result(types.RunRecord, String) {
+  plan_with_event(run, "run_planned", "Planner produced ")
+}
+
+pub fn replan(run: types.RunRecord) -> Result(types.RunRecord, String) {
+  plan_with_event(run, "run_replanned", "Replanner produced ")
 }
 
 pub fn resume(
@@ -120,6 +105,43 @@ pub fn review(
     True -> scheduler_loop(config, prepared_run)
     False -> Ok(prepared_run)
   }
+}
+
+fn plan_with_event(
+  run: types.RunRecord,
+  event_kind: String,
+  message_prefix: String,
+) -> Result(types.RunRecord, String) {
+  use planned_tasks <- result.try(provider.plan_tasks(
+    run.planning_agent,
+    run.repo_root,
+    run.brief_path,
+    run.run_path,
+    run.decisions,
+    completed_tasks(run.tasks),
+  ))
+
+  let normalized_tasks = normalize_tasks(planned_tasks)
+  let merged_tasks = merge_planned_tasks(run.tasks, normalized_tasks)
+  let status = planning_status(merged_tasks)
+  let updated_run = types.RunRecord(..run, tasks: merged_tasks, status: status)
+  let plan_event =
+    types.RunEvent(
+      kind: event_kind,
+      at: system.timestamp(),
+      message: message_prefix
+        <> int.to_string(list.length(normalized_tasks))
+        <> " tasks.",
+      task_id: None,
+    )
+
+  use rewritten_run <- result.try(journal.rewrite_run(updated_run))
+  use planned_run <- result.try(journal.append_event(rewritten_run, plan_event))
+  use signaled_run <- result.try(append_decision_request_events(
+    planned_run,
+    decision_requesting_tasks(merged_tasks),
+  ))
+  journal.mark_status(signaled_run, status, planning_status_message(merged_tasks))
 }
 
 fn prepare_run_for_execution(
@@ -630,10 +652,17 @@ fn normalize_tasks(tasks: List(types.Task)) -> List(types.Task) {
   tasks
   |> list.map(fn(task) {
     case task.dependencies {
-      [] -> types.Task(..task, state: types.Ready)
+      [] -> types.Task(..task, state: initial_task_state(task))
       _ -> types.Task(..task, state: types.Queued)
     }
   })
+}
+
+fn initial_task_state(task: types.Task) -> types.TaskState {
+  case task.kind {
+    types.ManualAttentionTask -> types.Ready
+    types.ImplementationTask -> types.Ready
+  }
 }
 
 fn refresh_ready_states(tasks: List(types.Task)) -> List(types.Task) {
@@ -700,6 +729,7 @@ fn merge_follow_up_tasks(
           dependencies: follow_up.dependencies,
           acceptance: follow_up.acceptance,
           demo_plan: follow_up.demo_plan,
+          decision_requests: follow_up.decision_requests,
           kind: follow_up.kind,
           execution_mode: follow_up.execution_mode,
           state: types.Queued,
@@ -714,6 +744,78 @@ fn merge_follow_up_tasks(
   })
   |> list.reverse
   |> refresh_ready_states
+}
+
+fn merge_planned_tasks(
+  existing_tasks: List(types.Task),
+  planned_tasks: List(types.Task),
+) -> List(types.Task) {
+  let preserved_completed = completed_tasks(existing_tasks)
+  let completed_ids = preserved_completed |> list.map(fn(task) { task.id })
+  let remaining_planned =
+    planned_tasks
+    |> list.filter(fn(task) { !list.contains(completed_ids, task.id) })
+
+  list.append(preserved_completed, remaining_planned)
+  |> refresh_ready_states
+}
+
+fn completed_tasks(tasks: List(types.Task)) -> List(types.Task) {
+  tasks
+  |> list.filter(fn(task) { task.state == types.Completed })
+}
+
+fn planning_status(tasks: List(types.Task)) -> types.RunStatus {
+  case list.any(tasks, fn(task) { task.kind == types.ManualAttentionTask }) {
+    True -> types.RunBlocked
+    False -> types.RunPending
+  }
+}
+
+fn planning_status_message(tasks: List(types.Task)) -> String {
+  case planning_status(tasks) {
+    types.RunBlocked ->
+      "Night Shift is awaiting manual review for "
+      <> pluralize(list.length(decision_requesting_tasks(tasks)), "task")
+      <> "."
+    _ ->
+      "Night Shift planned "
+      <> pluralize(list.length(tasks), "task")
+      <> " and is ready to start."
+  }
+}
+
+fn decision_requesting_tasks(tasks: List(types.Task)) -> List(types.Task) {
+  tasks
+  |> list.filter(fn(task) { task.kind == types.ManualAttentionTask })
+}
+
+fn append_decision_request_events(
+  run: types.RunRecord,
+  tasks: List(types.Task),
+) -> Result(types.RunRecord, String) {
+  case tasks {
+    [] -> Ok(run)
+    [task, ..rest] -> {
+      let message = case task.decision_requests {
+        [] -> task.description
+        requests ->
+          requests
+          |> list.map(fn(request) { request.question })
+          |> string.join(with: " | ")
+      }
+      use updated_run <- result.try(journal.append_event(
+        run,
+        types.RunEvent(
+          kind: "decision_requested",
+          at: system.timestamp(),
+          message: message,
+          task_id: Some(task.id),
+        ),
+      ))
+      append_decision_request_events(updated_run, rest)
+    }
+  }
 }
 
 fn task_base_ref(
@@ -843,6 +945,7 @@ fn review_task_from_pr(pr: github.ReviewWorkItem) -> types.Task {
       "Leave the PR in a green or clearly blocked state.",
     ],
     demo_plan: ["Summarize the fixes and checks in the PR body."],
+    decision_requests: [],
     kind: types.ImplementationTask,
     execution_mode: types.Exclusive,
     state: types.Ready,

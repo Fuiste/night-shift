@@ -1,4 +1,3 @@
-import gleam/int
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import night_shift/types
@@ -10,10 +9,11 @@ pub fn usage() -> String {
   <> "  --demo [--ui]\n"
   <> "  init [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>] [--yes] [--generate-setup]\n"
   <> "    Prompts interactively for provider, model, and initial worktree setup when those answers are not supplied.\n"
-  <> "  plan --notes <path> [--doc <path>] [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>]\n"
-  <> "  start [--brief <path>] [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>] [--environment <name>] [--max-workers <n>] [--ui]\n"
+  <> "  plan --notes <file-or-inline-text> [--doc <path>] [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>]\n"
+  <> "  start [--run <id>|latest] [--ui]\n"
   <> "  status [--run <id>|latest]\n"
   <> "  report [--run <id>|latest]\n"
+  <> "  resolve [--run <id>|latest]\n"
   <> "  resume [--run <id>|latest] [--ui]\n"
   <> "  review [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>] [--environment <name>]\n"
 }
@@ -30,6 +30,7 @@ pub fn parse(args: List(String)) -> Result(types.Command, String) {
         ["start", ..rest] -> parse_start(rest)
         ["status", ..rest] -> parse_run_lookup(rest, types.Status)
         ["report", ..rest] -> parse_run_lookup(rest, types.Report)
+        ["resolve", ..rest] -> parse_run_lookup(rest, types.Resolve)
         ["resume", ..rest] -> parse_resume(rest)
         ["review", ..rest] -> parse_review(rest)
         [command, ..] -> Error("Unknown command: " <> command)
@@ -59,7 +60,7 @@ fn parse_plan_flags(
     [] ->
       case notes_path {
         Ok(path) -> Ok(types.Plan(path, doc_path, agent_overrides))
-        Error(Nil) -> Error("The plan command requires --notes <path>.")
+        Error(Nil) -> Error("The plan command requires --notes <file-or-inline-text>.")
       }
 
     ["--notes", path, ..rest] ->
@@ -174,120 +175,22 @@ fn parse_init_flags(
 }
 
 fn parse_start(args: List(String)) -> Result(types.Command, String) {
-  parse_start_flags(
-    args,
-    None,
-    types.empty_agent_overrides(),
-    None,
-    Error(Nil),
-    False,
-  )
+  parse_start_flags(args, types.LatestRun, False)
 }
 
 fn parse_start_flags(
   args: List(String),
-  brief_path: Option(String),
-  agent_overrides: types.AgentOverrides,
-  environment_name: Option(String),
-  max_workers: Result(Int, Nil),
+  run: types.RunSelector,
   ui_enabled: Bool,
 ) -> Result(types.Command, String) {
   case args {
-    [] ->
-      Ok(types.Start(
-        brief_path,
-        agent_overrides,
-        environment_name,
-        max_workers,
-        ui_enabled,
-      ))
-
-    ["--brief", path, ..rest] ->
-      parse_start_flags(
-        rest,
-        Some(path),
-        agent_overrides,
-        environment_name,
-        max_workers,
-        ui_enabled,
-      )
-
-    ["--profile", profile_name, ..rest] ->
-      parse_start_flags(
-        rest,
-        brief_path,
-        types.AgentOverrides(..agent_overrides, profile: Some(profile_name)),
-        environment_name,
-        max_workers,
-        ui_enabled,
-      )
-
-    ["--provider", raw_provider, ..rest] -> {
-      use provider <- result.try(types.provider_from_string(raw_provider))
-      parse_start_flags(
-        rest,
-        brief_path,
-        types.AgentOverrides(..agent_overrides, provider: Some(provider)),
-        environment_name,
-        max_workers,
-        ui_enabled,
-      )
-    }
-
-    ["--model", model, ..rest] ->
-      parse_start_flags(
-        rest,
-        brief_path,
-        types.AgentOverrides(..agent_overrides, model: Some(model)),
-        environment_name,
-        max_workers,
-        ui_enabled,
-      )
-
-    ["--reasoning", raw_reasoning, ..rest] -> {
-      use reasoning <- result.try(types.reasoning_from_string(raw_reasoning))
-      parse_start_flags(
-        rest,
-        brief_path,
-        types.AgentOverrides(..agent_overrides, reasoning: Some(reasoning)),
-        environment_name,
-        max_workers,
-        ui_enabled,
-      )
-    }
-
-    ["--environment", name, ..rest] ->
-      parse_start_flags(
-        rest,
-        brief_path,
-        agent_overrides,
-        Some(name),
-        max_workers,
-        ui_enabled,
-      )
-
-    ["--max-workers", raw_count, ..rest] -> {
-      use parsed_count <- result.try(parse_positive_int(raw_count))
-      parse_start_flags(
-        rest,
-        brief_path,
-        agent_overrides,
-        environment_name,
-        Ok(parsed_count),
-        ui_enabled,
-      )
-    }
-
+    [] -> Ok(types.Start(run, ui_enabled))
+    ["--run", "latest", ..rest] ->
+      parse_start_flags(rest, types.LatestRun, ui_enabled)
+    ["--run", run_id, ..rest] ->
+      parse_start_flags(rest, types.RunId(run_id), ui_enabled)
     ["--ui", ..rest] ->
-      parse_start_flags(
-        rest,
-        brief_path,
-        agent_overrides,
-        environment_name,
-        max_workers,
-        True,
-      )
-
+      parse_start_flags(rest, run, True)
     [flag, ..] -> Error("Unsupported start flag: " <> flag)
   }
 }
@@ -366,13 +269,5 @@ fn parse_run_lookup(
     ["--run", "latest"] -> Ok(constructor(types.LatestRun))
     ["--run", run_id] -> Ok(constructor(types.RunId(run_id)))
     [flag, ..] -> Error("Unsupported flag: " <> flag)
-  }
-}
-
-fn parse_positive_int(raw_value: String) -> Result(Int, String) {
-  case int.parse(raw_value) {
-    Ok(value) if value > 0 -> Ok(value)
-    Ok(_) -> Error("--max-workers must be a positive integer.")
-    Error(Nil) -> Error("Expected integer but received: " <> raw_value)
   }
 }
