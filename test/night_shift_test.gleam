@@ -562,6 +562,60 @@ pub fn plan_command_non_tty_streaming_stays_plain_test() {
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
 
+pub fn plan_command_streaming_handles_utf8_tool_output_truncation_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-utf8-stream-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let notes_path = filepath.join(base_dir, "notes.md")
+  let fake_codex = filepath.join(bin_dir, "codex")
+  let state_home = filepath.join(base_dir, "state")
+  let old_path = system.get_env("PATH")
+  let old_state_home = system.get_env("XDG_STATE_HOME")
+  let old_stream_ui = system.get_env("NIGHT_SHIFT_STREAM_UI")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) = initialize_project_home(repo_root)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = write_fake_streaming_utf8_codex(fake_codex)
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_codex),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+  let assert Ok(_) =
+    simplifile.write("# Notes\n- add a hello script\n", to: notes_path)
+
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("XDG_STATE_HOME", state_home)
+  system.set_env("NIGHT_SHIFT_STREAM_UI", "auto")
+
+  let result =
+    run_local_cli_command(
+      ["plan", "--notes", notes_path, "--provider", "codex"],
+      repo_root,
+      filepath.join(base_dir, "plan.log"),
+    )
+
+  system.set_env("PATH", old_path)
+  restore_env("XDG_STATE_HOME", old_state_home)
+  restore_env("NIGHT_SHIFT_STREAM_UI", old_stream_ui)
+
+  let assert Ok(output) = result
+  assert string.contains(does: output, contain: "Planned run ")
+  assert !string.contains(does: output, contain: "runtime error")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
 pub fn plan_command_tty_streaming_restores_alt_screen_test() {
   let unique = system.unique_id()
   let base_dir =
@@ -1042,6 +1096,175 @@ pub fn plan_command_creates_and_updates_default_brief_test() {
   )
   assert string.contains(does: document, contain: "Alpha task")
   assert string.contains(does: document, contain: "Beta task")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn blocked_plan_status_and_report_show_decisions_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-blocked-status-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let notes_path = filepath.join(base_dir, "notes.md")
+  let fake_provider = filepath.join(bin_dir, "fake-provider")
+  let state_home = filepath.join(base_dir, "state")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
+  let old_state_home = system.get_env("XDG_STATE_HOME")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) = initialize_project_home(repo_root)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = write_resolve_loop_fake_provider(fake_provider)
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_provider),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+  let assert Ok(_) =
+    simplifile.write("Add a first-pass docs wiki.\n", to: notes_path)
+
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
+  system.set_env("XDG_STATE_HOME", state_home)
+
+  let plan_result =
+    run_local_cli_command(
+      ["plan", "--notes", notes_path],
+      repo_root,
+      filepath.join(base_dir, "plan.log"),
+    )
+  let status_result =
+    run_local_cli_command(
+      ["status"],
+      repo_root,
+      filepath.join(base_dir, "status.log"),
+    )
+  let assert Ok(#(run, _events)) = journal.load(repo_root, types.LatestRun)
+  let assert Ok(report_contents) = simplifile.read(run.report_path)
+
+  restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
+  restore_env("XDG_STATE_HOME", old_state_home)
+
+  let assert Ok(plan_output) = plan_result
+  let assert Ok(status_output) = status_result
+
+  assert string.contains(does: plan_output, contain: "Planned run ")
+  assert string.contains(does: status_output, contain: "is blocked")
+  assert string.contains(does: status_output, contain: "Blocked tasks: 1")
+  assert string.contains(does: status_output, contain: "Outstanding decisions: 1")
+  assert string.contains(
+    does: status_output,
+    contain: "Ready implementation tasks: 0",
+  )
+  assert string.contains(does: status_output, contain: "Next action: night-shift resolve")
+  assert string.contains(
+    does: report_contents,
+    contain: "- Manual-attention tasks: 1",
+  )
+  assert string.contains(
+    does: report_contents,
+    contain: "- Outstanding decisions: 1",
+  )
+  assert string.contains(
+    does: report_contents,
+    contain: "Where should the new markdown wiki live?",
+  )
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn resolve_command_recovers_and_loops_until_pending_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-resolve-loop-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let notes_path = filepath.join(base_dir, "notes.md")
+  let fake_provider = filepath.join(bin_dir, "fake-provider")
+  let state_home = filepath.join(base_dir, "state")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
+  let old_state_home = system.get_env("XDG_STATE_HOME")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) = initialize_project_home(repo_root)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = write_resolve_loop_fake_provider(fake_provider)
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_provider),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+  let assert Ok(_) =
+    simplifile.write("Add a first-pass docs wiki.\n", to: notes_path)
+
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
+  system.set_env("XDG_STATE_HOME", state_home)
+
+  let _ =
+    run_local_cli_command(
+      ["plan", "--notes", notes_path],
+      repo_root,
+      filepath.join(base_dir, "plan.log"),
+    )
+  let resolve_result =
+    run_local_cli_tty_command_with_input(
+      ["resolve"],
+      "\n\n",
+      repo_root,
+      filepath.join(base_dir, "resolve.log"),
+    )
+  let status_result =
+    run_local_cli_command(
+      ["status"],
+      repo_root,
+      filepath.join(base_dir, "status.log"),
+    )
+  let assert Ok(#(run, _events)) = journal.load(repo_root, types.LatestRun)
+  let assert Ok(events_contents) = simplifile.read(run.events_path)
+
+  restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
+  restore_env("XDG_STATE_HOME", old_state_home)
+
+  let assert Ok(resolve_output) = resolve_result
+  let assert Ok(status_output) = status_result
+
+  assert run.status == types.RunPending
+  assert string.contains(
+    does: resolve_output,
+    contain: "finished with status pending",
+  )
+  assert string.contains(does: resolve_output, contain: "Question 1/1")
+  assert string.contains(
+    does: status_output,
+    contain: "Outstanding decisions: 0",
+  )
+  assert string.contains(does: status_output, contain: "Ready tasks: 1")
+  assert string.contains(
+    does: events_contents,
+    contain: "\"kind\":\"decision_contract_warning\"",
+  )
+  assert string.contains(
+    does: events_contents,
+    contain: "Where should the new markdown wiki live? -> docs/wiki",
+  )
+  assert string.contains(
+    does: events_contents,
+    contain: "Which README sections should stay in README vs move or duplicate to the wiki first-pass? -> keep-core",
+  )
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
@@ -2165,6 +2388,42 @@ fn run_local_cli_command(
   }
 }
 
+fn run_local_cli_tty_command_with_input(
+  args: List(String),
+  input: String,
+  cwd: String,
+  log_path: String,
+) -> Result(String, String) {
+  let command =
+    "cd "
+    <> shell.quote(cwd)
+    <> " && "
+    <> "NIGHT_SHIFT_REPO_ROOT="
+    <> shell.quote(cwd)
+    <> " "
+    <> local_demo_command()
+    <> " "
+    <> {
+      args
+      |> list.map(shell.quote)
+      |> string.join(with: " ")
+    }
+  let result =
+    shell.run(
+      "printf %s "
+        <> shell.quote(input)
+        <> " | "
+        <> script_capture_command(command),
+      cwd,
+      log_path,
+    )
+
+  case shell.succeeded(result) {
+    True -> Ok(result.output)
+    False -> Error("TTY CLI command failed. See " <> log_path <> ".")
+  }
+}
+
 fn agent_for(provider_name: types.Provider) -> types.ResolvedAgentConfig {
   types.resolved_agent_from_provider(provider_name)
 }
@@ -2375,6 +2634,34 @@ fn write_manual_attention_fake_provider(
   )
 }
 
+fn write_resolve_loop_fake_provider(
+  path: String,
+) -> Result(Nil, simplifile.FileError) {
+  simplifile.write(
+    "#!/bin/sh\n"
+      <> "MODE=$1\n"
+      <> "PROMPT_FILE=$2\n"
+      <> "if [ \"$MODE\" = \"plan-doc\" ]; then\n"
+      <> "  printf 'planning-doc\\nNIGHT_SHIFT_RESULT_START\\n# Night Shift Brief\\n## Objective\\nAdd a first-pass docs wiki.\\n## Scope\\n- Add docs.\\n## Constraints\\n- Keep the work docs-only.\\n## Deliverables\\n- New docs pages\\n## Acceptance Criteria\\n- Docs exist\\n## Risks and Open Questions\\n- None.\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "  exit 0\n"
+      <> "fi\n"
+      <> "if [ \"$MODE\" = \"plan\" ]; then\n"
+      <> "  if grep -q 'readme-distribution:' \"$PROMPT_FILE\"; then\n"
+      <> "    printf 'planning\\nNIGHT_SHIFT_RESULT_START\\n{\"tasks\":[{\"id\":\"create-wiki-index-page\",\"title\":\"Create wiki entry point page\",\"description\":\"Create the docs entry page after decisions are settled.\",\"dependencies\":[],\"acceptance\":[\"Create the wiki entry page.\"],\"demo_plan\":[\"Show the new page.\"],\"decision_requests\":[],\"task_kind\":\"implementation\",\"execution_mode\":\"serial\"}]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "    exit 0\n"
+      <> "  fi\n"
+      <> "  if grep -q 'wiki-location:' \"$PROMPT_FILE\"; then\n"
+      <> "    printf 'planning\\nNIGHT_SHIFT_RESULT_START\\n{\"tasks\":[{\"id\":\"decide-docs-scope-and-links\",\"title\":\"Resolve wiki layout and reference decisions\",\"description\":\"Set repository documentation placement and README distribution before writing docs.\",\"dependencies\":[],\"acceptance\":[\"README and wiki scope are chosen.\"],\"demo_plan\":[\"Record the chosen README/wiki split.\"],\"decision_requests\":[{\"key\":\"readme-distribution\",\"question\":\"Which README sections should stay in README vs move or duplicate to the wiki first-pass?\",\"rationale\":\"Night Shift needs one documented content split before it can author the entry pages.\",\"options\":[{\"label\":\"keep-core\",\"description\":\"Keep README short, discovery-focused, and link into the wiki.\"},{\"label\":\"keep-full\",\"description\":\"Keep most reference material in README for now.\"}],\"recommended_option\":\"keep-core\",\"allow_freeform\":false}],\"task_kind\":\"manual_attention\",\"execution_mode\":\"exclusive\"}]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "    exit 0\n"
+      <> "  fi\n"
+      <> "  printf 'planning\\nNIGHT_SHIFT_RESULT_START\\n{\"tasks\":[{\"id\":\"decide-docs-scope-and-links\",\"title\":\"Resolve wiki layout and reference decisions\",\"description\":\"Set repository documentation placement before writing docs.\",\"dependencies\":[],\"acceptance\":[\"Primary docs root path is chosen.\"],\"demo_plan\":[\"Record the docs root path.\"],\"decision_requests\":[{\"key\":\"wiki-location\",\"question\":\"Where should the new markdown wiki live?\",\"rationale\":\"All internal links depend on the chosen docs root.\",\"options\":[],\"recommended_option\":\"docs/wiki\",\"allow_freeform\":false}],\"task_kind\":\"manual_attention\",\"execution_mode\":\"exclusive\"}]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "  exit 0\n"
+      <> "fi\n"
+      <> "printf 'execution\\nNIGHT_SHIFT_RESULT_START\\n{\"status\":\"completed\",\"summary\":\"noop\",\"files_touched\":[],\"demo_evidence\":[],\"pr\":{\"title\":\"noop\",\"summary\":\"noop\",\"demo\":[],\"risks\":[]},\"follow_up_tasks\":[]}\\nNIGHT_SHIFT_RESULT_END\\n'\n",
+    to: path,
+  )
+}
+
 fn write_empty_worktree_setup_codex(
   path: String,
 ) -> Result(Nil, simplifile.FileError) {
@@ -2458,7 +2745,7 @@ fn write_fake_streaming_codex(path: String) -> Result(Nil, simplifile.FileError)
       <> "      ;;\n"
       <> "    -)\n"
       <> "      INPUT=$(cat)\n"
-      <> "      if printf '%s' \"$INPUT\" | grep -q 'Update the repository''s cumulative Night Shift brief'; then\n"
+      <> "      if printf '%s' \"$INPUT\" | grep -q 'cumulative Night Shift brief'; then\n"
       <> "        printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"brief\"}'\n"
       <> "        printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"NIGHT_SHIFT_RESULT_START\\n# Night Shift Brief\\n## Objective\\nPolish the harness streaming UI.\\n## Scope\\n- Replace raw line dumps with formatted stream output.\\n## Constraints\\n- Keep raw artifacts for debugging.\\n## Deliverables\\n- Improved stream presentation\\n## Acceptance Criteria\\n- Prompt is hidden in the live stream.\\n## Risks and Open Questions\\n- None.\\nNIGHT_SHIFT_RESULT_END\"}}'\n"
       <> "        exit 0\n"
@@ -2500,6 +2787,60 @@ fn write_fake_streaming_codex(path: String) -> Result(Nil, simplifile.FileError)
       <> "exit 8\n",
     to: path,
   )
+}
+
+fn write_fake_streaming_utf8_codex(path: String) -> Result(Nil, simplifile.FileError) {
+  let long_output = repeat_text("a", 156) <> "\\u2014tail\\n"
+
+  simplifile.write(
+    "#!/bin/sh\n"
+      <> "if [ \"$1\" != \"exec\" ]; then\n"
+      <> "  printf 'unexpected codex subcommand: %s\\n' \"$1\" >&2\n"
+      <> "  exit 1\n"
+      <> "fi\n"
+      <> "shift\n"
+      <> "while [ $# -gt 0 ]; do\n"
+      <> "  case \"$1\" in\n"
+      <> "    --skip-git-repo-check|--dangerously-bypass-approvals-and-sandbox|--json)\n"
+      <> "      shift\n"
+      <> "      ;;\n"
+      <> "    --color|--sandbox|-C|-m|-c)\n"
+      <> "      shift 2\n"
+      <> "      ;;\n"
+      <> "    -)\n"
+      <> "      INPUT=$(cat)\n"
+      <> "      if printf '%s' \"$INPUT\" | grep -q 'Break the supplied brief into a task DAG.'; then\n"
+      <> "        printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"planner\"}'\n"
+      <> "        printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"NIGHT_SHIFT_RESULT_START\\n{\\\"tasks\\\":[{\\\"id\\\":\\\"alpha\\\",\\\"title\\\":\\\"Alpha task\\\",\\\"description\\\":\\\"Create alpha proof\\\",\\\"dependencies\\\":[],\\\"acceptance\\\":[\\\"Create ALPHA.txt\\\"],\\\"demo_plan\\\":[\\\"Show ALPHA.txt\\\"],\\\"execution_mode\\\":\\\"serial\\\"}]}\\nNIGHT_SHIFT_RESULT_END\"}}'\n"
+      <> "        exit 0\n"
+      <> "      else\n"
+      <> "        printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"brief\"}'\n"
+      <> "        printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"Checking the docs surface before returning the brief.\"}}'\n"
+      <> "        printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"command_execution\",\"command\":\"sed -n '\\''320,420p'\\'' README.md\",\"aggregated_output\":\""
+      <> long_output
+      <> "\",\"exit_code\":0,\"status\":\"completed\"}}'\n"
+      <> "        printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_2\",\"type\":\"agent_message\",\"text\":\"NIGHT_SHIFT_RESULT_START\\n# Night Shift Brief\\n## Objective\\nAdd the hello script.\\n## Scope\\n- Add a hello script.\\n## Constraints\\n- Keep scope tight.\\n## Deliverables\\n- hello script\\n## Acceptance Criteria\\n- script exists\\n## Risks and Open Questions\\n- None.\\nNIGHT_SHIFT_RESULT_END\"}}'\n"
+      <> "        exit 0\n"
+      <> "      fi\n"
+      <> "      printf 'unexpected prompt\\n' >&2\n"
+      <> "      exit 9\n"
+      <> "      ;;\n"
+      <> "    *)\n"
+      <> "      shift\n"
+      <> "      ;;\n"
+      <> "  esac\n"
+      <> "done\n"
+      <> "printf 'missing stdin prompt sentinel\\n' >&2\n"
+      <> "exit 8\n",
+    to: path,
+  )
+}
+
+fn repeat_text(value: String, count: Int) -> String {
+  case count <= 0 {
+    True -> ""
+    False -> value <> repeat_text(value, count - 1)
+  }
 }
 
 fn write_worktree_execution_codex(

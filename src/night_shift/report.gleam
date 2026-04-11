@@ -22,10 +22,10 @@ pub fn render(run: types.RunRecord, events: List(types.RunEvent)) -> String {
     "- Brief: " <> run.brief_path,
     "",
     "## Summary",
-    render_summary(run.tasks),
+    render_summary(run.decisions, run.tasks),
     "",
     "## Tasks",
-    render_tasks(run.tasks),
+    render_tasks(run.decisions, run.tasks),
     "",
     "## Timeline",
     render_events(events),
@@ -33,7 +33,10 @@ pub fn render(run: types.RunRecord, events: List(types.RunEvent)) -> String {
   |> string.join(with: "\n")
 }
 
-fn render_summary(tasks: List(types.Task)) -> String {
+fn render_summary(
+  decisions: List(types.RecordedDecision),
+  tasks: List(types.Task),
+) -> String {
   let completed_count =
     tasks
     |> list.filter(fn(task) { task.state == types.Completed })
@@ -44,7 +47,7 @@ fn render_summary(tasks: List(types.Task)) -> String {
     |> list.length
   let manual_attention_count =
     tasks
-    |> list.filter(fn(task) { task.state == types.ManualAttention })
+    |> list.filter(fn(task) { types.task_requires_manual_attention(decisions, task) })
     |> list.length
   let failed_count =
     tasks
@@ -53,38 +56,53 @@ fn render_summary(tasks: List(types.Task)) -> String {
   let queued_count =
     tasks
     |> list.filter(fn(task) {
-      task.state == types.Queued || task.state == types.Ready
+      task.state == types.Queued
+      || {
+        task.state == types.Ready && task.kind == types.ImplementationTask
+      }
     })
     |> list.length
+  let outstanding_decisions =
+    tasks
+    |> list.filter(fn(task) { types.task_requires_manual_attention(decisions, task) })
+    |> list.map(fn(task) { list.length(types.unresolved_decision_requests(decisions, task)) })
+    |> list.fold(0, fn(total, count) { total + count })
 
   [
     "- Completed tasks: " <> int.to_string(completed_count),
     "- Opened PRs: " <> int.to_string(pr_count),
     "- Manual-attention tasks: " <> int.to_string(manual_attention_count),
+    "- Outstanding decisions: " <> int.to_string(outstanding_decisions),
     "- Failed tasks: " <> int.to_string(failed_count),
     "- Queued tasks: " <> int.to_string(queued_count),
   ]
   |> string.join(with: "\n")
 }
 
-fn render_tasks(tasks: List(types.Task)) -> String {
+fn render_tasks(
+  decisions: List(types.RecordedDecision),
+  tasks: List(types.Task),
+) -> String {
   case tasks {
     [] -> "- No tasks have been planned yet."
     _ ->
       tasks
-      |> list.map(render_task)
+      |> list.map(render_task(decisions, _))
       |> string.join(with: "\n")
   }
 }
 
-fn render_task(task: types.Task) -> String {
+fn render_task(
+  decisions: List(types.RecordedDecision),
+  task: types.Task,
+) -> String {
   "- ["
-  <> types.task_state_to_string(task.state)
+  <> types.task_state_to_string(render_task_state(decisions, task))
   <> "] "
   <> task.id
   <> ": "
   <> task.title
-  <> render_task_details(task)
+  <> render_task_details(decisions, task)
 }
 
 fn render_events(events: List(types.RunEvent)) -> String {
@@ -113,10 +131,24 @@ fn render_event(event: types.RunEvent) -> String {
   <> event.message
 }
 
-fn render_task_details(task: types.Task) -> String {
+fn render_task_details(
+  decisions: List(types.RecordedDecision),
+  task: types.Task,
+) -> String {
   let pr_fragment = case task.pr_number {
     "" -> ""
     pr_number -> " (PR #" <> pr_number <> ")"
+  }
+
+  let decision_fragment = case types.task_requires_manual_attention(decisions, task) {
+    True ->
+      "\n  Outstanding decisions:\n"
+      <> {
+        types.unresolved_decision_requests(decisions, task)
+        |> list.map(fn(request) { "  - " <> request.question })
+        |> string.join(with: "\n")
+      }
+    False -> ""
   }
 
   let summary_fragment = case string.trim(task.summary) {
@@ -124,7 +156,17 @@ fn render_task_details(task: types.Task) -> String {
     summary -> "\n  " <> string.replace(in: summary, each: "\n", with: "\n  ")
   }
 
-  pr_fragment <> summary_fragment
+  pr_fragment <> decision_fragment <> summary_fragment
+}
+
+fn render_task_state(
+  decisions: List(types.RecordedDecision),
+  task: types.Task,
+) -> types.TaskState {
+  case types.task_requires_manual_attention(decisions, task) {
+    True -> types.ManualAttention
+    False -> task.state
+  }
 }
 
 fn render_environment_label(environment_name: String) -> String {

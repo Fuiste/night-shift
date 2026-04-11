@@ -563,6 +563,8 @@ fn planner_prompt(
   <> "Each task must include: id, title, description, dependencies, acceptance, demo_plan, decision_requests, task_kind, execution_mode.\n"
   <> "Use task_kind = manual_attention only when the next step is a human decision or missing product direction. Manual-attention tasks will pause execution before any worktree bootstrap or coding work begins.\n"
   <> "For manual-attention tasks, include decision_requests with stable keys and enough structure for an interactive resolver: key, question, rationale, options, recommended_option, allow_freeform.\n"
+  <> "Every manual-attention request must be answerable at runtime: either provide one or more options, or set allow_freeform = true.\n"
+  <> "recommended_option is optional guidance and does not require an options list.\n"
   <> "For implementation tasks, set decision_requests to an empty list.\n"
   <> "Use task_kind = implementation for normal coding or research work.\n"
   <> "Use execution_mode = parallel for independent low-conflict work, serial for normal implementation work that may share context, and exclusive only when the task must run alone.\n"

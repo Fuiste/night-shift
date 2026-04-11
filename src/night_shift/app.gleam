@@ -677,14 +677,7 @@ fn status(repo_root: String, run: types.RunSelector) -> String {
       <> "Notes: "
       <> render_notes_source(saved_run.notes_source)
       <> "\n"
-      <> "Outstanding decisions: "
-      <> int.to_string(outstanding_decision_count(saved_run))
-      <> "\n"
-      <> "Ready tasks: "
-      <> int.to_string(ready_task_count(saved_run.tasks))
-      <> "\n"
-      <> "Queued tasks: "
-      <> int.to_string(queued_task_count(saved_run.tasks))
+      <> status_summary(saved_run)
       <> "\n"
       <> "Events: "
       <> int.to_string(list.length(events))
@@ -705,29 +698,7 @@ fn resolve(
       case can_prompt_interactively() {
         False ->
           "night-shift resolve requires an interactive terminal so it can capture decision answers."
-        True ->
-          case collect_recorded_decisions(run, unresolved_manual_attention_tasks(run)) {
-            Ok(new_decisions) -> {
-              let updated_run =
-                types.RunRecord(
-                  ..run,
-                  decisions: merge_recorded_decisions(run.decisions, new_decisions),
-                )
-              case journal.rewrite_run(updated_run) {
-                Ok(rewritten_run) ->
-                  case append_decision_recorded_events(rewritten_run, new_decisions) {
-                    Ok(signaled_run) ->
-                      case orchestrator.replan(signaled_run) {
-                        Ok(replanned_run) -> render_run_summary(replanned_run)
-                        Error(message) -> message
-                      }
-                    Error(message) -> message
-                  }
-                Error(message) -> message
-              }
-            }
-            Error(message) -> message
-          }
+        True -> resolve_loop(run)
       }
     Error(message) -> message
   }
@@ -1016,9 +987,37 @@ fn render_notes_source(notes_source: Option(types.NotesSource)) -> String {
   }
 }
 
+fn status_summary(run: types.RunRecord) -> String {
+  case run.status {
+    types.RunBlocked ->
+      "Blocked tasks: "
+      <> int.to_string(blocked_task_count(run.tasks))
+      <> "\n"
+      <> "Outstanding decisions: "
+      <> int.to_string(outstanding_decision_count(run))
+      <> "\n"
+      <> "Ready implementation tasks: "
+      <> int.to_string(ready_implementation_task_count(run.tasks))
+      <> "\n"
+      <> "Queued tasks: "
+      <> int.to_string(queued_task_count(run.tasks))
+      <> "\n"
+      <> "Next action: night-shift resolve"
+    _ ->
+      "Outstanding decisions: "
+      <> int.to_string(outstanding_decision_count(run))
+      <> "\n"
+      <> "Ready tasks: "
+      <> int.to_string(ready_task_count(run.tasks))
+      <> "\n"
+      <> "Queued tasks: "
+      <> int.to_string(queued_task_count(run.tasks))
+  }
+}
+
 fn outstanding_decision_count(run: types.RunRecord) -> Int {
   unresolved_manual_attention_tasks(run)
-  |> list.map(unresolved_decision_requests(run.decisions, _))
+  |> list.map(types.unresolved_decision_requests(run.decisions, _))
   |> list.flatten
   |> list.length
 }
@@ -1026,6 +1025,22 @@ fn outstanding_decision_count(run: types.RunRecord) -> Int {
 fn ready_task_count(tasks: List(types.Task)) -> Int {
   tasks
   |> list.filter(fn(task) { task.state == types.Ready })
+  |> list.length
+}
+
+fn ready_implementation_task_count(tasks: List(types.Task)) -> Int {
+  tasks
+  |> list.filter(fn(task) {
+    task.state == types.Ready && task.kind == types.ImplementationTask
+  })
+  |> list.length
+}
+
+fn blocked_task_count(tasks: List(types.Task)) -> Int {
+  tasks
+  |> list.filter(fn(task) {
+    task.state == types.Blocked || task.state == types.ManualAttention
+  })
   |> list.length
 }
 
@@ -1037,105 +1052,43 @@ fn queued_task_count(tasks: List(types.Task)) -> Int {
 
 fn unresolved_manual_attention_tasks(run: types.RunRecord) -> List(types.Task) {
   run.tasks
-  |> list.filter(fn(task) {
-    task.kind == types.ManualAttentionTask
-    && task.state != types.Completed
-    && has_unresolved_requests(run.decisions, task)
-  })
-}
-
-fn unresolved_decision_requests(
-  decisions: List(types.RecordedDecision),
-  task: types.Task,
-) -> List(types.DecisionRequest) {
-  case task.decision_requests {
-    [] ->
-      [
-        types.DecisionRequest(
-          key: "task:" <> task.id,
-          question: task.title,
-          rationale: task.description,
-          options: [],
-          recommended_option: None,
-          allow_freeform: True,
-        ),
-      ]
-    requests ->
-      requests
-      |> list.filter(fn(request) { !decision_recorded(decisions, request.key) })
-  }
-}
-
-fn has_unresolved_requests(
-  decisions: List(types.RecordedDecision),
-  task: types.Task,
-) -> Bool {
-  unresolved_decision_requests(decisions, task) != []
-}
-
-fn decision_recorded(
-  decisions: List(types.RecordedDecision),
-  key: String,
-) -> Bool {
-  list.any(decisions, fn(decision) { decision.key == key })
+  |> list.filter(fn(task) { types.task_requires_manual_attention(run.decisions, task) })
 }
 
 fn collect_recorded_decisions(
   run: types.RunRecord,
   tasks: List(types.Task),
-) -> Result(List(types.RecordedDecision), String) {
-  case tasks {
+) -> Result(#(List(types.RecordedDecision), List(types.RunEvent)), String) {
+  let prompts = pending_decision_prompts(run.decisions, tasks)
+  case prompts {
     [] -> Error("No unresolved manual-attention decisions were found for this run.")
-    [task, ..rest] -> {
-      use current <- result.try(collect_task_decisions(run.decisions, task))
-      use remaining <- result.try(collect_recorded_decisions_or_empty(
-        run.decisions,
-        rest,
-      ))
-      Ok(list.append(current, remaining))
-    }
-  }
-}
-
-fn collect_recorded_decisions_or_empty(
-  existing: List(types.RecordedDecision),
-  tasks: List(types.Task),
-) -> Result(List(types.RecordedDecision), String) {
-  case tasks {
-    [] -> Ok([])
-    [task, ..rest] -> {
-      use current <- result.try(collect_task_decisions(existing, task))
-      use remaining <- result.try(collect_recorded_decisions_or_empty(existing, rest))
-      Ok(list.append(current, remaining))
-    }
-  }
-}
-
-fn collect_task_decisions(
-  existing: List(types.RecordedDecision),
-  task: types.Task,
-) -> Result(List(types.RecordedDecision), String) {
-  let requests = unresolved_decision_requests(existing, task)
-  case requests {
-    [] -> Ok([])
-    _ -> {
-      io.println("")
-      io.println("Resolving " <> task.id <> ": " <> task.title)
-      io.println(task.description)
-      collect_request_answers(task, requests, [])
-    }
+    _ -> collect_request_answers(prompts, [])
   }
 }
 
 fn collect_request_answers(
-  task: types.Task,
-  requests: List(types.DecisionRequest),
+  prompts: List(#(types.Task, types.DecisionRequest)),
   acc: List(types.RecordedDecision),
-) -> Result(List(types.RecordedDecision), String) {
-  case requests {
-    [] -> Ok(list.reverse(acc))
-    [request, ..rest] -> {
-      use answer <- result.try(prompt_for_decision(task, request))
+) -> Result(#(List(types.RecordedDecision), List(types.RunEvent)), String) {
+  collect_request_answers_with_warnings(prompts, acc, [], 1, list.length(prompts))
+}
+
+fn collect_request_answers_with_warnings(
+  prompts: List(#(types.Task, types.DecisionRequest)),
+  acc: List(types.RecordedDecision),
+  warnings: List(types.RunEvent),
+  index: Int,
+  total: Int,
+) -> Result(#(List(types.RecordedDecision), List(types.RunEvent)), String) {
+  case prompts {
+    [] -> Ok(#(list.reverse(acc), list.reverse(warnings)))
+    [#(task, request), ..rest] -> {
+      use #(answer, warning) <- result.try(prompt_for_decision(
+        task,
+        request,
+        index,
+        total,
+      ))
       let recorded =
         types.RecordedDecision(
           key: request.key,
@@ -1143,16 +1096,41 @@ fn collect_request_answers(
           answer: answer,
           answered_at: system.timestamp(),
         )
-      collect_request_answers(task, rest, [recorded, ..acc])
+      let updated_warnings = case warning {
+        Some(event) -> [event, ..warnings]
+        None -> warnings
+      }
+      collect_request_answers_with_warnings(
+        rest,
+        [recorded, ..acc],
+        updated_warnings,
+        index + 1,
+        total,
+      )
     }
   }
+}
+
+fn pending_decision_prompts(
+  decisions: List(types.RecordedDecision),
+  tasks: List(types.Task),
+) -> List(#(types.Task, types.DecisionRequest)) {
+  tasks
+  |> list.map(fn(task) {
+    types.unresolved_decision_requests(decisions, task)
+    |> list.map(fn(request) { #(task, request) })
+  })
+  |> list.flatten
 }
 
 fn prompt_for_decision(
   task: types.Task,
   request: types.DecisionRequest,
-) -> Result(String, String) {
+  index: Int,
+  total: Int,
+) -> Result(#(String, Option(types.RunEvent)), String) {
   io.println("")
+  io.println("Question " <> int.to_string(index) <> "/" <> int.to_string(total))
   io.println("Task: " <> task.title)
   io.println("Question: " <> request.question)
   case string.trim(request.rationale) {
@@ -1161,16 +1139,17 @@ fn prompt_for_decision(
   }
 
   case request.options {
-    [] ->
-      case request.allow_freeform {
-        True -> prompt_for_freeform_answer(request)
-        False ->
-          Error(
-            "Night Shift could not collect an answer for `"
-            <> request.key
-            <> "` because the planner returned no options and disallowed freeform input.",
-          )
+    [] -> {
+      let warning = case request.allow_freeform {
+        True -> None
+        False -> Some(decision_contract_warning_event(task, request))
       }
+      use answer <- result.try(prompt_for_freeform_answer(
+        request,
+        request.recommended_option,
+      ))
+      Ok(#(answer, warning))
+    }
     options -> {
       let labels =
         options
@@ -1185,12 +1164,19 @@ fn prompt_for_decision(
         True -> list.append(labels, ["Enter a custom answer"])
         False -> labels
       }
-      let selected = select_from_labels("Choose an answer:", final_labels, 0)
+      let selected =
+        select_from_labels(
+          "Choose an answer:",
+          final_labels,
+          recommended_option_index(options, request.recommended_option),
+        )
       case request.allow_freeform && selected == list.length(final_labels) - 1 {
-        True -> prompt_for_freeform_answer(request)
+        True ->
+          prompt_for_freeform_answer(request, request.recommended_option)
+          |> result.map(fn(answer) { #(answer, None) })
         False ->
           case list.drop(options, selected) {
-            [choice, ..] -> Ok(choice.label)
+            [choice, ..] -> Ok(#(choice.label, None))
             [] -> Error("The selected decision option was out of range.")
           }
       }
@@ -1200,12 +1186,128 @@ fn prompt_for_decision(
 
 fn prompt_for_freeform_answer(
   request: types.DecisionRequest,
+  default_answer: Option(String),
 ) -> Result(String, String) {
-  io.println("Answer:")
-  case string.trim(system.read_line()) {
-    "" -> Error("Night Shift needs a non-empty answer for `" <> request.key <> "`.")
-    answer -> Ok(answer)
+  case default_answer {
+    Some(answer) -> {
+      io.println("Answer [default: " <> answer <> "]:")
+      case string.trim(system.read_line()) {
+        "" -> Ok(answer)
+        custom -> Ok(custom)
+      }
+    }
+    None -> {
+      io.println("Answer:")
+      case string.trim(system.read_line()) {
+        "" ->
+          Error(
+            "Night Shift needs a non-empty answer for `" <> request.key <> "`.",
+          )
+        answer -> Ok(answer)
+      }
+    }
   }
+}
+
+fn recommended_option_index(
+  options: List(types.DecisionOption),
+  recommended_option: Option(String),
+) -> Int {
+  case recommended_option {
+    Some(recommended) -> find_option_index(options, recommended, 0)
+    None -> 0
+  }
+}
+
+fn find_option_index(
+  options: List(types.DecisionOption),
+  target: String,
+  index: Int,
+) -> Int {
+  case options {
+    [] -> 0
+    [option, ..rest] ->
+      case option.label == target {
+        True -> index
+        False -> find_option_index(rest, target, index + 1)
+      }
+  }
+}
+
+fn decision_contract_warning_event(
+  task: types.Task,
+  request: types.DecisionRequest,
+) -> types.RunEvent {
+  types.RunEvent(
+    kind: "decision_contract_warning",
+    at: system.timestamp(),
+    message: "Coerced `"
+      <> request.key
+      <> "` into a freeform prompt because the planner returned no options and disallowed freeform input.",
+    task_id: Some(task.id),
+  )
+}
+
+fn resolve_loop(run: types.RunRecord) -> String {
+  let blocked_tasks = unresolved_manual_attention_tasks(run)
+  case blocked_tasks {
+    [] ->
+      case run.status {
+        types.RunPending -> render_run_summary(run)
+        _ ->
+          "Run "
+          <> run.run_id
+          <> " is blocked but has no unresolved decisions left to collect. Inspect "
+          <> run.report_path
+          <> " or rerun `night-shift plan --notes ...`."
+      }
+    _ -> {
+      io.println(render_resolve_summary(run, blocked_tasks))
+      case collect_recorded_decisions(run, blocked_tasks) {
+        Ok(#(new_decisions, warning_events)) -> {
+          let updated_run =
+            types.RunRecord(
+              ..run,
+              decisions: merge_recorded_decisions(run.decisions, new_decisions),
+            )
+          case journal.rewrite_run(updated_run) {
+            Ok(rewritten_run) ->
+              case append_run_events(rewritten_run, warning_events) {
+                Ok(warned_run) ->
+                  case append_decision_recorded_events(warned_run, new_decisions) {
+                    Ok(signaled_run) ->
+                      case orchestrator.replan(signaled_run) {
+                        Ok(replanned_run) ->
+                          case replanned_run.status {
+                            types.RunBlocked -> resolve_loop(replanned_run)
+                            _ -> render_run_summary(replanned_run)
+                          }
+                        Error(message) -> message
+                      }
+                    Error(message) -> message
+                  }
+                Error(message) -> message
+              }
+            Error(message) -> message
+          }
+        }
+        Error(message) -> message
+      }
+    }
+  }
+}
+
+fn render_resolve_summary(
+  run: types.RunRecord,
+  blocked_tasks: List(types.Task),
+) -> String {
+  "\nResolving run "
+  <> run.run_id
+  <> "\nBlocked tasks: "
+  <> int.to_string(list.length(blocked_tasks))
+  <> "\nOutstanding decisions: "
+  <> int.to_string(outstanding_decision_count(run))
+  <> "\nNext action: answer the questions below to make this run ready to start."
 }
 
 fn merge_recorded_decisions(
@@ -1240,6 +1342,19 @@ fn append_decision_recorded_events(
         ),
       ))
       append_decision_recorded_events(updated_run, rest)
+    }
+  }
+}
+
+fn append_run_events(
+  run: types.RunRecord,
+  events: List(types.RunEvent),
+) -> Result(types.RunRecord, String) {
+  case events {
+    [] -> Ok(run)
+    [event, ..rest] -> {
+      use updated_run <- result.try(journal.append_event(run, event))
+      append_run_events(updated_run, rest)
     }
   }
 }

@@ -122,16 +122,22 @@ fn plan_with_event(
   ))
 
   let normalized_tasks = normalize_tasks(planned_tasks)
-  let merged_tasks = merge_planned_tasks(run.tasks, normalized_tasks)
-  let status = planning_status(merged_tasks)
+  let merged_tasks =
+    merge_planned_tasks(run.tasks, normalized_tasks)
+    |> apply_decision_states(run.decisions)
+    |> refresh_ready_states
+  let status = planning_status(run.decisions, merged_tasks)
   let updated_run = types.RunRecord(..run, tasks: merged_tasks, status: status)
+  let unresolved_count = unresolved_decision_count(run.decisions, merged_tasks)
   let plan_event =
     types.RunEvent(
       kind: event_kind,
       at: system.timestamp(),
       message: message_prefix
         <> int.to_string(list.length(normalized_tasks))
-        <> " tasks.",
+        <> " tasks"
+        <> planning_event_suffix(unresolved_count)
+        <> ".",
       task_id: None,
     )
 
@@ -139,9 +145,13 @@ fn plan_with_event(
   use planned_run <- result.try(journal.append_event(rewritten_run, plan_event))
   use signaled_run <- result.try(append_decision_request_events(
     planned_run,
-    decision_requesting_tasks(merged_tasks),
+    decision_requesting_tasks(run.decisions, merged_tasks),
   ))
-  journal.mark_status(signaled_run, status, planning_status_message(merged_tasks))
+  journal.mark_status(
+    signaled_run,
+    status,
+    planning_status_message(run.decisions, merged_tasks),
+  )
 }
 
 fn prepare_run_for_execution(
@@ -151,12 +161,15 @@ fn prepare_run_for_execution(
     types.RunRecord(..run, tasks: refresh_ready_states(run.tasks))
 
   case has_blocking_attention(refreshed_run.tasks) {
-    True -> Ok(#(refreshed_run, True))
+    True ->
+      append_manual_attention_events(refreshed_run)
+      |> result.map(fn(updated_run) { #(updated_run, True) })
     False ->
       case next_batch(refreshed_run.tasks, refreshed_run.max_workers) {
         [] -> Ok(#(refreshed_run, True))
         [task, .._] if task.kind == types.ManualAttentionTask ->
-          Ok(#(refreshed_run, True))
+          append_manual_attention_events(refreshed_run)
+          |> result.map(fn(updated_run) { #(updated_run, True) })
         _ -> {
           let preflight_log =
             filepath.join(
@@ -563,10 +576,14 @@ fn finalize_success(
             )
 
           let merged_tasks =
-            merge_follow_up_tasks(
-              replace_task(run.tasks, completed_task),
-              final_execution.follow_up_tasks,
+            apply_decision_states(
+              merge_follow_up_tasks(
+                replace_task(run.tasks, completed_task),
+                final_execution.follow_up_tasks,
+              ),
+              run.decisions,
             )
+            |> refresh_ready_states
           let updated_run = types.RunRecord(..run, tasks: merged_tasks)
           let verified_event =
             types.RunEvent(
@@ -765,18 +782,61 @@ fn completed_tasks(tasks: List(types.Task)) -> List(types.Task) {
   |> list.filter(fn(task) { task.state == types.Completed })
 }
 
-fn planning_status(tasks: List(types.Task)) -> types.RunStatus {
-  case list.any(tasks, fn(task) { task.kind == types.ManualAttentionTask }) {
+fn apply_decision_states(
+  tasks: List(types.Task),
+  decisions: List(types.RecordedDecision),
+) -> List(types.Task) {
+  tasks
+  |> list.map(fn(task) {
+    case task.kind {
+      types.ManualAttentionTask ->
+        case types.task_requires_manual_attention(decisions, task) {
+          True ->
+            types.Task(
+              ..task,
+              state: types.ManualAttention,
+              summary: manual_attention_summary(task),
+            )
+          False ->
+            types.Task(
+              ..task,
+              state: types.Completed,
+              summary: resolved_manual_attention_summary(task.summary),
+            )
+        }
+      types.ImplementationTask -> task
+    }
+  })
+}
+
+fn resolved_manual_attention_summary(existing_summary: String) -> String {
+  case string.trim(existing_summary) {
+    "" -> "Resolved during planning."
+    summary -> summary
+  }
+}
+
+fn planning_status(
+  decisions: List(types.RecordedDecision),
+  tasks: List(types.Task),
+) -> types.RunStatus {
+  case list.any(tasks, fn(task) { types.task_requires_manual_attention(decisions, task) }) {
     True -> types.RunBlocked
     False -> types.RunPending
   }
 }
 
-fn planning_status_message(tasks: List(types.Task)) -> String {
-  case planning_status(tasks) {
+fn planning_status_message(
+  decisions: List(types.RecordedDecision),
+  tasks: List(types.Task),
+) -> String {
+  let unresolved_count = unresolved_decision_count(decisions, tasks)
+  case planning_status(decisions, tasks) {
     types.RunBlocked ->
       "Night Shift is awaiting manual review for "
-      <> pluralize(list.length(decision_requesting_tasks(tasks)), "task")
+      <> pluralize(list.length(decision_requesting_tasks(decisions, tasks)), "task")
+      <> " across "
+      <> pluralize(unresolved_count, "decision")
       <> "."
     _ ->
       "Night Shift planned "
@@ -785,9 +845,28 @@ fn planning_status_message(tasks: List(types.Task)) -> String {
   }
 }
 
-fn decision_requesting_tasks(tasks: List(types.Task)) -> List(types.Task) {
+fn decision_requesting_tasks(
+  decisions: List(types.RecordedDecision),
+  tasks: List(types.Task),
+) -> List(types.Task) {
   tasks
-  |> list.filter(fn(task) { task.kind == types.ManualAttentionTask })
+  |> list.filter(fn(task) { types.task_requires_manual_attention(decisions, task) })
+}
+
+fn unresolved_decision_count(
+  decisions: List(types.RecordedDecision),
+  tasks: List(types.Task),
+) -> Int {
+  decision_requesting_tasks(decisions, tasks)
+  |> list.map(fn(task) { list.length(types.unresolved_decision_requests(decisions, task)) })
+  |> list.fold(0, fn(total, count) { total + count })
+}
+
+fn planning_event_suffix(unresolved_count: Int) -> String {
+  case unresolved_count {
+    0 -> ""
+    _ -> " and " <> pluralize(unresolved_count, "unresolved decision")
+  }
 }
 
 fn append_decision_request_events(
@@ -797,10 +876,11 @@ fn append_decision_request_events(
   case tasks {
     [] -> Ok(run)
     [task, ..rest] -> {
-      let message = case task.decision_requests {
+      let requests = types.unresolved_decision_requests(run.decisions, task)
+      let message = case requests {
         [] -> task.description
-        requests ->
-          requests
+        unresolved_requests ->
+          unresolved_requests
           |> list.map(fn(request) { request.question })
           |> string.join(with: " | ")
       }
@@ -814,6 +894,35 @@ fn append_decision_request_events(
         ),
       ))
       append_decision_request_events(updated_run, rest)
+    }
+  }
+}
+
+fn append_manual_attention_events(
+  run: types.RunRecord,
+) -> Result(types.RunRecord, String) {
+  run.tasks
+  |> list.filter(fn(task) { task.state == types.ManualAttention })
+  |> append_manual_attention_events_for_tasks(run)
+}
+
+fn append_manual_attention_events_for_tasks(
+  tasks: List(types.Task),
+  run: types.RunRecord,
+) -> Result(types.RunRecord, String) {
+  case tasks {
+    [] -> Ok(run)
+    [task, ..rest] -> {
+      use updated_run <- result.try(journal.append_event(
+        run,
+        types.RunEvent(
+          kind: "task_manual_attention",
+          at: system.timestamp(),
+          message: manual_attention_summary(task),
+          task_id: Some(task.id),
+        ),
+      ))
+      append_manual_attention_events_for_tasks(rest, updated_run)
     }
   }
 }

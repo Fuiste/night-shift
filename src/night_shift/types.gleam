@@ -271,6 +271,43 @@ pub fn is_task_ready(task: Task, completed_ids: List(String)) -> Bool {
   }
 }
 
+pub fn decision_recorded(
+  decisions: List(RecordedDecision),
+  key: String,
+) -> Bool {
+  list.any(decisions, fn(decision) { decision.key == key })
+}
+
+pub fn unresolved_decision_requests(
+  decisions: List(RecordedDecision),
+  task: Task,
+) -> List(DecisionRequest) {
+  case task.decision_requests {
+    [] ->
+      [
+        DecisionRequest(
+          key: "task:" <> task.id,
+          question: task.title,
+          rationale: task.description,
+          options: [],
+          recommended_option: None,
+          allow_freeform: True,
+        ),
+      ]
+    requests ->
+      requests
+      |> list.filter(fn(request) { !decision_recorded(decisions, request.key) })
+  }
+}
+
+pub fn task_requires_manual_attention(
+  decisions: List(RecordedDecision),
+  task: Task,
+) -> Bool {
+  task.kind == ManualAttentionTask
+  && unresolved_decision_requests(decisions, task) != []
+}
+
 pub type PrPlan {
   PrPlan(
     title: String,
