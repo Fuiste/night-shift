@@ -1,4 +1,7 @@
 import gleam/list
+import gleam/option.{type Option}
+
+pub const default_brief_filename = "night-shift.md"
 
 pub type Harness {
   Codex
@@ -194,10 +197,15 @@ pub fn default_config() -> Config {
 
 pub type Command {
   Start(
-    brief_path: String,
+    brief_path: Option(String),
     harness: Result(Harness, Nil),
     max_workers: Result(Int, Nil),
     ui_enabled: Bool,
+  )
+  Plan(
+    notes_path: String,
+    doc_path: Option(String),
+    harness: Result(Harness, Nil),
   )
   Status(run: RunSelector)
   Report(run: RunSelector)
@@ -206,4 +214,3 @@ pub type Command {
   Demo(ui_enabled: Bool)
   Help
 }
-import gleam/option.{type Option}

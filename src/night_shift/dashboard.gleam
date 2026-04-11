@@ -10,7 +10,10 @@ pub type Session {
 }
 
 @external(erlang, "night_shift_dashboard_server", "start_view_session")
-pub fn start_view_session(repo_root: String, initial_run_id: String) -> Result(Session, String)
+pub fn start_view_session(
+  repo_root: String,
+  initial_run_id: String,
+) -> Result(Session, String)
 
 @external(erlang, "night_shift_dashboard_server", "start_start_session")
 pub fn start_start_session(
@@ -192,7 +195,7 @@ pub fn runs_json(repo_root: String) -> Result(String, String) {
     runs
     |> list.map(run_summary_json)
     |> json.array(identity)
-    |> json.to_string
+    |> json.to_string,
   )
 }
 
@@ -205,7 +208,7 @@ pub fn run_json(repo_root: String, run_id: String) -> Result(String, String) {
       #("events", json.array(events, event_json)),
       #("report", json.string(report)),
     ])
-    |> json.to_string
+    |> json.to_string,
   )
 }
 
@@ -253,13 +256,10 @@ fn event_json(event: types.RunEvent) -> json.Json {
     #("kind", json.string(event.kind)),
     #("at", json.string(event.at)),
     #("message", json.string(event.message)),
-    #(
-      "task_id",
-      case event.task_id {
-        Some(task_id) -> json.string(task_id)
-        None -> json.null()
-      },
-    ),
+    #("task_id", case event.task_id {
+      Some(task_id) -> json.string(task_id)
+      None -> json.null()
+    }),
   ])
 }
 

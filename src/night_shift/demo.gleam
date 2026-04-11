@@ -5,6 +5,7 @@ import gleam/string
 import night_shift/dashboard
 import night_shift/shell
 import night_shift/system
+import night_shift/types
 import simplifile
 
 pub fn run(ui_enabled: Bool) -> Result(String, String) {
@@ -13,7 +14,7 @@ pub fn run(ui_enabled: Bool) -> Result(String, String) {
   let repo_root = filepath.join(demo_root, "repo")
   let remote_root = filepath.join(demo_root, "remote.git")
   let bin_dir = filepath.join(demo_root, "bin")
-  let brief_path = filepath.join(repo_root, "brief.md")
+  let brief_path = filepath.join(repo_root, types.default_brief_filename)
   let fake_harness = filepath.join(bin_dir, "fake-harness")
   let fake_gh = filepath.join(bin_dir, "gh")
   let demo_state_home = filepath.join(demo_root, "state")
@@ -60,7 +61,7 @@ fn run_headless_demo(
   demo_root: String,
 ) -> Result(String, String) {
   use start_output <- result.try(run_cli_command(
-    ["start", "--brief", "brief.md"],
+    ["start"],
     repo_root,
     filepath.join(demo_root, "headless-start.log"),
     "Headless demo failed while running `start`.",
@@ -275,7 +276,7 @@ fn start_ui_command(
 ) -> Result(Nil, String) {
   let command =
     "nohup "
-    <> build_cli_command(["start", "--brief", "brief.md", "--ui"])
+    <> build_cli_command(["start", "--ui"])
     <> " > "
     <> shell.quote(log_path)
     <> " 2>&1 & echo $! > "
@@ -468,6 +469,8 @@ fn write_fake_harness(path: String) -> Result(Nil, String) {
       <> "PROMPT_FILE=$2\n"
       <> "if [ \"$MODE\" = \"plan\" ]; then\n"
       <> "  printf 'planning\\nNIGHT_SHIFT_RESULT_START\\n{\"tasks\":[{\"id\":\"demo-task\",\"title\":\"Implement demo task\",\"description\":\"Create a file to prove execution\",\"dependencies\":[],\"acceptance\":[\"Create IMPLEMENTED.md\"],\"demo_plan\":[\"Show the new file\"],\"parallel_safe\":false}]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "elif [ \"$MODE\" = \"plan-doc\" ]; then\n"
+      <> "  printf 'planning-doc\\nNIGHT_SHIFT_RESULT_START\\n# Night Shift Brief\\n## Objective\\nShip the demo task.\\n## Scope\\n- Implement the demo task fixture.\\n## Constraints\\n- Stay within the fake harness contract.\\n## Deliverables\\n- Create IMPLEMENTED.md.\\n## Acceptance Criteria\\n- IMPLEMENTED.md exists after execution.\\n## Risks and Open Questions\\n- None.\\nNIGHT_SHIFT_RESULT_END\\n'\n"
       <> "else\n"
       <> "  echo 'completed by fake harness' > IMPLEMENTED.md\n"
       <> "  printf 'execution\\nNIGHT_SHIFT_RESULT_START\\n{\"status\":\"completed\",\"summary\":\"Implemented demo task\",\"files_touched\":[\"IMPLEMENTED.md\"],\"demo_evidence\":[\"IMPLEMENTED.md created\"],\"pr\":{\"title\":\"[night-shift] Implement demo task\",\"summary\":\"Implemented the fake harness task.\",\"demo\":[\"IMPLEMENTED.md created\"],\"risks\":[]},\"follow_up_tasks\":[]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"

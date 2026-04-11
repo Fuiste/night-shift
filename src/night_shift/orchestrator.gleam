@@ -12,10 +12,16 @@ import night_shift/shell
 import night_shift/system
 import night_shift/types
 
-pub fn start(run: types.RunRecord, config: types.Config) -> Result(types.RunRecord, String) {
-  use planned_tasks <- result.try(
-    harness.plan_tasks(run.harness, run.repo_root, run.brief_path, run.run_path)
-  )
+pub fn start(
+  run: types.RunRecord,
+  config: types.Config,
+) -> Result(types.RunRecord, String) {
+  use planned_tasks <- result.try(harness.plan_tasks(
+    run.harness,
+    run.repo_root,
+    run.brief_path,
+    run.run_path,
+  ))
 
   let normalized_tasks = normalize_tasks(planned_tasks)
   let planned_run = types.RunRecord(..run, tasks: normalized_tasks)
@@ -23,15 +29,23 @@ pub fn start(run: types.RunRecord, config: types.Config) -> Result(types.RunReco
     types.RunEvent(
       kind: "task_progress",
       at: system.timestamp(),
-      message: "Planner produced " <> int.to_string(list.length(normalized_tasks)) <> " tasks.",
+      message: "Planner produced "
+        <> int.to_string(list.length(normalized_tasks))
+        <> " tasks.",
       task_id: None,
     )
 
-  use persisted_run <- result.try(journal.append_event(planned_run, planned_event))
+  use persisted_run <- result.try(journal.append_event(
+    planned_run,
+    planned_event,
+  ))
   scheduler_loop(config, persisted_run)
 }
 
-pub fn resume(run: types.RunRecord, config: types.Config) -> Result(types.RunRecord, String) {
+pub fn resume(
+  run: types.RunRecord,
+  config: types.Config,
+) -> Result(types.RunRecord, String) {
   let resumed_tasks =
     run.tasks
     |> list.map(fn(task) { recover_task(task) })
@@ -50,16 +64,25 @@ pub fn resume(run: types.RunRecord, config: types.Config) -> Result(types.RunRec
   scheduler_loop(config, persisted_run)
 }
 
-pub fn review(run: types.RunRecord, config: types.Config) -> Result(types.RunRecord, String) {
+pub fn review(
+  run: types.RunRecord,
+  config: types.Config,
+) -> Result(types.RunRecord, String) {
   let log_path = filepath.join(run.run_path, "logs/review.log")
-  use prs <- result.try(
-    github.list_night_shift_prs(run.repo_root, config.branch_prefix, log_path)
-  )
+  use prs <- result.try(github.list_night_shift_prs(
+    run.repo_root,
+    config.branch_prefix,
+    log_path,
+  ))
 
   let review_tasks =
     prs
     |> list.try_map(fn(pr) {
-      use details <- result.try(github.review_item(run.repo_root, pr.number, log_path))
+      use details <- result.try(github.review_item(
+        run.repo_root,
+        pr.number,
+        log_path,
+      ))
       Ok(review_task_from_pr(details))
     })
 
@@ -69,7 +92,9 @@ pub fn review(run: types.RunRecord, config: types.Config) -> Result(types.RunRec
     types.RunEvent(
       kind: "task_progress",
       at: system.timestamp(),
-      message: "Review mode loaded " <> int.to_string(list.length(tasks)) <> " stabilization tasks.",
+      message: "Review mode loaded "
+        <> int.to_string(list.length(tasks))
+        <> " stabilization tasks.",
       task_id: None,
     )
 
@@ -81,14 +106,23 @@ fn scheduler_loop(
   config: types.Config,
   run: types.RunRecord,
 ) -> Result(types.RunRecord, String) {
-  let refreshed_run = types.RunRecord(..run, tasks: refresh_ready_states(run.tasks))
+  let refreshed_run =
+    types.RunRecord(..run, tasks: refresh_ready_states(run.tasks))
   let batch = next_batch(refreshed_run.tasks, refreshed_run.max_workers)
 
   case batch {
     [] -> finish_run(refreshed_run)
     _ -> {
-      use #(running_run, task_runs) <- result.try(launch_batch(config, refreshed_run, batch))
-      use completed_run <- result.try(await_batch(config, running_run, task_runs))
+      use #(running_run, task_runs) <- result.try(launch_batch(
+        config,
+        refreshed_run,
+        batch,
+      ))
+      use completed_run <- result.try(await_batch(
+        config,
+        running_run,
+        task_runs,
+      ))
       scheduler_loop(config, completed_run)
     }
   }
@@ -96,13 +130,12 @@ fn scheduler_loop(
 
 fn finish_run(run: types.RunRecord) -> Result(types.RunRecord, String) {
   let status = final_status(run.tasks)
-  let message =
-    case status {
-      types.RunCompleted -> "Night Shift completed all queued work."
-      types.RunFailed -> "Night Shift encountered failed tasks."
-      types.RunBlocked -> "Night Shift is awaiting manual review."
-      _ -> "Night Shift stopped."
-    }
+  let message = case status {
+    types.RunCompleted -> "Night Shift completed all queued work."
+    types.RunFailed -> "Night Shift encountered failed tasks."
+    types.RunBlocked -> "Night Shift is awaiting manual review."
+    _ -> "Night Shift stopped."
+  }
 
   journal.mark_status(run, status, message)
 }
@@ -124,23 +157,34 @@ fn launch_batch_loop(
   case tasks {
     [] -> Ok(#(run, list.reverse(acc)))
     [task, ..rest] -> {
-      let branch_name =
-        case task.branch_name {
-          "" -> build_branch_name(config.branch_prefix, run.run_id, task.id)
-          existing_branch -> existing_branch
-        }
+      let branch_name = case task.branch_name {
+        "" -> build_branch_name(config.branch_prefix, run.run_id, task.id)
+        existing_branch -> existing_branch
+      }
       let worktree_path = filepath.join(run.run_path, "worktrees/" <> task.id)
-      let base_ref =
-        case task.branch_name {
-          "" -> task_base_ref(task, run.tasks, config.base_branch)
-          existing_branch -> existing_branch
-        }
-      let git_log = filepath.join(run.run_path, "logs/" <> task.id <> ".git.log")
-      let worktree_result =
-        case task.branch_name {
-          "" -> git.create_worktree(run.repo_root, worktree_path, branch_name, base_ref, git_log)
-          _ -> git.attach_worktree(run.repo_root, worktree_path, branch_name, git_log)
-        }
+      let base_ref = case task.branch_name {
+        "" -> task_base_ref(task, run.tasks, config.base_branch)
+        existing_branch -> existing_branch
+      }
+      let git_log =
+        filepath.join(run.run_path, "logs/" <> task.id <> ".git.log")
+      let worktree_result = case task.branch_name {
+        "" ->
+          git.create_worktree(
+            run.repo_root,
+            worktree_path,
+            branch_name,
+            base_ref,
+            git_log,
+          )
+        _ ->
+          git.attach_worktree(
+            run.repo_root,
+            worktree_path,
+            branch_name,
+            git_log,
+          )
+      }
 
       case worktree_result {
         Ok(_) -> {
@@ -151,7 +195,8 @@ fn launch_batch_loop(
               worktree_path: worktree_path,
               branch_name: branch_name,
             )
-          let updated_run = types.RunRecord(..run, tasks: replace_task(run.tasks, running_task))
+          let updated_run =
+            types.RunRecord(..run, tasks: replace_task(run.tasks, running_task))
           let event =
             types.RunEvent(
               kind: "task_started",
@@ -160,23 +205,26 @@ fn launch_batch_loop(
               task_id: Some(task.id),
             )
 
-          use persisted_run <- result.try(journal.append_event(updated_run, event))
-          use task_run <- result.try(
-            harness.start_task(
-              persisted_run.harness,
-              persisted_run.repo_root,
-              persisted_run.run_path,
-              running_task,
-              worktree_path,
-              branch_name,
-              base_ref,
-            )
-          )
+          use persisted_run <- result.try(journal.append_event(
+            updated_run,
+            event,
+          ))
+          use task_run <- result.try(harness.start_task(
+            persisted_run.harness,
+            persisted_run.repo_root,
+            persisted_run.run_path,
+            running_task,
+            worktree_path,
+            branch_name,
+            base_ref,
+          ))
           launch_batch_loop(config, persisted_run, rest, [task_run, ..acc])
         }
         Error(message) -> {
-          let failed_task = types.Task(..task, state: types.Failed, summary: message)
-          let failed_run = types.RunRecord(..run, tasks: replace_task(run.tasks, failed_task))
+          let failed_task =
+            types.Task(..task, state: types.Failed, summary: message)
+          let failed_run =
+            types.RunRecord(..run, tasks: replace_task(run.tasks, failed_task))
           let event =
             types.RunEvent(
               kind: "task_blocked",
@@ -184,7 +232,10 @@ fn launch_batch_loop(
               message: message,
               task_id: Some(task.id),
             )
-          use persisted_run <- result.try(journal.append_event(failed_run, event))
+          use persisted_run <- result.try(journal.append_event(
+            failed_run,
+            event,
+          ))
           launch_batch_loop(config, persisted_run, rest, acc)
         }
       }
@@ -201,7 +252,12 @@ fn await_batch(
     [] -> Ok(run)
     [task_run, ..rest] -> {
       use execution_result <- result.try(harness.await_task(task_run))
-      use updated_run <- result.try(complete_task(config, run, task_run, execution_result))
+      use updated_run <- result.try(complete_task(
+        config,
+        run,
+        task_run,
+        execution_result,
+      ))
       await_batch(config, updated_run, rest)
     }
   }
@@ -232,7 +288,8 @@ fn finalize_non_success(
       state: execution_result.status,
       summary: execution_result.summary,
     )
-  let updated_run = types.RunRecord(..run, tasks: replace_task(run.tasks, updated_task))
+  let updated_run =
+    types.RunRecord(..run, tasks: replace_task(run.tasks, updated_task))
   let event =
     types.RunEvent(
       kind: "task_blocked",
@@ -250,7 +307,8 @@ fn finalize_success(
   task_run: harness.TaskRun,
   execution_result: types.ExecutionResult,
 ) -> Result(types.RunRecord, String) {
-  let verification_log = filepath.join(run.run_path, "logs/" <> task_run.task.id <> ".verify.log")
+  let verification_log =
+    filepath.join(run.run_path, "logs/" <> task_run.task.id <> ".verify.log")
   let verify_result =
     verify_commands(
       config.verification_commands,
@@ -258,30 +316,41 @@ fn finalize_success(
       verification_log,
     )
 
-  let final_result =
-    case verify_result {
-      Ok(output) -> Ok(#(execution_result, output))
-      Error(output) ->
-        case harness.repair_task(
+  let final_result = case verify_result {
+    Ok(output) -> Ok(#(execution_result, output))
+    Error(output) ->
+      case
+        harness.repair_task(
           run.harness,
           run.repo_root,
           task_run.worktree_path,
           run.run_path,
           task_run.task,
           output,
-        ) {
-          Ok(repaired_result) ->
-            case verify_commands(config.verification_commands, task_run.worktree_path, verification_log) {
-              Ok(repaired_output) -> Ok(#(repaired_result, repaired_output))
-              Error(repaired_output) -> Error(repaired_output)
-            }
-          Error(_) -> Error(output)
-        }
-    }
+        )
+      {
+        Ok(repaired_result) ->
+          case
+            verify_commands(
+              config.verification_commands,
+              task_run.worktree_path,
+              verification_log,
+            )
+          {
+            Ok(repaired_output) -> Ok(#(repaired_result, repaired_output))
+            Error(repaired_output) -> Error(repaired_output)
+          }
+        Error(_) -> Error(output)
+      }
+  }
 
   case final_result {
     Ok(#(final_execution, verification_output)) -> {
-      let git_log = filepath.join(run.run_path, "logs/" <> task_run.task.id <> ".deliver.log")
+      let git_log =
+        filepath.join(
+          run.run_path,
+          "logs/" <> task_run.task.id <> ".deliver.log",
+        )
       case git.has_changes(task_run.worktree_path, git_log) {
         False -> {
           let task =
@@ -290,7 +359,8 @@ fn finalize_success(
               state: types.ManualAttention,
               summary: "Harness reported completion but produced no changes.",
             )
-          let updated_run = types.RunRecord(..run, tasks: replace_task(run.tasks, task))
+          let updated_run =
+            types.RunRecord(..run, tasks: replace_task(run.tasks, task))
           journal.append_event(
             updated_run,
             types.RunEvent(
@@ -303,26 +373,32 @@ fn finalize_success(
         }
         True -> {
           let changed_files = git.changed_files(task_run.worktree_path, git_log)
-          use _ <- result.try(
-            git.commit_all(
-              task_run.worktree_path,
-              "feat(night-shift): " <> task_run.task.title,
-              git_log,
+          use _ <- result.try(git.commit_all(
+            task_run.worktree_path,
+            "feat(night-shift): " <> task_run.task.title,
+            git_log,
+          ))
+          use _ <- result.try(git.push_branch(
+            task_run.worktree_path,
+            task_run.branch_name,
+            git_log,
+          ))
+          let pr_body =
+            build_pr_body(
+              run,
+              task_run.task,
+              final_execution,
+              verification_output,
             )
-          )
-          use _ <- result.try(git.push_branch(task_run.worktree_path, task_run.branch_name, git_log))
-          let pr_body = build_pr_body(run, task_run.task, final_execution, verification_output)
-          use pull_request <- result.try(
-            github.open_or_update_pr(
-              task_run.worktree_path,
-              task_run.branch_name,
-              task_run.base_ref,
-              final_execution.pr.title,
-              pr_body,
-              run.run_path,
-              git_log,
-            )
-          )
+          use pull_request <- result.try(github.open_or_update_pr(
+            task_run.worktree_path,
+            task_run.branch_name,
+            task_run.base_ref,
+            final_execution.pr.title,
+            pr_body,
+            run.run_path,
+            git_log,
+          ))
 
           let completed_task =
             types.Task(
@@ -347,9 +423,23 @@ fn finalize_success(
               message: "Verification passed for " <> task_run.task.title,
               task_id: Some(task_run.task.id),
             )
-          use verified_run <- result.try(journal.append_event(updated_run, verified_event))
+          use verified_run <- result.try(journal.append_event(
+            updated_run,
+            verified_event,
+          ))
           journal.append_event(
-            types.RunRecord(..verified_run, tasks: replace_task(verified_run.tasks, types.Task(..completed_task, summary: final_execution.summary <> " Changed files: " <> string.join(changed_files, ", ")))),
+            types.RunRecord(
+              ..verified_run,
+              tasks: replace_task(
+                verified_run.tasks,
+                types.Task(
+                  ..completed_task,
+                  summary: final_execution.summary
+                    <> " Changed files: "
+                    <> string.join(changed_files, ", "),
+                ),
+              ),
+            ),
             types.RunEvent(
               kind: "pr_opened",
               at: system.timestamp(),
@@ -367,7 +457,8 @@ fn finalize_success(
           state: types.Failed,
           summary: "Verification failed:\n" <> output,
         )
-      let failed_run = types.RunRecord(..run, tasks: replace_task(run.tasks, failed_task))
+      let failed_run =
+        types.RunRecord(..run, tasks: replace_task(run.tasks, failed_task))
       journal.append_event(
         failed_run,
         types.RunEvent(
@@ -401,13 +492,8 @@ fn verify_loop(
   case commands {
     [] -> Ok(string.join(list.reverse(acc), "\n\n"))
     [command, ..rest] -> {
-      let output =
-        shell.run(command, cwd, log_path)
-      let transcript =
-        "$ "
-        <> command
-        <> "\n"
-        <> output.output
+      let output = shell.run(command, cwd, log_path)
+      let transcript = "$ " <> command <> "\n" <> output.output
 
       case shell.succeeded(output) {
         True -> verify_loop(rest, cwd, log_path, [transcript, ..acc])
@@ -461,7 +547,10 @@ fn next_batch(tasks: List(types.Task), max_workers: Int) -> List(types.Task) {
   }
 }
 
-fn replace_task(tasks: List(types.Task), updated: types.Task) -> List(types.Task) {
+fn replace_task(
+  tasks: List(types.Task),
+  updated: types.Task,
+) -> List(types.Task) {
   tasks
   |> list.map(fn(task) {
     case task.id == updated.id {
@@ -502,10 +591,14 @@ fn merge_follow_up_tasks(
   |> refresh_ready_states
 }
 
-fn task_base_ref(task: types.Task, tasks: List(types.Task), default_base: String) -> String {
+fn task_base_ref(
+  task: types.Task,
+  tasks: List(types.Task),
+  default_base: String,
+) -> String {
   case task.dependencies {
     [] -> default_base
-    [dependency, .._] ->
+    [dependency, ..] ->
       tasks
       |> list.find(fn(candidate) { candidate.id == dependency })
       |> result.map(fn(found) {
@@ -519,11 +612,7 @@ fn task_base_ref(task: types.Task, tasks: List(types.Task), default_base: String
 }
 
 fn build_branch_name(prefix: String, run_id: String, task_id: String) -> String {
-  prefix
-  <> "/"
-  <> sanitize_segment(run_id)
-  <> "-"
-  <> sanitize_segment(task_id)
+  prefix <> "/" <> sanitize_segment(run_id) <> "-" <> sanitize_segment(task_id)
 }
 
 fn sanitize_segment(value: String) -> String {
@@ -537,7 +626,11 @@ fn final_status(tasks: List(types.Task)) -> types.RunStatus {
   case list.any(tasks, fn(task) { task.state == types.Failed }) {
     True -> types.RunFailed
     False ->
-      case list.any(tasks, fn(task) { task.state == types.Blocked || task.state == types.ManualAttention }) {
+      case
+        list.any(tasks, fn(task) {
+          task.state == types.Blocked || task.state == types.ManualAttention
+        })
+      {
         True -> types.RunBlocked
         False -> types.RunCompleted
       }
@@ -550,8 +643,18 @@ fn recover_task(task: types.Task) -> types.Task {
       case task.worktree_path {
         "" -> types.Task(..task, state: types.Queued)
         _ ->
-          case git.has_changes(task.worktree_path, filepath.join(task.worktree_path, ".night-shift-recover.log")) {
-            True -> types.Task(..task, state: types.ManualAttention, summary: "Interrupted run left changes in the worktree.")
+          case
+            git.has_changes(
+              task.worktree_path,
+              filepath.join(task.worktree_path, ".night-shift-recover.log"),
+            )
+          {
+            True ->
+              types.Task(
+                ..task,
+                state: types.ManualAttention,
+                summary: "Interrupted run left changes in the worktree.",
+              )
             False -> types.Task(..task, state: types.Queued)
           }
       }

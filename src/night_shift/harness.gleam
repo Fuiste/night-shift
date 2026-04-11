@@ -4,12 +4,14 @@ import gleam/json
 import gleam/list
 import gleam/result
 import gleam/string
+import night_shift/journal
 import night_shift/shell
 import night_shift/system
 import night_shift/types
 import simplifile
 
 const start_marker = "NIGHT_SHIFT_RESULT_START"
+
 const end_marker = "NIGHT_SHIFT_RESULT_END"
 
 pub type TaskRun {
@@ -21,6 +23,42 @@ pub type TaskRun {
     branch_name: String,
     base_ref: String,
   )
+}
+
+pub fn plan_document(
+  harness: types.Harness,
+  repo_root: String,
+  notes_path: String,
+  doc_path: String,
+) -> Result(#(String, String), String) {
+  let artifact_path = planning_artifact_path(repo_root)
+  let prompt_path = filepath.join(artifact_path, "planner.prompt.md")
+  let log_path = filepath.join(artifact_path, "planner.log")
+  use _ <- result.try(create_directory(artifact_path))
+  use notes_contents <- result.try(read_file(notes_path))
+  let existing_doc_contents = read_existing_file_or_empty(doc_path)
+  use _ <- result.try(write_file(
+    prompt_path,
+    planning_document_prompt(
+      notes_contents: notes_contents,
+      existing_doc_contents: existing_doc_contents,
+      doc_path: doc_path,
+    ),
+  ))
+  let command = plan_document_command(harness, repo_root, prompt_path)
+  let result = shell.run(command, repo_root, log_path)
+
+  case shell.succeeded(result) {
+    True -> {
+      use document <- result.try(extract_payload(result.output))
+      case string.trim(document) {
+        "" ->
+          Error("Planning harness returned an empty brief. See " <> log_path)
+        trimmed -> Ok(#(trimmed, artifact_path))
+      }
+    }
+    False -> Error("Planning harness failed. See " <> log_path)
+  }
 }
 
 pub fn plan_tasks(
@@ -65,16 +103,14 @@ pub fn start_task(
       log_path,
     )
 
-  Ok(
-    TaskRun(
-      task: task,
-      handle: handle,
-      worktree_path: worktree_path,
-      log_path: log_path,
-      branch_name: branch_name,
-      base_ref: base_ref,
-    ),
-  )
+  Ok(TaskRun(
+    task: task,
+    handle: handle,
+    worktree_path: worktree_path,
+    log_path: log_path,
+    branch_name: branch_name,
+    base_ref: base_ref,
+  ))
 }
 
 pub fn await_task(run: TaskRun) -> Result(types.ExecutionResult, String) {
@@ -83,9 +119,17 @@ pub fn await_task(run: TaskRun) -> Result(types.ExecutionResult, String) {
     True -> {
       use payload <- result.try(extract_json_payload(result.output))
       json.parse(payload, execution_decoder())
-      |> result.map_error(fn(_) { "Unable to decode execution output for task " <> run.task.id <> "." })
+      |> result.map_error(fn(_) {
+        "Unable to decode execution output for task " <> run.task.id <> "."
+      })
     }
-    False -> Error("Harness execution failed for task " <> run.task.id <> ". See " <> run.log_path)
+    False ->
+      Error(
+        "Harness execution failed for task "
+        <> run.task.id
+        <> ". See "
+        <> run.log_path,
+      )
   }
 }
 
@@ -97,9 +141,13 @@ pub fn repair_task(
   task: types.Task,
   verification_output: String,
 ) -> Result(types.ExecutionResult, String) {
-  let prompt_path = filepath.join(run_path, "logs/" <> task.id <> ".repair.prompt.md")
+  let prompt_path =
+    filepath.join(run_path, "logs/" <> task.id <> ".repair.prompt.md")
   let log_path = filepath.join(run_path, "logs/" <> task.id <> ".repair.log")
-  use _ <- result.try(write_file(prompt_path, repair_prompt(task, verification_output)))
+  use _ <- result.try(write_file(
+    prompt_path,
+    repair_prompt(task, verification_output),
+  ))
   let result =
     shell.run(
       executor_command(harness, repo_root, worktree_path, prompt_path),
@@ -111,20 +159,38 @@ pub fn repair_task(
     True -> {
       use payload <- result.try(extract_json_payload(result.output))
       json.parse(payload, execution_decoder())
-      |> result.map_error(fn(_) { "Unable to decode repair output for task " <> task.id <> "." })
+      |> result.map_error(fn(_) {
+        "Unable to decode repair output for task " <> task.id <> "."
+      })
     }
-    False -> Error("Repair harness failed for task " <> task.id <> ". See " <> log_path)
+    False ->
+      Error(
+        "Repair harness failed for task " <> task.id <> ". See " <> log_path,
+      )
   }
 }
 
-fn planner_command(harness: types.Harness, repo_root: String, prompt_path: String) -> String {
+fn planner_command(
+  harness: types.Harness,
+  repo_root: String,
+  prompt_path: String,
+) -> String {
   let fake_harness = system.get_env("NIGHT_SHIFT_FAKE_HARNESS")
   case fake_harness {
     "" -> real_command(harness, repo_root, prompt_path)
-    command ->
-      command
-      <> " plan "
-      <> shell.quote(prompt_path)
+    command -> command <> " plan " <> shell.quote(prompt_path)
+  }
+}
+
+fn plan_document_command(
+  harness: types.Harness,
+  repo_root: String,
+  prompt_path: String,
+) -> String {
+  let fake_harness = system.get_env("NIGHT_SHIFT_FAKE_HARNESS")
+  case fake_harness {
+    "" -> real_command(harness, repo_root, prompt_path)
+    command -> command <> " plan-doc " <> shell.quote(prompt_path)
   }
 }
 
@@ -160,7 +226,11 @@ fn executor_command(
   }
 }
 
-fn real_command(harness: types.Harness, repo_root: String, prompt_path: String) -> String {
+fn real_command(
+  harness: types.Harness,
+  repo_root: String,
+  prompt_path: String,
+) -> String {
   case harness {
     types.Codex ->
       "PROMPT=$(cat "
@@ -194,6 +264,51 @@ fn planner_prompt(brief_contents: String) -> String {
   <> "\n"
   <> "Brief:\n"
   <> brief_contents
+}
+
+fn planning_document_prompt(
+  notes_contents notes_contents: String,
+  existing_doc_contents existing_doc_contents: String,
+  doc_path doc_path: String,
+) -> String {
+  "You are Night Shift's planning harness.\n"
+  <> "Update the repository's cumulative Night Shift brief.\n"
+  <> "Inspect the repository as needed to understand the work being added.\n"
+  <> "Preserve valid prior brief content unless the new notes supersede it.\n"
+  <> "If the new notes conflict with the prior brief, the new notes win.\n"
+  <> "Stay within supplied scope and repository facts. Do not invent adjacent work.\n"
+  <> "Return only the full Markdown brief between the exact sentinel markers below.\n"
+  <> "The brief will later be passed directly to `night-shift start`.\n"
+  <> "Use exactly these top-level sections in order:\n"
+  <> "# Night Shift Brief\n"
+  <> "## Objective\n"
+  <> "## Scope\n"
+  <> "## Constraints\n"
+  <> "## Deliverables\n"
+  <> "## Acceptance Criteria\n"
+  <> "## Risks and Open Questions\n"
+  <> "\n"
+  <> start_marker
+  <> "\n"
+  <> "# Night Shift Brief\n"
+  <> "## Objective\n"
+  <> "...\n"
+  <> end_marker
+  <> "\n"
+  <> "\n"
+  <> "Destination path:\n"
+  <> doc_path
+  <> "\n"
+  <> "\n"
+  <> "Existing brief:\n"
+  <> case string.trim(existing_doc_contents) {
+    "" -> "(none)\n"
+    _ -> existing_doc_contents
+  }
+  <> "\n"
+  <> "\n"
+  <> "New notes:\n"
+  <> notes_contents
 }
 
 fn execution_prompt(task: types.Task) -> String {
@@ -244,18 +359,26 @@ fn render_lines(lines: List(String)) -> String {
   }
 }
 
-pub fn extract_json_payload(output: String) -> Result(String, String) {
+pub fn extract_payload(output: String) -> Result(String, String) {
   use #(_, after_start) <- result.try(
     string.split_once(output, start_marker)
-    |> result.map_error(fn(_) { "Harness output did not contain the start marker." })
+    |> result.map_error(fn(_) {
+      "Harness output did not contain the start marker."
+    }),
   )
 
   use #(payload, _) <- result.try(
     string.split_once(after_start, end_marker)
-    |> result.map_error(fn(_) { "Harness output did not contain the end marker." })
+    |> result.map_error(fn(_) {
+      "Harness output did not contain the end marker."
+    }),
   )
 
   Ok(string.trim(payload))
+}
+
+pub fn extract_json_payload(output: String) -> Result(String, String) {
+  extract_payload(output)
 }
 
 fn planner_decoder() -> decode.Decoder(List(types.Task)) {
@@ -271,22 +394,20 @@ fn planned_task_decoder() -> decode.Decoder(types.Task) {
   use acceptance <- decode.field("acceptance", decode.list(decode.string))
   use demo_plan <- decode.field("demo_plan", decode.list(decode.string))
   use parallel_safe <- decode.field("parallel_safe", decode.bool)
-  decode.success(
-    types.Task(
-      id: id,
-      title: title,
-      description: description,
-      dependencies: dependencies,
-      acceptance: acceptance,
-      demo_plan: demo_plan,
-      parallel_safe: parallel_safe,
-      state: types.Queued,
-      worktree_path: "",
-      branch_name: "",
-      pr_number: "",
-      summary: "",
-    ),
-  )
+  decode.success(types.Task(
+    id: id,
+    title: title,
+    description: description,
+    dependencies: dependencies,
+    acceptance: acceptance,
+    demo_plan: demo_plan,
+    parallel_safe: parallel_safe,
+    state: types.Queued,
+    worktree_path: "",
+    branch_name: "",
+    pr_number: "",
+    summary: "",
+  ))
 }
 
 fn execution_decoder() -> decode.Decoder(types.ExecutionResult) {
@@ -295,17 +416,18 @@ fn execution_decoder() -> decode.Decoder(types.ExecutionResult) {
   use files_touched <- decode.field("files_touched", decode.list(decode.string))
   use demo_evidence <- decode.field("demo_evidence", decode.list(decode.string))
   use pr <- decode.field("pr", pr_decoder())
-  use follow_up_tasks <- decode.field("follow_up_tasks", decode.list(follow_up_task_decoder()))
-  decode.success(
-    types.ExecutionResult(
-      status: status,
-      summary: summary,
-      files_touched: files_touched,
-      demo_evidence: demo_evidence,
-      pr: pr,
-      follow_up_tasks: follow_up_tasks,
-    ),
+  use follow_up_tasks <- decode.field(
+    "follow_up_tasks",
+    decode.list(follow_up_task_decoder()),
   )
+  decode.success(types.ExecutionResult(
+    status: status,
+    summary: summary,
+    files_touched: files_touched,
+    demo_evidence: demo_evidence,
+    pr: pr,
+    follow_up_tasks: follow_up_tasks,
+  ))
 }
 
 fn pr_decoder() -> decode.Decoder(types.PrPlan) {
@@ -313,7 +435,12 @@ fn pr_decoder() -> decode.Decoder(types.PrPlan) {
   use summary <- decode.field("summary", decode.string)
   use demo <- decode.field("demo", decode.list(decode.string))
   use risks <- decode.field("risks", decode.list(decode.string))
-  decode.success(types.PrPlan(title: title, summary: summary, demo: demo, risks: risks))
+  decode.success(types.PrPlan(
+    title: title,
+    summary: summary,
+    demo: demo,
+    risks: risks,
+  ))
 }
 
 fn follow_up_task_decoder() -> decode.Decoder(types.FollowUpTask) {
@@ -324,17 +451,15 @@ fn follow_up_task_decoder() -> decode.Decoder(types.FollowUpTask) {
   use acceptance <- decode.field("acceptance", decode.list(decode.string))
   use demo_plan <- decode.field("demo_plan", decode.list(decode.string))
   use parallel_safe <- decode.field("parallel_safe", decode.bool)
-  decode.success(
-    types.FollowUpTask(
-      id: id,
-      title: title,
-      description: description,
-      dependencies: dependencies,
-      acceptance: acceptance,
-      demo_plan: demo_plan,
-      parallel_safe: parallel_safe,
-    ),
-  )
+  decode.success(types.FollowUpTask(
+    id: id,
+    title: title,
+    description: description,
+    dependencies: dependencies,
+    acceptance: acceptance,
+    demo_plan: demo_plan,
+    parallel_safe: parallel_safe,
+  ))
 }
 
 fn execution_status_decoder() -> decode.Decoder(types.TaskState) {
@@ -351,13 +476,52 @@ fn execution_status_decoder() -> decode.Decoder(types.TaskState) {
 fn write_file(path: String, contents: String) -> Result(Nil, String) {
   case simplifile.write(contents, to: path) {
     Ok(Nil) -> Ok(Nil)
-    Error(error) -> Error("Unable to write " <> path <> ": " <> simplifile.describe_error(error))
+    Error(error) ->
+      Error(
+        "Unable to write " <> path <> ": " <> simplifile.describe_error(error),
+      )
+  }
+}
+
+fn create_directory(path: String) -> Result(Nil, String) {
+  case simplifile.create_directory_all(path) {
+    Ok(Nil) -> Ok(Nil)
+    Error(error) ->
+      Error(
+        "Unable to create directory "
+        <> path
+        <> ": "
+        <> simplifile.describe_error(error),
+      )
   }
 }
 
 fn read_file(path: String) -> Result(String, String) {
   case simplifile.read(path) {
     Ok(contents) -> Ok(contents)
-    Error(error) -> Error("Unable to read " <> path <> ": " <> simplifile.describe_error(error))
+    Error(error) ->
+      Error(
+        "Unable to read " <> path <> ": " <> simplifile.describe_error(error),
+      )
   }
+}
+
+fn read_existing_file_or_empty(path: String) -> String {
+  case simplifile.read(path) {
+    Ok(contents) -> contents
+    Error(_) -> ""
+  }
+}
+
+fn planning_artifact_path(repo_root: String) -> String {
+  filepath.join(
+    filepath.join(journal.repo_state_path_for(repo_root), "plans"),
+    system.timestamp()
+      |> string.replace(each: ":", with: "-")
+      |> string.replace(each: "T", with: "_")
+      |> string.replace(each: "+", with: "_")
+      |> string.replace(each: "Z", with: "")
+      |> string.append("-")
+      |> string.append(system.unique_id()),
+  )
 }

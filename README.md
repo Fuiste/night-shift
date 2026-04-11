@@ -60,18 +60,57 @@ commands = []
 The CLI surface for v1 is:
 
 - `night-shift --demo [--ui]`
-- `night-shift start --brief <path> [--harness <codex|cursor>] [--max-workers <n>] [--ui]`
+- `night-shift plan --notes <path> [--doc <path>] [--harness <codex|cursor>]`
+- `night-shift start [--brief <path>] [--harness <codex|cursor>] [--max-workers <n>] [--ui]`
 - `night-shift status [--run <id>|latest]`
 - `night-shift report [--run <id>|latest]`
 - `night-shift resume [--run <id>|latest] [--ui]`
 - `night-shift review [--harness <codex|cursor>]`
+
+## Planning Brief
+
+Night Shift can build up a cumulative execution brief throughout the day:
+
+```sh
+night-shift plan --notes notes/morning.md
+night-shift plan --notes notes/afternoon.md
+```
+
+By default this updates repo-root `night-shift.md`. Each run reads the existing
+brief if present, combines it with the new notes, and asks the selected harness
+to rewrite the full document in place.
+
+The brief is whole-file managed by Night Shift and always targets this outline:
+
+- `# Night Shift Brief`
+- `## Objective`
+- `## Scope`
+- `## Constraints`
+- `## Deliverables`
+- `## Acceptance Criteria`
+- `## Risks and Open Questions`
+
+You can override the destination file with `--doc <path>`, but the default
+`night-shift.md` is also the happy-path execution input.
+
+## Starting Work
+
+If `night-shift.md` exists at the repo root, the simplest kickoff flow is:
+
+```sh
+night-shift start
+```
+
+Passing `--brief <path>` still works and overrides the default brief location.
+If no default brief exists, Night Shift tells you to create one with
+`night-shift plan --notes <path>` or pass `--brief`.
 
 ## Dashboard
 
 Night Shift can launch a local read-only dashboard while a run is active:
 
 ```sh
-night-shift start --brief brief.md --ui
+night-shift start --ui
 night-shift resume --run latest --ui
 ```
 
@@ -164,6 +203,7 @@ fixture harness by setting `NIGHT_SHIFT_FAKE_HARNESS` to an executable that
 implements:
 
 - `fake-harness plan <prompt-file>`
+- `fake-harness plan-doc <prompt-file>`
 - `fake-harness execute <prompt-file> <worktree> <repo-root>`
 
 ## Delivery Model

@@ -39,16 +39,30 @@ pub fn open_or_update_pr(
     branch_name
     |> string.replace(each: "/", with: "-")
     |> string.replace(each: ":", with: "-")
-  let body_path = filepath.join(run_path, "logs/" <> safe_branch_name <> ".pr.md")
+  let body_path =
+    filepath.join(run_path, "logs/" <> safe_branch_name <> ".pr.md")
   use _ <- result.try(write_file(body_path, body))
 
   case find_pull_request(cwd, branch_name, log_path) {
     Ok(pull_request) -> {
-      use _ <- result.try(edit_pull_request(cwd, pull_request.number, title, body_path, log_path))
+      use _ <- result.try(edit_pull_request(
+        cwd,
+        pull_request.number,
+        title,
+        body_path,
+        log_path,
+      ))
       find_pull_request(cwd, branch_name, log_path)
     }
     Error(_) -> {
-      use _ <- result.try(create_pull_request(cwd, branch_name, base_ref, title, body_path, log_path))
+      use _ <- result.try(create_pull_request(
+        cwd,
+        branch_name,
+        base_ref,
+        title,
+        body_path,
+        log_path,
+      ))
       find_pull_request(cwd, branch_name, log_path)
     }
   }
@@ -68,7 +82,11 @@ pub fn list_night_shift_prs(
   )
 }
 
-pub fn review_item(cwd: String, pr_number: Int, log_path: String) -> Result(ReviewWorkItem, String) {
+pub fn review_item(
+  cwd: String,
+  pr_number: Int,
+  log_path: String,
+) -> Result(ReviewWorkItem, String) {
   let command =
     "gh pr view "
     <> int.to_string(pr_number)
@@ -83,7 +101,10 @@ pub fn review_item(cwd: String, pr_number: Int, log_path: String) -> Result(Revi
   }
 }
 
-fn list_pull_requests(cwd: String, log_path: String) -> Result(List(PullRequest), String) {
+fn list_pull_requests(
+  cwd: String,
+  log_path: String,
+) -> Result(List(PullRequest), String) {
   let result =
     shell.run(
       "gh pr list --state open --limit 100 --json number,url,headRefName,title",
@@ -99,11 +120,17 @@ fn list_pull_requests(cwd: String, log_path: String) -> Result(List(PullRequest)
   }
 }
 
-fn find_pull_request(cwd: String, branch_name: String, log_path: String) -> Result(PullRequest, String) {
+fn find_pull_request(
+  cwd: String,
+  branch_name: String,
+  log_path: String,
+) -> Result(PullRequest, String) {
   use prs <- result.try(list_pull_requests(cwd, log_path))
   prs
   |> list.find(fn(pr) { pr.head_ref_name == branch_name })
-  |> result.map_error(fn(_) { "No existing pull request for branch " <> branch_name })
+  |> result.map_error(fn(_) {
+    "No existing pull request for branch " <> branch_name
+  })
 }
 
 fn create_pull_request(
@@ -158,14 +185,12 @@ fn pull_request_decoder() -> decode.Decoder(PullRequest) {
   use url <- decode.field("url", decode.string)
   use head_ref_name <- decode.field("headRefName", decode.string)
   use title <- decode.field("title", decode.string)
-  decode.success(
-    PullRequest(
-      number: number,
-      url: url,
-      head_ref_name: head_ref_name,
-      title: title,
-    ),
-  )
+  decode.success(PullRequest(
+    number: number,
+    url: url,
+    head_ref_name: head_ref_name,
+    title: title,
+  ))
 }
 
 fn review_work_item_decoder() -> decode.Decoder(ReviewWorkItem) {
@@ -176,22 +201,23 @@ fn review_work_item_decoder() -> decode.Decoder(ReviewWorkItem) {
   use base_ref_name <- decode.field("baseRefName", decode.string)
   use url <- decode.field("url", decode.string)
   use review_decision <- decode.field("reviewDecision", decode.string)
-  use failing_checks <- decode.field("statusCheckRollup", decode.list(check_decoder()))
+  use failing_checks <- decode.field(
+    "statusCheckRollup",
+    decode.list(check_decoder()),
+  )
   use reviews <- decode.field("reviews", decode.list(review_decoder()))
   use comments <- decode.field("comments", decode.list(comment_decoder()))
-  decode.success(
-    ReviewWorkItem(
-      number: number,
-      title: title,
-      body: body,
-      head_ref_name: head_ref_name,
-      base_ref_name: base_ref_name,
-      url: url,
-      review_decision: review_decision,
-      failing_checks: list.filter_map(failing_checks, identity),
-      review_comments: list.append(reviews, comments),
-    ),
-  )
+  decode.success(ReviewWorkItem(
+    number: number,
+    title: title,
+    body: body,
+    head_ref_name: head_ref_name,
+    base_ref_name: base_ref_name,
+    url: url,
+    review_decision: review_decision,
+    failing_checks: list.filter_map(failing_checks, identity),
+    review_comments: list.append(reviews, comments),
+  ))
 }
 
 fn check_decoder() -> decode.Decoder(Result(String, Nil)) {
@@ -222,6 +248,9 @@ fn identity(value: Result(String, Nil)) -> Result(String, Nil) {
 fn write_file(path: String, contents: String) -> Result(Nil, String) {
   case simplifile.write(contents, to: path) {
     Ok(Nil) -> Ok(Nil)
-    Error(error) -> Error("Unable to write " <> path <> ": " <> simplifile.describe_error(error))
+    Error(error) ->
+      Error(
+        "Unable to write " <> path <> ": " <> simplifile.describe_error(error),
+      )
   }
 }
