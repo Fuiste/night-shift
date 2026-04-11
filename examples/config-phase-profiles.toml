@@ -26,8 +26,5 @@ reasoning = "high"
 provider = "cursor"
 model = "sonnet-4"
 
-[profiles.reviewer.provider_overrides]
-mode = "plan"
-
 [verification]
-commands = []
+commands = ["gleam test"]

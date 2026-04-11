@@ -1,5 +1,6 @@
 import gleam/int
 import gleam/list
+import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import night_shift/types
@@ -8,6 +9,8 @@ import simplifile
 type Section {
   RootSection
   VerificationSection
+  ProfileSection(name: String)
+  ProfileOverridesSection(name: String)
 }
 
 type ParseState {
@@ -51,8 +54,31 @@ fn parse_line(line: String, state: ParseState) -> Result(ParseState, String) {
 
   case cleaned {
     "" -> Ok(state)
-    "[verification]" -> Ok(ParseState(state.config, VerificationSection))
-    _ -> parse_assignment(cleaned, state)
+    _ ->
+      case string.starts_with(cleaned, "["), string.ends_with(cleaned, "]") {
+        True, True ->
+          parse_section(cleaned)
+          |> result.map(fn(section) { ParseState(state.config, section) })
+        _, _ -> parse_assignment(cleaned, state)
+      }
+  }
+}
+
+fn parse_section(section: String) -> Result(Section, String) {
+  let inner =
+    section
+    |> string.drop_start(1)
+    |> string.drop_end(1)
+
+  case inner {
+    "verification" -> Ok(VerificationSection)
+    _ ->
+      case string.split(inner, ".") {
+        ["profiles", name] -> Ok(ProfileSection(name))
+        ["profiles", name, "provider_overrides"] ->
+          Ok(ProfileOverridesSection(name))
+        _ -> Error("Unsupported config section: " <> section)
+      }
   }
 }
 
@@ -88,17 +114,29 @@ fn apply_value(
         state.section,
       ))
 
-    RootSection, "default_harness" -> {
-      use harness <- result.try(
-        parse_string(raw_value)
-        |> types.harness_from_string,
-      )
-
+    RootSection, "default_profile" ->
       Ok(ParseState(
-        types.Config(..config, default_harness: harness),
+        types.Config(..config, default_profile: parse_string(raw_value)),
         state.section,
       ))
-    }
+
+    RootSection, "planning_profile" ->
+      Ok(ParseState(
+        types.Config(..config, planning_profile: parse_string(raw_value)),
+        state.section,
+      ))
+
+    RootSection, "execution_profile" ->
+      Ok(ParseState(
+        types.Config(..config, execution_profile: parse_string(raw_value)),
+        state.section,
+      ))
+
+    RootSection, "review_profile" ->
+      Ok(ParseState(
+        types.Config(..config, review_profile: parse_string(raw_value)),
+        state.section,
+      ))
 
     RootSection, "max_workers" -> {
       use worker_count <- result.try(parse_int(raw_value))
@@ -134,7 +172,103 @@ fn apply_value(
         state.section,
       ))
 
+    ProfileSection(profile_name), "provider" -> {
+      use provider <- result.try(
+        parse_string(raw_value)
+        |> types.provider_from_string,
+      )
+      Ok(ParseState(
+        upsert_profile(state.config, profile_name, fn(profile) {
+          types.AgentProfile(..profile, provider: provider)
+        }),
+        state.section,
+      ))
+    }
+
+    ProfileSection(profile_name), "model" ->
+      Ok(ParseState(
+        upsert_profile(state.config, profile_name, fn(profile) {
+          types.AgentProfile(..profile, model: parse_optional_string(raw_value))
+        }),
+        state.section,
+      ))
+
+    ProfileSection(profile_name), "reasoning" -> {
+      use reasoning <- result.try(parse_optional_reasoning(raw_value))
+      Ok(ParseState(
+        upsert_profile(state.config, profile_name, fn(profile) {
+          types.AgentProfile(..profile, reasoning: reasoning)
+        }),
+        state.section,
+      ))
+    }
+
+    ProfileOverridesSection(profile_name), override_key ->
+      Ok(ParseState(
+        upsert_profile(state.config, profile_name, fn(profile) {
+          types.AgentProfile(
+            ..profile,
+            provider_overrides: upsert_provider_override(
+              profile.provider_overrides,
+              override_key,
+              parse_string(raw_value),
+            ),
+          )
+        }),
+        state.section,
+      ))
+
     _, _ -> Error("Unsupported config key: " <> key)
+  }
+}
+
+fn upsert_profile(
+  config: types.Config,
+  profile_name: String,
+  update: fn(types.AgentProfile) -> types.AgentProfile,
+) -> types.Config {
+  let updated_profiles =
+    upsert_profile_in_list(config.profiles, profile_name, update)
+  types.Config(..config, profiles: updated_profiles)
+}
+
+fn upsert_profile_in_list(
+  profiles: List(types.AgentProfile),
+  profile_name: String,
+  update: fn(types.AgentProfile) -> types.AgentProfile,
+) -> List(types.AgentProfile) {
+  case profiles {
+    [] -> [update(blank_profile(profile_name))]
+    [profile, ..rest] if profile.name == profile_name -> [
+      update(profile),
+      ..rest
+    ]
+    [profile, ..rest] -> [
+      profile,
+      ..upsert_profile_in_list(rest, profile_name, update)
+    ]
+  }
+}
+
+fn blank_profile(name: String) -> types.AgentProfile {
+  types.AgentProfile(..types.default_agent_profile(), name: name)
+}
+
+fn upsert_provider_override(
+  overrides: List(types.ProviderOverride),
+  key: String,
+  value: String,
+) -> List(types.ProviderOverride) {
+  case overrides {
+    [] -> [types.ProviderOverride(key: key, value: value)]
+    [override, ..rest] if override.key == key -> [
+      types.ProviderOverride(key: key, value: value),
+      ..rest
+    ]
+    [override, ..rest] -> [
+      override,
+      ..upsert_provider_override(rest, key, value)
+    ]
   }
 }
 
@@ -159,10 +293,28 @@ fn parse_notifier_values(
   }
 }
 
+fn parse_optional_reasoning(
+  raw_value: String,
+) -> Result(Option(types.ReasoningLevel), String) {
+  case parse_string(raw_value) {
+    "" -> Ok(None)
+    value ->
+      types.reasoning_from_string(value)
+      |> result.map(fn(reasoning) { Some(reasoning) })
+  }
+}
+
 fn parse_int(raw_value: String) -> Result(Int, String) {
   case int.parse(raw_value) {
     Ok(value) -> Ok(value)
     Error(Nil) -> Error("Expected integer but received: " <> raw_value)
+  }
+}
+
+fn parse_optional_string(raw_value: String) -> Option(String) {
+  case parse_string(raw_value) {
+    "" -> None
+    value -> Some(value)
   }
 }
 

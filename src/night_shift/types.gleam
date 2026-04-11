@@ -1,26 +1,109 @@
 import gleam/list
-import gleam/option.{type Option}
+import gleam/option.{type Option, None}
 
 pub const default_brief_filename = "night-shift.md"
 
-pub type Harness {
+pub type Provider {
   Codex
   Cursor
 }
 
-pub fn harness_from_string(value: String) -> Result(Harness, String) {
+pub fn provider_from_string(value: String) -> Result(Provider, String) {
   case value {
     "codex" -> Ok(Codex)
     "cursor" -> Ok(Cursor)
-    _ -> Error("Unsupported harness: " <> value)
+    _ -> Error("Unsupported provider: " <> value)
   }
 }
 
-pub fn harness_to_string(harness: Harness) -> String {
-  case harness {
+pub fn provider_to_string(provider: Provider) -> String {
+  case provider {
     Codex -> "codex"
     Cursor -> "cursor"
   }
+}
+
+pub type ReasoningLevel {
+  Low
+  Medium
+  High
+  ExtraHigh
+}
+
+pub fn reasoning_from_string(value: String) -> Result(ReasoningLevel, String) {
+  case value {
+    "low" -> Ok(Low)
+    "medium" -> Ok(Medium)
+    "high" -> Ok(High)
+    "xhigh" -> Ok(ExtraHigh)
+    _ -> Error("Unsupported reasoning level: " <> value)
+  }
+}
+
+pub fn reasoning_to_string(reasoning: ReasoningLevel) -> String {
+  case reasoning {
+    Low -> "low"
+    Medium -> "medium"
+    High -> "high"
+    ExtraHigh -> "xhigh"
+  }
+}
+
+pub type ProviderOverride {
+  ProviderOverride(key: String, value: String)
+}
+
+pub type AgentProfile {
+  AgentProfile(
+    name: String,
+    provider: Provider,
+    model: Option(String),
+    reasoning: Option(ReasoningLevel),
+    provider_overrides: List(ProviderOverride),
+  )
+}
+
+pub fn default_agent_profile() -> AgentProfile {
+  AgentProfile(
+    name: "default",
+    provider: Codex,
+    model: None,
+    reasoning: None,
+    provider_overrides: [],
+  )
+}
+
+pub type ResolvedAgentConfig {
+  ResolvedAgentConfig(
+    profile_name: String,
+    provider: Provider,
+    model: Option(String),
+    reasoning: Option(ReasoningLevel),
+    provider_overrides: List(ProviderOverride),
+  )
+}
+
+pub fn resolved_agent_from_provider(provider: Provider) -> ResolvedAgentConfig {
+  ResolvedAgentConfig(
+    profile_name: "legacy",
+    provider: provider,
+    model: None,
+    reasoning: None,
+    provider_overrides: [],
+  )
+}
+
+pub type AgentOverrides {
+  AgentOverrides(
+    profile: Option(String),
+    provider: Option(Provider),
+    model: Option(String),
+    reasoning: Option(ReasoningLevel),
+  )
+}
+
+pub fn empty_agent_overrides() -> AgentOverrides {
+  AgentOverrides(profile: None, provider: None, model: None, reasoning: None)
 }
 
 pub type NotifierName {
@@ -157,7 +240,8 @@ pub type RunRecord {
     events_path: String,
     report_path: String,
     lock_path: String,
-    harness: Harness,
+    planning_agent: ResolvedAgentConfig,
+    execution_agent: ResolvedAgentConfig,
     max_workers: Int,
     status: RunStatus,
     created_at: String,
@@ -174,7 +258,11 @@ pub type RunSelector {
 pub type Config {
   Config(
     base_branch: String,
-    default_harness: Harness,
+    default_profile: String,
+    planning_profile: String,
+    execution_profile: String,
+    review_profile: String,
+    profiles: List(AgentProfile),
     max_workers: Int,
     branch_prefix: String,
     pr_title_prefix: String,
@@ -186,7 +274,11 @@ pub type Config {
 pub fn default_config() -> Config {
   Config(
     base_branch: "main",
-    default_harness: Codex,
+    default_profile: "default",
+    planning_profile: "",
+    execution_profile: "",
+    review_profile: "",
+    profiles: [default_agent_profile()],
     max_workers: 4,
     branch_prefix: "night-shift",
     pr_title_prefix: "[night-shift]",
@@ -198,19 +290,19 @@ pub fn default_config() -> Config {
 pub type Command {
   Start(
     brief_path: Option(String),
-    harness: Result(Harness, Nil),
+    agent_overrides: AgentOverrides,
     max_workers: Result(Int, Nil),
     ui_enabled: Bool,
   )
   Plan(
     notes_path: String,
     doc_path: Option(String),
-    harness: Result(Harness, Nil),
+    agent_overrides: AgentOverrides,
   )
   Status(run: RunSelector)
   Report(run: RunSelector)
   Resume(run: RunSelector, ui_enabled: Bool)
-  Review(harness: Result(Harness, Nil))
+  Review(agent_overrides: AgentOverrides)
   Demo(ui_enabled: Bool)
   Help
 }

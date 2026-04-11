@@ -4,13 +4,14 @@ import gleam/option.{None, Some}
 import gleam/result
 import gleam/string
 import gleeunit
+import night_shift/agent_config
 import night_shift/cli
 import night_shift/config
 import night_shift/dashboard
 import night_shift/demo
-import night_shift/harness
 import night_shift/journal
 import night_shift/orchestrator
+import night_shift/provider
 import night_shift/shell
 import night_shift/system
 import night_shift/types
@@ -21,34 +22,39 @@ pub fn main() -> Nil {
 }
 
 pub fn parse_start_command_test() {
-  let assert Ok(types.Start(Some("brief.md"), Ok(types.Cursor), Ok(2), False)) =
+  let assert Ok(types.Start(Some("brief.md"), agent_overrides, Ok(2), False)) =
     cli.parse([
       "start",
       "--brief",
       "brief.md",
-      "--harness",
+      "--provider",
       "cursor",
       "--max-workers",
       "2",
     ])
+
+  assert agent_overrides.provider == Some(types.Cursor)
 }
 
 pub fn parse_plan_command_test() {
-  let assert Ok(types.Plan("notes.md", None, Error(Nil))) =
+  let assert Ok(types.Plan("notes.md", None, agent_overrides)) =
     cli.parse(["plan", "--notes", "notes.md"])
+  assert agent_overrides == types.empty_agent_overrides()
 }
 
-pub fn parse_plan_command_with_doc_and_harness_test() {
-  let assert Ok(types.Plan("notes.md", Some("custom.md"), Ok(types.Cursor))) =
+pub fn parse_plan_command_with_doc_and_provider_test() {
+  let assert Ok(types.Plan("notes.md", Some("custom.md"), agent_overrides)) =
     cli.parse([
       "plan",
       "--notes",
       "notes.md",
       "--doc",
       "custom.md",
-      "--harness",
+      "--provider",
       "cursor",
     ])
+
+  assert agent_overrides.provider == Some(types.Cursor)
 }
 
 pub fn parse_status_defaults_to_latest_test() {
@@ -56,13 +62,15 @@ pub fn parse_status_defaults_to_latest_test() {
 }
 
 pub fn parse_start_command_with_ui_test() {
-  let assert Ok(types.Start(Some("brief.md"), Error(Nil), Error(Nil), True)) =
+  let assert Ok(types.Start(Some("brief.md"), agent_overrides, Error(Nil), True)) =
     cli.parse(["start", "--brief", "brief.md", "--ui"])
+  assert agent_overrides == types.empty_agent_overrides()
 }
 
 pub fn parse_start_command_without_brief_test() {
-  let assert Ok(types.Start(None, Error(Nil), Error(Nil), False)) =
+  let assert Ok(types.Start(None, agent_overrides, Error(Nil), False)) =
     cli.parse(["start"])
+  assert agent_overrides == types.empty_agent_overrides()
 }
 
 pub fn parse_plan_requires_notes_test() {
@@ -88,6 +96,51 @@ pub fn parse_default_config_values_test() {
     config.parse("base_branch = \"develop\"\nmax_workers = 2")
   assert parsed.base_branch == "develop"
   assert parsed.max_workers == 2
+  assert parsed.default_profile == "default"
+}
+
+pub fn parse_profile_config_test() {
+  let source =
+    "default_profile = \"default\"\n"
+    <> "planning_profile = \"planner\"\n"
+    <> "[profiles.planner]\n"
+    <> "provider = \"codex\"\n"
+    <> "model = \"gpt-5.4-mini\"\n"
+    <> "reasoning = \"medium\"\n"
+    <> "[profiles.planner.provider_overrides]\n"
+    <> "mode = \"plan\"\n"
+
+  let assert Ok(parsed) = config.parse(source)
+  let assert [default_profile, planner, ..] = parsed.profiles
+
+  assert parsed.planning_profile == "planner"
+  assert default_profile.name == "default"
+  assert planner.name == "planner"
+  assert planner.provider == types.Codex
+  assert planner.model == Some("gpt-5.4-mini")
+  assert planner.reasoning == Some(types.Medium)
+  assert planner.provider_overrides
+    == [types.ProviderOverride(key: "mode", value: "plan")]
+}
+
+pub fn default_profile_is_phase_fallback_test() {
+  let source =
+    "default_profile = \"reviewer\"\n"
+    <> "[profiles.reviewer]\n"
+    <> "provider = \"cursor\"\n"
+
+  let assert Ok(parsed) = config.parse(source)
+  let assert Ok(planning_agent) =
+    agent_config.resolve_plan_agent(parsed, types.empty_agent_overrides())
+  let assert Ok(#(_planning_agent, execution_agent)) =
+    agent_config.resolve_start_agents(parsed, types.empty_agent_overrides())
+  let assert Ok(review_agent) =
+    agent_config.resolve_review_agent(parsed, types.empty_agent_overrides())
+
+  assert planning_agent.profile_name == "reviewer"
+  assert planning_agent.provider == types.Cursor
+  assert execution_agent.profile_name == "reviewer"
+  assert review_agent.profile_name == "reviewer"
 }
 
 pub fn parse_notifiers_and_verification_commands_test() {
@@ -114,7 +167,7 @@ pub fn start_run_creates_report_and_state_test() {
   let assert Ok(_) = simplifile.create_directory_all(base_dir)
   let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
 
-  let assert Ok(run) = journal.start_run(repo_root, brief_path, types.Codex, 2)
+  let assert Ok(run) = start_run(repo_root, brief_path, types.Codex, 2)
   let assert Ok(report_contents) = simplifile.read(run.report_path)
   let assert Ok(state_contents) = simplifile.read(run.state_path)
 
@@ -138,11 +191,11 @@ pub fn latest_run_round_trip_test() {
     simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
   let assert Ok(_) = simplifile.create_directory_all(base_dir)
   let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
-  let assert Ok(run) = journal.start_run(repo_root, brief_path, types.Cursor, 1)
+  let assert Ok(run) = start_run(repo_root, brief_path, types.Cursor, 1)
   let assert Ok(#(saved_run, _)) = journal.load(repo_root, types.LatestRun)
 
   assert saved_run.run_id == run.run_id
-  assert saved_run.harness == types.Cursor
+  assert saved_run.execution_agent.provider == types.Cursor
   assert result.is_ok(simplifile.delete(file_or_dir_at: base_dir))
 }
 
@@ -163,11 +216,9 @@ pub fn list_runs_returns_newest_first_test() {
   let assert Ok(_) = simplifile.write("# Brief A", to: brief_a)
   let assert Ok(_) = simplifile.write("# Brief B", to: brief_b)
 
-  let assert Ok(first_run) =
-    journal.start_run(repo_root, brief_a, types.Codex, 1)
+  let assert Ok(first_run) = start_run(repo_root, brief_a, types.Codex, 1)
   let assert Ok(_) = journal.mark_status(first_run, types.RunCompleted, "done")
-  let assert Ok(second_run) =
-    journal.start_run(repo_root, brief_b, types.Cursor, 2)
+  let assert Ok(second_run) = start_run(repo_root, brief_b, types.Cursor, 2)
   let assert Ok(runs) = journal.list_runs(repo_root)
 
   let assert [latest, previous, ..] = runs
@@ -191,7 +242,7 @@ pub fn dashboard_payloads_include_run_data_test() {
     simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
   let assert Ok(_) = simplifile.create_directory_all(base_dir)
   let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
-  let assert Ok(run) = journal.start_run(repo_root, brief_path, types.Codex, 1)
+  let assert Ok(run) = start_run(repo_root, brief_path, types.Codex, 1)
   let assert Ok(updated_run) =
     journal.append_event(
       run,
@@ -227,7 +278,7 @@ pub fn dashboard_server_serves_run_data_test() {
     simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
   let assert Ok(_) = simplifile.create_directory_all(base_dir)
   let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
-  let assert Ok(run) = journal.start_run(repo_root, brief_path, types.Codex, 1)
+  let assert Ok(run) = start_run(repo_root, brief_path, types.Codex, 1)
   let assert Ok(session) = dashboard.start_view_session(repo_root, run.run_id)
 
   system.sleep(100)
@@ -255,7 +306,7 @@ pub fn extract_json_payload_test() {
     <> "{\"tasks\":[]}\n"
     <> "NIGHT_SHIFT_RESULT_END\n"
 
-  let assert Ok(payload) = harness.extract_json_payload(output)
+  let assert Ok(payload) = provider.extract_json_payload(output)
   assert payload == "{\"tasks\":[]}"
 }
 
@@ -268,7 +319,7 @@ pub fn extract_payload_markdown_test() {
     <> "Capture the work.\n"
     <> "NIGHT_SHIFT_RESULT_END\n"
 
-  let assert Ok(payload) = harness.extract_payload(output)
+  let assert Ok(payload) = provider.extract_payload(output)
   assert string.contains(does: payload, contain: "# Night Shift Brief")
 }
 
@@ -287,7 +338,7 @@ pub fn extract_payload_uses_last_result_block_test() {
     <> "Real brief.\n"
     <> "NIGHT_SHIFT_RESULT_END\n"
 
-  let assert Ok(payload) = harness.extract_payload(output)
+  let assert Ok(payload) = provider.extract_payload(output)
   assert string.contains(does: payload, contain: "Real brief.")
   assert !string.contains(does: payload, contain: "...\n")
 }
@@ -303,7 +354,7 @@ pub fn extract_json_payload_uses_last_result_block_test() {
     <> "{\"tasks\":[{\"id\":\"real-task\"}]}\n"
     <> "NIGHT_SHIFT_RESULT_END\n"
 
-  let assert Ok(payload) = harness.extract_json_payload(output)
+  let assert Ok(payload) = provider.extract_json_payload(output)
   assert payload == "{\"tasks\":[{\"id\":\"real-task\"}]}"
 }
 
@@ -315,7 +366,7 @@ pub fn extract_payload_from_codex_json_stream_test() {
     <> "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"command_execution\",\"command\":\"/bin/zsh -lc pwd\",\"aggregated_output\":\"/tmp/demo\\n\",\"exit_code\":0,\"status\":\"completed\"}}\n"
     <> "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_2\",\"type\":\"agent_message\",\"text\":\"NIGHT_SHIFT_RESULT_START\\n{\\\"status\\\":\\\"completed\\\",\\\"summary\\\":\\\"ok\\\",\\\"files_touched\\\":[],\\\"demo_evidence\\\":[],\\\"pr\\\":{\\\"title\\\":\\\"t\\\",\\\"summary\\\":\\\"s\\\",\\\"demo\\\":[],\\\"risks\\\":[]},\\\"follow_up_tasks\\\":[]}\\nNIGHT_SHIFT_RESULT_END\"}}\n"
 
-  let assert Ok(payload) = harness.extract_payload(output)
+  let assert Ok(payload) = provider.extract_payload(output)
   assert string.contains(does: payload, contain: "\"status\":\"completed\"")
   assert string.contains(does: payload, contain: "\"summary\":\"ok\"")
 }
@@ -328,7 +379,7 @@ pub fn extract_payload_from_cursor_stream_json_test() {
     <> "{\"type\":\"tool_call\",\"subtype\":\"completed\",\"call_id\":\"tool_1\",\"tool_call\":{\"shellToolCall\":{\"args\":{\"command\":\"pwd\"},\"result\":{\"success\":{\"exitCode\":0,\"interleavedOutput\":\"/tmp/demo\\n\"}},\"description\":\"Print current working directory\"}},\"session_id\":\"demo\"}\n"
     <> "{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"`pwd` returned `/tmp/demo`.\\n\\nNIGHT_SHIFT_RESULT_START {\\\"status\\\":\\\"completed\\\",\\\"summary\\\":\\\"ok\\\",\\\"files_touched\\\":[],\\\"demo_evidence\\\":[],\\\"pr\\\":{\\\"title\\\":\\\"t\\\",\\\"summary\\\":\\\"s\\\",\\\"demo\\\":[],\\\"risks\\\":[]},\\\"follow_up_tasks\\\":[]} NIGHT_SHIFT_RESULT_END\",\"session_id\":\"demo\"}\n"
 
-  let assert Ok(payload) = harness.extract_payload(output)
+  let assert Ok(payload) = provider.extract_payload(output)
   assert string.contains(does: payload, contain: "\"status\":\"completed\"")
   assert string.contains(does: payload, contain: "\"summary\":\"ok\"")
 }
@@ -370,7 +421,7 @@ pub fn plan_command_non_tty_streaming_stays_plain_test() {
 
   let result =
     run_local_cli_command(
-      ["plan", "--notes", notes_path, "--harness", "codex"],
+      ["plan", "--notes", notes_path, "--provider", "codex"],
       repo_root,
       filepath.join(base_dir, "plan.log"),
     )
@@ -385,7 +436,7 @@ pub fn plan_command_non_tty_streaming_stays_plain_test() {
   assert string.contains(does: output, contain: "Updated planning brief:")
   assert !string.contains(
     does: output,
-    contain: "You are Night Shift's planning harness.",
+    contain: "You are Night Shift's planning provider.",
   )
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
@@ -428,7 +479,7 @@ pub fn plan_command_tty_streaming_restores_alt_screen_test() {
     <> local_demo_command()
     <> " plan --notes "
     <> shell.quote(notes_path)
-    <> " --harness codex"
+    <> " --provider codex"
   let output =
     shell.run(
       "script -q /dev/null sh -lc " <> shell.quote(command),
@@ -457,7 +508,7 @@ pub fn plan_document_handles_large_structured_json_line_test() {
   let fake_codex = filepath.join(bin_dir, "codex")
   let state_home = filepath.join(base_dir, "state")
   let old_path = system.get_env("PATH")
-  let old_fake_harness = system.get_env("NIGHT_SHIFT_FAKE_HARNESS")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
   let old_state_home = system.get_env("XDG_STATE_HOME")
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
@@ -478,15 +529,20 @@ pub fn plan_document_handles_large_structured_json_line_test() {
       to: notes_path,
     )
 
-  system.unset_env("NIGHT_SHIFT_FAKE_HARNESS")
+  system.unset_env("NIGHT_SHIFT_FAKE_PROVIDER")
   system.set_env("PATH", bin_dir <> ":" <> old_path)
   system.set_env("XDG_STATE_HOME", state_home)
 
   let result =
-    harness.plan_document(types.Codex, repo_root, notes_path, doc_path)
+    provider.plan_document(
+      types.resolved_agent_from_provider(types.Codex),
+      repo_root,
+      notes_path,
+      doc_path,
+    )
 
   system.set_env("PATH", old_path)
-  restore_env("NIGHT_SHIFT_FAKE_HARNESS", old_fake_harness)
+  restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
   restore_env("XDG_STATE_HOME", old_state_home)
 
   let assert Ok(#(document, _artifact_path)) = result
@@ -557,11 +613,11 @@ pub fn plan_command_creates_and_updates_default_brief_test() {
   let bin_dir = filepath.join(base_dir, "bin")
   let notes_a = filepath.join(base_dir, "notes-a.md")
   let notes_b = filepath.join(base_dir, "notes-b.md")
-  let fake_harness = filepath.join(bin_dir, "fake-harness")
+  let fake_provider = filepath.join(bin_dir, "fake-provider")
   let state_home = filepath.join(base_dir, "state")
   let default_doc = filepath.join(repo_root, types.default_brief_filename)
   let old_demo_command = system.get_env("NIGHT_SHIFT_DEMO_COMMAND")
-  let old_fake_harness = system.get_env("NIGHT_SHIFT_FAKE_HARNESS")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
   let old_state_home = system.get_env("XDG_STATE_HOME")
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
@@ -569,10 +625,10 @@ pub fn plan_command_creates_and_updates_default_brief_test() {
     simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
   let assert Ok(_) = simplifile.create_directory_all(repo_root)
   let assert Ok(_) = simplifile.create_directory_all(bin_dir)
-  let assert Ok(_) = write_fake_harness(fake_harness)
+  let assert Ok(_) = write_fake_provider(fake_provider)
   let _ =
     shell.run(
-      "chmod +x " <> shell.quote(fake_harness),
+      "chmod +x " <> shell.quote(fake_provider),
       base_dir,
       filepath.join(base_dir, "chmod.log"),
     )
@@ -588,7 +644,7 @@ pub fn plan_command_creates_and_updates_default_brief_test() {
   let assert Ok(_) = simplifile.write("Beta task\n", to: notes_b)
 
   system.set_env("NIGHT_SHIFT_DEMO_COMMAND", local_demo_command())
-  system.set_env("NIGHT_SHIFT_FAKE_HARNESS", fake_harness)
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
   system.set_env("XDG_STATE_HOME", state_home)
 
   let first_result =
@@ -605,7 +661,7 @@ pub fn plan_command_creates_and_updates_default_brief_test() {
     )
 
   system.set_env("NIGHT_SHIFT_DEMO_COMMAND", old_demo_command)
-  system.set_env("NIGHT_SHIFT_FAKE_HARNESS", old_fake_harness)
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
   system.set_env("XDG_STATE_HOME", old_state_home)
 
   let assert Ok(first_output) = first_result
@@ -623,7 +679,7 @@ pub fn plan_command_creates_and_updates_default_brief_test() {
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
 
-pub fn plan_command_leaves_existing_doc_on_failed_harness_test() {
+pub fn plan_command_leaves_existing_doc_on_failed_provider_test() {
   let unique = system.unique_id()
   let base_dir =
     absolute_path(filepath.join(
@@ -633,11 +689,11 @@ pub fn plan_command_leaves_existing_doc_on_failed_harness_test() {
   let repo_root = filepath.join(base_dir, "repo")
   let bin_dir = filepath.join(base_dir, "bin")
   let notes_path = filepath.join(base_dir, "notes.md")
-  let fake_harness = filepath.join(bin_dir, "fake-harness")
+  let fake_provider = filepath.join(bin_dir, "fake-provider")
   let state_home = filepath.join(base_dir, "state")
   let default_doc = filepath.join(repo_root, types.default_brief_filename)
   let old_demo_command = system.get_env("NIGHT_SHIFT_DEMO_COMMAND")
-  let old_fake_harness = system.get_env("NIGHT_SHIFT_FAKE_HARNESS")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
   let old_state_home = system.get_env("XDG_STATE_HOME")
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
@@ -645,10 +701,10 @@ pub fn plan_command_leaves_existing_doc_on_failed_harness_test() {
     simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
   let assert Ok(_) = simplifile.create_directory_all(repo_root)
   let assert Ok(_) = simplifile.create_directory_all(bin_dir)
-  let assert Ok(_) = write_fake_harness(fake_harness)
+  let assert Ok(_) = write_fake_provider(fake_provider)
   let _ =
     shell.run(
-      "chmod +x " <> shell.quote(fake_harness),
+      "chmod +x " <> shell.quote(fake_provider),
       base_dir,
       filepath.join(base_dir, "chmod.log"),
     )
@@ -664,7 +720,7 @@ pub fn plan_command_leaves_existing_doc_on_failed_harness_test() {
   let assert Ok(_) = simplifile.write("fail-plan-doc-exit\n", to: notes_path)
 
   system.set_env("NIGHT_SHIFT_DEMO_COMMAND", local_demo_command())
-  system.set_env("NIGHT_SHIFT_FAKE_HARNESS", fake_harness)
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
   system.set_env("XDG_STATE_HOME", state_home)
 
   let result =
@@ -675,13 +731,13 @@ pub fn plan_command_leaves_existing_doc_on_failed_harness_test() {
     )
 
   system.set_env("NIGHT_SHIFT_DEMO_COMMAND", old_demo_command)
-  system.set_env("NIGHT_SHIFT_FAKE_HARNESS", old_fake_harness)
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
   system.set_env("XDG_STATE_HOME", old_state_home)
 
   let assert Ok(output) = result
   let assert Ok(document) = simplifile.read(default_doc)
 
-  assert string.contains(does: output, contain: "Planning harness failed.")
+  assert string.contains(does: output, contain: "Planning provider failed.")
   assert document == "Keep this brief.\n"
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
@@ -698,9 +754,9 @@ pub fn plan_document_reports_missing_markers_test() {
   let bin_dir = filepath.join(base_dir, "bin")
   let notes_path = filepath.join(base_dir, "notes.md")
   let doc_path = filepath.join(repo_root, types.default_brief_filename)
-  let fake_harness = filepath.join(bin_dir, "fake-harness")
+  let fake_provider = filepath.join(bin_dir, "fake-provider")
   let state_home = filepath.join(base_dir, "state")
-  let old_fake_harness = system.get_env("NIGHT_SHIFT_FAKE_HARNESS")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
   let old_state_home = system.get_env("XDG_STATE_HOME")
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
@@ -708,23 +764,28 @@ pub fn plan_document_reports_missing_markers_test() {
     simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
   let assert Ok(_) = simplifile.create_directory_all(repo_root)
   let assert Ok(_) = simplifile.create_directory_all(bin_dir)
-  let assert Ok(_) = write_fake_harness(fake_harness)
+  let assert Ok(_) = write_fake_provider(fake_provider)
   let _ =
     shell.run(
-      "chmod +x " <> shell.quote(fake_harness),
+      "chmod +x " <> shell.quote(fake_provider),
       base_dir,
       filepath.join(base_dir, "chmod.log"),
     )
   let assert Ok(_) =
     simplifile.write("fail-plan-doc-no-marker\n", to: notes_path)
 
-  system.set_env("NIGHT_SHIFT_FAKE_HARNESS", fake_harness)
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
   system.set_env("XDG_STATE_HOME", state_home)
 
   let result =
-    harness.plan_document(types.Codex, repo_root, notes_path, doc_path)
+    provider.plan_document(
+      agent_for(types.Codex),
+      repo_root,
+      notes_path,
+      doc_path,
+    )
 
-  system.set_env("NIGHT_SHIFT_FAKE_HARNESS", old_fake_harness)
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
   system.set_env("XDG_STATE_HOME", old_state_home)
 
   let assert Error(message) = result
@@ -744,9 +805,9 @@ pub fn plan_document_reports_empty_payload_test() {
   let bin_dir = filepath.join(base_dir, "bin")
   let notes_path = filepath.join(base_dir, "notes.md")
   let doc_path = filepath.join(repo_root, types.default_brief_filename)
-  let fake_harness = filepath.join(bin_dir, "fake-harness")
+  let fake_provider = filepath.join(bin_dir, "fake-provider")
   let state_home = filepath.join(base_dir, "state")
-  let old_fake_harness = system.get_env("NIGHT_SHIFT_FAKE_HARNESS")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
   let old_state_home = system.get_env("XDG_STATE_HOME")
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
@@ -754,22 +815,27 @@ pub fn plan_document_reports_empty_payload_test() {
     simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
   let assert Ok(_) = simplifile.create_directory_all(repo_root)
   let assert Ok(_) = simplifile.create_directory_all(bin_dir)
-  let assert Ok(_) = write_fake_harness(fake_harness)
+  let assert Ok(_) = write_fake_provider(fake_provider)
   let _ =
     shell.run(
-      "chmod +x " <> shell.quote(fake_harness),
+      "chmod +x " <> shell.quote(fake_provider),
       base_dir,
       filepath.join(base_dir, "chmod.log"),
     )
   let assert Ok(_) = simplifile.write("fail-plan-doc-empty\n", to: notes_path)
 
-  system.set_env("NIGHT_SHIFT_FAKE_HARNESS", fake_harness)
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
   system.set_env("XDG_STATE_HOME", state_home)
 
   let result =
-    harness.plan_document(types.Codex, repo_root, notes_path, doc_path)
+    provider.plan_document(
+      agent_for(types.Codex),
+      repo_root,
+      notes_path,
+      doc_path,
+    )
 
-  system.set_env("NIGHT_SHIFT_FAKE_HARNESS", old_fake_harness)
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
   system.set_env("XDG_STATE_HOME", old_state_home)
 
   let assert Error(message) = result
@@ -792,7 +858,7 @@ pub fn codex_plan_document_reads_prompt_from_stdin_test() {
   let fake_codex = filepath.join(bin_dir, "codex")
   let state_home = filepath.join(base_dir, "state")
   let old_path = system.get_env("PATH")
-  let old_fake_harness = system.get_env("NIGHT_SHIFT_FAKE_HARNESS")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
   let old_state_home = system.get_env("XDG_STATE_HOME")
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
@@ -810,15 +876,20 @@ pub fn codex_plan_document_reads_prompt_from_stdin_test() {
   let assert Ok(_) =
     simplifile.write("# Notes\n- add a hello script\n", to: notes_path)
 
-  system.unset_env("NIGHT_SHIFT_FAKE_HARNESS")
+  system.unset_env("NIGHT_SHIFT_FAKE_PROVIDER")
   system.set_env("PATH", bin_dir <> ":" <> old_path)
   system.set_env("XDG_STATE_HOME", state_home)
 
   let result =
-    harness.plan_document(types.Codex, repo_root, notes_path, doc_path)
+    provider.plan_document(
+      agent_for(types.Codex),
+      repo_root,
+      notes_path,
+      doc_path,
+    )
 
   system.set_env("PATH", old_path)
-  restore_env("NIGHT_SHIFT_FAKE_HARNESS", old_fake_harness)
+  restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
   restore_env("XDG_STATE_HOME", old_state_home)
 
   let assert Ok(#(document, _artifact_path)) = result
@@ -834,7 +905,7 @@ pub fn repo_state_path_is_stable_test() {
     == journal.repo_state_path_for(repo_root)
 }
 
-pub fn orchestrator_start_runs_fake_harness_test() {
+pub fn orchestrator_start_runs_fake_provider_test() {
   let unique = system.unique_id()
   let base_dir =
     absolute_path(filepath.join(
@@ -845,11 +916,11 @@ pub fn orchestrator_start_runs_fake_harness_test() {
   let remote_root = filepath.join(base_dir, "remote.git")
   let bin_dir = filepath.join(base_dir, "bin")
   let brief_path = filepath.join(base_dir, "brief.md")
-  let fake_harness = filepath.join(bin_dir, "fake-harness")
+  let fake_provider = filepath.join(bin_dir, "fake-provider")
   let fake_gh = filepath.join(bin_dir, "gh")
   let state_home = filepath.join(base_dir, "state")
   let old_path = system.get_env("PATH")
-  let old_fake_harness = system.get_env("NIGHT_SHIFT_FAKE_HARNESS")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
   let old_state_home = system.get_env("XDG_STATE_HOME")
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
@@ -858,11 +929,11 @@ pub fn orchestrator_start_runs_fake_harness_test() {
   let assert Ok(_) = simplifile.create_directory_all(base_dir)
   let assert Ok(_) = simplifile.create_directory_all(bin_dir)
   let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
-  let assert Ok(_) = write_fake_harness(fake_harness)
+  let assert Ok(_) = write_fake_provider(fake_provider)
   let assert Ok(_) = write_fake_gh(fake_gh)
   let _ =
     shell.run(
-      "chmod +x " <> shell.quote(fake_harness) <> " " <> shell.quote(fake_gh),
+      "chmod +x " <> shell.quote(fake_provider) <> " " <> shell.quote(fake_gh),
       base_dir,
       filepath.join(base_dir, "chmod.log"),
     )
@@ -911,7 +982,7 @@ pub fn orchestrator_start_runs_fake_harness_test() {
       filepath.join(base_dir, "push-main.log"),
     )
 
-  system.set_env("NIGHT_SHIFT_FAKE_HARNESS", fake_harness)
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
   system.set_env("PATH", bin_dir <> ":" <> old_path)
   system.set_env("XDG_STATE_HOME", state_home)
 
@@ -922,11 +993,11 @@ pub fn orchestrator_start_runs_fake_harness_test() {
       max_workers: 1,
     )
 
-  let assert Ok(run) = journal.start_run(repo_root, brief_path, types.Codex, 1)
+  let assert Ok(run) = start_run(repo_root, brief_path, types.Codex, 1)
   let assert Ok(completed_run) = orchestrator.start(run, config)
 
   system.set_env("PATH", old_path)
-  system.set_env("NIGHT_SHIFT_FAKE_HARNESS", old_fake_harness)
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
   system.set_env("XDG_STATE_HOME", old_state_home)
 
   let completed_task =
@@ -965,11 +1036,11 @@ pub fn dashboard_start_session_tracks_completed_run_test() {
   let remote_root = filepath.join(base_dir, "remote.git")
   let bin_dir = filepath.join(base_dir, "bin")
   let brief_path = filepath.join(base_dir, "brief.md")
-  let fake_harness = filepath.join(bin_dir, "fake-harness")
+  let fake_provider = filepath.join(bin_dir, "fake-provider")
   let fake_gh = filepath.join(bin_dir, "gh")
   let state_home = filepath.join(base_dir, "state")
   let old_path = system.get_env("PATH")
-  let old_fake_harness = system.get_env("NIGHT_SHIFT_FAKE_HARNESS")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
   let old_state_home = system.get_env("XDG_STATE_HOME")
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
@@ -978,11 +1049,11 @@ pub fn dashboard_start_session_tracks_completed_run_test() {
   let assert Ok(_) = simplifile.create_directory_all(base_dir)
   let assert Ok(_) = simplifile.create_directory_all(bin_dir)
   let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
-  let assert Ok(_) = write_fake_harness(fake_harness)
+  let assert Ok(_) = write_fake_provider(fake_provider)
   let assert Ok(_) = write_fake_gh(fake_gh)
   let _ =
     shell.run(
-      "chmod +x " <> shell.quote(fake_harness) <> " " <> shell.quote(fake_gh),
+      "chmod +x " <> shell.quote(fake_provider) <> " " <> shell.quote(fake_gh),
       base_dir,
       filepath.join(base_dir, "chmod.log"),
     )
@@ -1031,7 +1102,7 @@ pub fn dashboard_start_session_tracks_completed_run_test() {
       filepath.join(base_dir, "push-main.log"),
     )
 
-  system.set_env("NIGHT_SHIFT_FAKE_HARNESS", fake_harness)
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
   system.set_env("PATH", bin_dir <> ":" <> old_path)
   system.set_env("XDG_STATE_HOME", state_home)
 
@@ -1042,13 +1113,13 @@ pub fn dashboard_start_session_tracks_completed_run_test() {
       max_workers: 1,
     )
 
-  let assert Ok(run) = journal.start_run(repo_root, brief_path, types.Codex, 1)
+  let assert Ok(run) = start_run(repo_root, brief_path, types.Codex, 1)
   let assert Ok(session) =
     dashboard.start_start_session(repo_root, run.run_id, run, config)
   let final_payload = wait_for_run_payload(session.url, run.run_id, 20)
 
   system.set_env("PATH", old_path)
-  system.set_env("NIGHT_SHIFT_FAKE_HARNESS", old_fake_harness)
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
   system.set_env("XDG_STATE_HOME", old_state_home)
 
   assert string.contains(
@@ -1167,7 +1238,26 @@ fn run_local_cli_command(
   }
 }
 
-fn write_fake_harness(path: String) -> Result(Nil, simplifile.FileError) {
+fn agent_for(provider_name: types.Provider) -> types.ResolvedAgentConfig {
+  types.resolved_agent_from_provider(provider_name)
+}
+
+fn start_run(
+  repo_root: String,
+  brief_path: String,
+  provider_name: types.Provider,
+  max_workers: Int,
+) -> Result(types.RunRecord, String) {
+  journal.start_run(
+    repo_root,
+    brief_path,
+    agent_for(provider_name),
+    agent_for(provider_name),
+    max_workers,
+  )
+}
+
+fn write_fake_provider(path: String) -> Result(Nil, simplifile.FileError) {
   simplifile.write(
     "#!/bin/sh\n"
       <> "MODE=$1\n"
@@ -1195,8 +1285,8 @@ fn write_fake_harness(path: String) -> Result(Nil, simplifile.FileError) {
       <> "  printf 'planning-doc\\nNIGHT_SHIFT_RESULT_START\\n# Night Shift Brief\\n## Objective\\nPrepare the first work item for execution.\\n## Scope\\n- Alpha task\\n## Constraints\\n- Keep the brief cumulative.\\n## Deliverables\\n- Alpha implementation plan\\n## Acceptance Criteria\\n- Alpha task documented\\n## Risks and Open Questions\\n- None.\\nNIGHT_SHIFT_RESULT_END\\n'\n"
       <> "  exit 0\n"
       <> "else\n"
-      <> "  echo 'completed by fake harness' > IMPLEMENTED.md\n"
-      <> "  printf 'execution\\nNIGHT_SHIFT_RESULT_START\\n{\"status\":\"completed\",\"summary\":\"Implemented demo task\",\"files_touched\":[\"IMPLEMENTED.md\"],\"demo_evidence\":[\"IMPLEMENTED.md created\"],\"pr\":{\"title\":\"[night-shift] Implement demo task\",\"summary\":\"Implemented the fake harness task.\",\"demo\":[\"IMPLEMENTED.md created\"],\"risks\":[]},\"follow_up_tasks\":[]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "  echo 'completed by fake provider' > IMPLEMENTED.md\n"
+      <> "  printf 'execution\\nNIGHT_SHIFT_RESULT_START\\n{\"status\":\"completed\",\"summary\":\"Implemented demo task\",\"files_touched\":[\"IMPLEMENTED.md\"],\"demo_evidence\":[\"IMPLEMENTED.md created\"],\"pr\":{\"title\":\"[night-shift] Implement demo task\",\"summary\":\"Implemented the fake provider task.\",\"demo\":[\"IMPLEMENTED.md created\"],\"risks\":[]},\"follow_up_tasks\":[]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
       <> "fi\n",
     to: path,
   )
@@ -1222,6 +1312,12 @@ fn write_fake_codex(path: String) -> Result(Nil, simplifile.FileError) {
       <> "      shift 2\n"
       <> "      ;;\n"
       <> "    -C)\n"
+      <> "      shift 2\n"
+      <> "      ;;\n"
+      <> "    -m)\n"
+      <> "      shift 2\n"
+      <> "      ;;\n"
+      <> "    -c)\n"
       <> "      shift 2\n"
       <> "      ;;\n"
       <> "    -)\n"
