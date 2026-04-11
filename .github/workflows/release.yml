@@ -1,0 +1,144 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  metadata:
+    name: release-metadata
+    runs-on: ubuntu-24.04
+    outputs:
+      release_tag: ${{ steps.vars.outputs.release_tag }}
+      package_version: ${{ steps.vars.outputs.package_version }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Derive release metadata
+        id: vars
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' gleam.toml | head -n 1)
+          if [[ -z "$version" ]]; then
+            echo "Failed to read version from gleam.toml" >&2
+            exit 1
+          fi
+
+          timestamp=$(date -u +%Y%m%d%H%M%S)
+          short_sha=${GITHUB_SHA::7}
+          release_tag="nightly-v${version}-${timestamp}-${short_sha}"
+
+          echo "package_version=$version" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: build-${{ matrix.target }}
+    needs: metadata
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: linux-x64
+          - runner: macos-15
+            target: macos-arm64
+          - runner: macos-15-intel
+            target: macos-x64
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Erlang and Gleam
+        uses: erlef/setup-beam@v1
+        with:
+          version-file: .tool-versions
+          version-type: strict
+
+      - name: Run test suite
+        run: gleam test
+
+      - name: Build release bundle
+        run: ./scripts/build_release_bundle.sh "${{ needs.metadata.outputs.release_tag }}" "${{ matrix.target }}"
+
+      - name: Smoke test packaged bundle
+        id: smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          release_tag="${{ needs.metadata.outputs.release_tag }}"
+          target="${{ matrix.target }}"
+          bundle_name="night-shift-${release_tag}-${target}"
+          artifact_dir="build/releases/${release_tag}/${target}"
+          archive_path="${artifact_dir}/${bundle_name}.tar.gz"
+          checksum_path="${archive_path}.sha256"
+          unpack_dir="${artifact_dir}/smoke"
+
+          rm -rf "$unpack_dir"
+          mkdir -p "$unpack_dir"
+          tar -C "$unpack_dir" -xzf "$archive_path"
+
+          "$unpack_dir/$bundle_name/night-shift" help
+
+          if [[ "$target" == "linux-x64" ]]; then
+            "$unpack_dir/$bundle_name/night-shift" --demo
+          fi
+
+          echo "archive_path=$archive_path" >> "$GITHUB_OUTPUT"
+          echo "checksum_path=$checksum_path" >> "$GITHUB_OUTPUT"
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: |
+            ${{ steps.smoke.outputs.archive_path }}
+            ${{ steps.smoke.outputs.checksum_path }}
+          if-no-files-found: error
+
+  publish:
+    name: publish-prerelease
+    needs:
+      - metadata
+      - build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@v5
+        with:
+          path: dist
+
+      - name: Create GitHub prerelease
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          release_tag="${{ needs.metadata.outputs.release_tag }}"
+          mapfile -t files < <(find dist -type f \( -name '*.tar.gz' -o -name '*.sha256' \) | sort)
+
+          if [[ "${#files[@]}" -eq 0 ]]; then
+            echo "No release assets were downloaded" >&2
+            exit 1
+          fi
+
+          gh release create "$release_tag" "${files[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Night Shift $release_tag" \
+            --generate-notes \
+            --prerelease
