@@ -90,18 +90,26 @@ run_internal(Command, Cwd, LogPath, StreamMeta) ->
                 {args, ["-lc", binary_to_list(Command)]}
             ]
         ),
-    collect(Port, LogPath, [], undefined, false, StreamMeta1, #{parser_failed => false}).
+    collect(
+        Port,
+        LogPath,
+        [],
+        undefined,
+        false,
+        StreamMeta1,
+        #{parser_failed => false, pending_line => <<>>}
+    ).
 
 collect(Port, LogPath, Acc, Status, SeenEof, StreamMeta, ParserState) ->
     receive
         {Port, {data, {eol, Line}}} ->
             Data = <<Line/binary, "\n">>,
             maybe_append_raw_log(LogPath, StreamMeta, Data),
-            NextParserState = maybe_stream(Data, StreamMeta, ParserState),
+            NextParserState = maybe_stream(Data, true, StreamMeta, ParserState),
             collect(Port, LogPath, [Data | Acc], Status, SeenEof, StreamMeta, NextParserState);
         {Port, {data, {noeol, Line}}} ->
             maybe_append_raw_log(LogPath, StreamMeta, Line),
-            NextParserState = maybe_stream(Line, StreamMeta, ParserState),
+            NextParserState = maybe_stream(Line, false, StreamMeta, ParserState),
             collect(Port, LogPath, [Line | Acc], Status, SeenEof, StreamMeta, NextParserState);
         {Port, eof} ->
             maybe_finish(Port, LogPath, Acc, Status, true, StreamMeta, ParserState);
@@ -113,11 +121,26 @@ maybe_finish(_Port, _LogPath, Acc, Status, true, StreamMeta, _ParserState) when 
     maybe_complete_stream(StreamMeta, Status),
     {Status, iolist_to_binary(lists:reverse(Acc))};
 maybe_finish(Port, LogPath, Acc, Status, SeenEof, StreamMeta, ParserState) ->
-    collect(Port, LogPath, Acc, Status, SeenEof, StreamMeta, ParserState).
+    FlushedState = flush_pending_line(StreamMeta, ParserState),
+    collect(Port, LogPath, Acc, Status, SeenEof, StreamMeta, FlushedState).
 
-maybe_stream(_Data, none, ParserState) ->
+maybe_stream(_Data, _CompleteLine, none, ParserState) ->
     ParserState;
-maybe_stream(Data, StreamMeta, ParserState) ->
+maybe_stream(Data, CompleteLine, StreamMeta, ParserState) ->
+    Pending = maps:get(pending_line, ParserState, <<>>),
+    Combined = <<Pending/binary, Data/binary>>,
+    case CompleteLine of
+        false ->
+            maps:put(pending_line, Combined, ParserState);
+        true ->
+            process_complete_line(
+                Combined,
+                StreamMeta,
+                maps:put(pending_line, <<>>, ParserState)
+            )
+    end.
+
+process_complete_line(Data, StreamMeta, ParserState) ->
     LogPath = maps:get(log_path, StreamMeta),
     case maps:get(parser_failed, ParserState, false) of
         true ->
@@ -126,6 +149,19 @@ maybe_stream(Data, StreamMeta, ParserState) ->
             ParserState;
         false ->
             process_structured_line(Data, StreamMeta, ParserState)
+    end.
+
+flush_pending_line(none, ParserState) ->
+    maps:put(pending_line, <<>>, ParserState);
+flush_pending_line(StreamMeta, ParserState) ->
+    case maps:get(pending_line, ParserState, <<>>) of
+        <<>> -> ParserState;
+        Pending ->
+            process_complete_line(
+                Pending,
+                StreamMeta,
+                maps:put(pending_line, <<>>, ParserState)
+            )
     end.
 
 process_structured_line(Data, StreamMeta, ParserState) ->
@@ -414,6 +450,7 @@ renderer_loop() ->
             color => color_enabled(),
             width => terminal_width(),
             streams => #{},
+            finished => [],
             focus => undefined,
             pinned => undefined,
             render_pending => false,
@@ -448,13 +485,24 @@ renderer_loop(State) ->
             State3 = maybe_print_plain_register(State2, Stream),
             renderer_loop(schedule_render(State3));
         {stream_event, Id, _StreamMeta, Event} ->
-            State1 = update_stream_state(State, Id, Event),
-            State2 = maybe_print_plain_event(State1, Id, Event),
-            renderer_loop(schedule_render(State2));
+            State1 = maybe_print_plain_event_before_update(State, Id, Event),
+            State2 = update_stream_state(State1, Id, Event),
+            State3 = maybe_print_plain_event_after_update(State2, Id, Event),
+            renderer_loop(schedule_render(State3));
         render ->
             State1 = render_now(State#{render_pending := false}),
             renderer_loop(State1)
     end.
+
+maybe_print_plain_event_before_update(State, Id, Event = #{kind := stream_done}) ->
+    maybe_print_plain_event(State, Id, Event);
+maybe_print_plain_event_before_update(State, _Id, _Event) ->
+    State.
+
+maybe_print_plain_event_after_update(State, _Id, #{kind := stream_done}) ->
+    State;
+maybe_print_plain_event_after_update(State, Id, Event) ->
+    maybe_print_plain_event(State, Id, Event).
 
 maybe_print_plain_register(State = #{mode := plain}, Stream) ->
     safe_put_chars(format_plain_prefix(Stream) ++ " " ++ binary_to_list(<<"prompt hidden; see ", (maps:get(prompt_path, Stream))/binary, "\n">>)),
@@ -524,14 +572,22 @@ update_stream_state(State, Id, Event) ->
             Streams1 =
                 case maps:get(kind, Event) of
                     stream_done ->
-                        maps:put(Id, Stream1, Streams);
+                        maps:remove(Id, Streams);
                     _ ->
                         maps:put(Id, Stream1, Streams)
                 end,
-            Focus = next_focus(State, Id, Event),
-            Pinned = next_pinned(State, Id, Event),
+            Finished1 =
+                case maps:get(kind, Event) of
+                    stream_done ->
+                        [finished_stream(Stream1) | maps:get(finished, State)];
+                    _ ->
+                        maps:get(finished, State)
+                end,
+            Focus = ensure_focus(next_focus(State, Id, Event), Streams1),
+            Pinned = ensure_pinned(next_pinned(State, Id, Event), Streams1),
             State#{
                 streams := Streams1,
+                finished := Finished1,
                 focus := Focus,
                 pinned := Pinned
             }
@@ -639,13 +695,8 @@ next_focus(_State, Id, #{kind := error}) ->
 next_focus(State, _Id, _Event) ->
     maps:get(focus, State).
 
-next_pinned(_State, Id, #{kind := stream_done, status := failed}) ->
-    Id;
-next_pinned(State, Id, #{kind := stream_done, status := completed}) ->
-    case maps:get(pinned, State) of
-        Id -> undefined;
-        Value -> Value
-    end;
+next_pinned(_State, _Id, #{kind := stream_done}) ->
+    undefined;
 next_pinned(State, _Id, _Event) ->
     maps:get(pinned, State).
 
@@ -668,7 +719,8 @@ render_now(State) ->
     case maps:size(maps:get(streams, State)) of
         0 ->
             State1 = maybe_leave_alt(State),
-            State1;
+            print_finished_summary(State1),
+            State1#{finished := []};
         _ ->
             State
     end.
@@ -737,6 +789,14 @@ render_task_card(Stream, Width) ->
 
 sort_streams(A, B) ->
     maps:get(updated_at, A) >= maps:get(updated_at, B).
+
+finished_stream(Stream) ->
+    #{
+        label => maps:get(label, Stream),
+        status => maps:get(status, Stream),
+        summary => maps:get(last_activity, Stream),
+        log_path => maps:get(log_path, Stream)
+    }.
 
 render_transcript(undefined, Width) ->
     iolist_to_binary(string:join(wrap_lines(<<"Waiting for a focused stream...">>, Width), "\n"));
@@ -807,6 +867,28 @@ maybe_leave_alt(State = #{alt_active := true}) ->
 maybe_leave_alt(State) ->
     State.
 
+print_finished_summary(#{mode := plain}) ->
+    ok;
+print_finished_summary(State) ->
+    Finished = lists:reverse(maps:get(finished, State)),
+    case Finished of
+        [] ->
+            ok;
+        _ ->
+            Lines =
+                lists:map(
+                    fun(FinishedStream) ->
+                        Label = maps:get(label, FinishedStream),
+                        Status = atom_to_binary(maps:get(status, FinishedStream), utf8),
+                        Summary = maps:get(summary, FinishedStream),
+                        LogPath = maps:get(log_path, FinishedStream),
+                        <<"[", Label/binary, "] ", Status/binary, ": ", Summary/binary, " (", LogPath/binary, ")\n">>
+                    end,
+                    Finished
+                ),
+            safe_put_chars(Lines)
+    end.
+
 ui_mode() ->
     case os:getenv("NIGHT_SHIFT_STREAM_UI") of
         "plain" -> plain;
@@ -823,8 +905,12 @@ ui_mode() ->
     end.
 
 stdout_is_tty() ->
-    case os:cmd("test -t 1 && printf true || printf false") of
-        "true" -> true;
+    case catch begin
+        ok = prim_tty:load(),
+        prim_tty:isatty(stdout)
+    end of
+        true -> true;
+        false -> false;
         _ -> false
     end.
 
@@ -957,3 +1043,38 @@ maybe_append_raw_log(_LogPath, _StreamMeta, _Data) ->
 safe_put_chars(Data) ->
     _ = catch io:put_chars(Data),
     ok.
+
+ensure_focus(undefined, Streams) ->
+    latest_stream_id(Streams);
+ensure_focus(Id, Streams) ->
+    case maps:is_key(Id, Streams) of
+        true -> Id;
+        false -> latest_stream_id(Streams)
+    end.
+
+ensure_pinned(undefined, _Streams) ->
+    undefined;
+ensure_pinned(Id, Streams) ->
+    case maps:is_key(Id, Streams) of
+        true -> Id;
+        false -> undefined
+    end.
+
+latest_stream_id(Streams) ->
+    case maps:values(Streams) of
+        [] ->
+            undefined;
+        [First | Rest] ->
+            Latest =
+                lists:foldl(
+                    fun(Stream, Current) ->
+                        case maps:get(updated_at, Stream) >= maps:get(updated_at, Current) of
+                            true -> Stream;
+                            false -> Current
+                        end
+                    end,
+                    First,
+                    Rest
+                ),
+            maps:get(id, Latest)
+    end.

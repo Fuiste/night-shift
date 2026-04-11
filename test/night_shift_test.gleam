@@ -391,6 +391,112 @@ pub fn plan_command_non_tty_streaming_stays_plain_test() {
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
 
+pub fn plan_command_tty_streaming_restores_alt_screen_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-tui-stream-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let notes_path = filepath.join(base_dir, "notes.md")
+  let fake_codex = filepath.join(bin_dir, "codex")
+  let state_home = filepath.join(base_dir, "state")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = write_fake_streaming_codex(fake_codex)
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_codex),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+  let assert Ok(_) =
+    simplifile.write("# Notes\n- polish the stream UI\n", to: notes_path)
+
+  let command =
+    "PATH="
+    <> shell.quote(bin_dir <> ":" <> system.get_env("PATH"))
+    <> " XDG_STATE_HOME="
+    <> shell.quote(state_home)
+    <> " NIGHT_SHIFT_STREAM_UI=tui "
+    <> local_demo_command()
+    <> " plan --notes "
+    <> shell.quote(notes_path)
+    <> " --harness codex"
+  let output =
+    shell.run(
+      "script -q /dev/null sh -lc " <> shell.quote(command),
+      repo_root,
+      filepath.join(base_dir, "tty-plan.log"),
+    )
+
+  let assert True = shell.succeeded(output)
+  assert string.contains(does: output.output, contain: "\u{001b}[?1049h")
+  assert string.contains(does: output.output, contain: "\u{001b}[?1049l")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn plan_document_handles_large_structured_json_line_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-large-stream-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let notes_path = filepath.join(base_dir, "notes.md")
+  let doc_path = filepath.join(repo_root, types.default_brief_filename)
+  let fake_codex = filepath.join(bin_dir, "codex")
+  let state_home = filepath.join(base_dir, "state")
+  let old_path = system.get_env("PATH")
+  let old_fake_harness = system.get_env("NIGHT_SHIFT_FAKE_HARNESS")
+  let old_state_home = system.get_env("XDG_STATE_HOME")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = write_large_streaming_codex(fake_codex)
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_codex),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+  let assert Ok(_) =
+    simplifile.write(
+      "# Notes\n- capture a very large brief section\n",
+      to: notes_path,
+    )
+
+  system.unset_env("NIGHT_SHIFT_FAKE_HARNESS")
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("XDG_STATE_HOME", state_home)
+
+  let result =
+    harness.plan_document(types.Codex, repo_root, notes_path, doc_path)
+
+  system.set_env("PATH", old_path)
+  restore_env("NIGHT_SHIFT_FAKE_HARNESS", old_fake_harness)
+  restore_env("XDG_STATE_HOME", old_state_home)
+
+  let assert Ok(#(document, _artifact_path)) = result
+  assert string.contains(does: document, contain: "# Night Shift Brief")
+  assert string.contains(does: document, contain: "Large streaming payload")
+  assert string.contains(does: document, contain: "AAAAAAAAAAAAAAAA")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
 pub fn start_without_brief_requires_default_doc_test() {
   let unique = system.unique_id()
   let base_dir =
@@ -1189,6 +1295,47 @@ fn write_fake_streaming_codex(path: String) -> Result(Nil, simplifile.FileError)
       <> "      fi\n"
       <> "      printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"fallback\"}'\n"
       <> "      printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"NIGHT_SHIFT_RESULT_START\\n{\\\"status\\\":\\\"completed\\\",\\\"summary\\\":\\\"ok\\\",\\\"files_touched\\\":[],\\\"demo_evidence\\\":[],\\\"pr\\\":{\\\"title\\\":\\\"t\\\",\\\"summary\\\":\\\"s\\\",\\\"demo\\\":[],\\\"risks\\\":[]},\\\"follow_up_tasks\\\":[]}\\nNIGHT_SHIFT_RESULT_END\"}}'\n"
+      <> "      exit 0\n"
+      <> "      ;;\n"
+      <> "    *)\n"
+      <> "      printf 'expected prompt on stdin, got positional argument: %s\\n' \"$1\" >&2\n"
+      <> "      exit 7\n"
+      <> "      ;;\n"
+      <> "  esac\n"
+      <> "done\n"
+      <> "printf 'missing stdin prompt sentinel\\n' >&2\n"
+      <> "exit 8\n",
+    to: path,
+  )
+}
+
+fn write_large_streaming_codex(
+  path: String,
+) -> Result(Nil, simplifile.FileError) {
+  simplifile.write(
+    "#!/bin/sh\n"
+      <> "if [ \"$1\" != \"exec\" ]; then\n"
+      <> "  printf 'unexpected codex subcommand: %s\\n' \"$1\" >&2\n"
+      <> "  exit 1\n"
+      <> "fi\n"
+      <> "shift\n"
+      <> "while [ $# -gt 0 ]; do\n"
+      <> "  case \"$1\" in\n"
+      <> "    --skip-git-repo-check|--dangerously-bypass-approvals-and-sandbox|--json)\n"
+      <> "      shift\n"
+      <> "      ;;\n"
+      <> "    --color|--sandbox|-C)\n"
+      <> "      shift 2\n"
+      <> "      ;;\n"
+      <> "    -)\n"
+      <> "      python3 - <<'PY'\n"
+      <> "import json, sys\n"
+      <> "sys.stdin.read()\n"
+      <> "large_block = 'A' * 17050\n"
+      <> "brief = '# Night Shift Brief\\n## Objective\\nLarge streaming payload\\n## Scope\\n- ' + large_block + '\\n## Constraints\\n- Keep structured mode active.\\n## Deliverables\\n- Large line preserved\\n## Acceptance Criteria\\n- Full payload parsed\\n## Risks and Open Questions\\n- None.'\n"
+      <> "print(json.dumps({\"type\": \"thread.started\", \"thread_id\": \"large\"}))\n"
+      <> "print(json.dumps({\"type\": \"item.completed\", \"item\": {\"id\": \"item_0\", \"type\": \"agent_message\", \"text\": 'NIGHT_SHIFT_RESULT_START\\n' + brief + '\\nNIGHT_SHIFT_RESULT_END'}}))\n"
+      <> "PY\n"
       <> "      exit 0\n"
       <> "      ;;\n"
       <> "    *)\n"

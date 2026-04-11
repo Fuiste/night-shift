@@ -52,8 +52,12 @@ wait_forever() ->
     end.
 
 stdout_is_tty() ->
-    case os:cmd("test -t 1 && printf true || printf false") of
-        "true" -> true;
+    case catch begin
+        ok = prim_tty:load(),
+        prim_tty:isatty(stdout)
+    end of
+        true -> true;
+        false -> false;
         _ -> false
     end.
 
