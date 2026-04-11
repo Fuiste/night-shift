@@ -8,6 +8,7 @@ import simplifile
 type Section {
   RootSection
   VerificationSection
+  DiscordSection
 }
 
 type ParseState {
@@ -52,6 +53,7 @@ fn parse_line(line: String, state: ParseState) -> Result(ParseState, String) {
   case cleaned {
     "" -> Ok(state)
     "[verification]" -> Ok(ParseState(state.config, VerificationSection))
+    "[discord]" -> Ok(ParseState(state.config, DiscordSection))
     _ -> parse_assignment(cleaned, state)
   }
 }
@@ -130,6 +132,15 @@ fn apply_value(
         state.section,
       ))
     }
+
+    DiscordSection, "webhook_url_env" ->
+      Ok(ParseState(
+        types.Config(
+          ..config,
+          discord: types.DiscordConfig(webhook_url_env: parse_string(raw_value)),
+        ),
+        state.section,
+      ))
 
     VerificationSection, "commands" ->
       Ok(ParseState(

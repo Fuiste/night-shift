@@ -7,3 +7,6 @@ notifiers = ["console", "report_file"]
 
 [verification]
 commands = []
+
+[discord]
+webhook_url_env = "NIGHT_SHIFT_DISCORD_WEBHOOK_URL"

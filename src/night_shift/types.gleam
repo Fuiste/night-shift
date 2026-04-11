@@ -23,12 +23,14 @@ pub fn harness_to_string(harness: Harness) -> String {
 pub type NotifierName {
   ConsoleNotifier
   ReportFileNotifier
+  DiscordNotifier
 }
 
 pub fn notifier_from_string(value: String) -> Result(NotifierName, String) {
   case value {
     "console" -> Ok(ConsoleNotifier)
     "report_file" -> Ok(ReportFileNotifier)
+    "discord" -> Ok(DiscordNotifier)
     _ -> Error("Unsupported notifier: " <> value)
   }
 }
@@ -37,7 +39,12 @@ pub fn notifier_to_string(notifier: NotifierName) -> String {
   case notifier {
     ConsoleNotifier -> "console"
     ReportFileNotifier -> "report_file"
+    DiscordNotifier -> "discord"
   }
+}
+
+pub type DiscordConfig {
+  DiscordConfig(webhook_url_env: String)
 }
 
 pub type TaskState {
@@ -177,6 +184,7 @@ pub type Config {
     pr_title_prefix: String,
     verification_commands: List(String),
     notifiers: List(NotifierName),
+    discord: DiscordConfig,
   )
 }
 
@@ -189,6 +197,9 @@ pub fn default_config() -> Config {
     pr_title_prefix: "[night-shift]",
     verification_commands: [],
     notifiers: [ConsoleNotifier, ReportFileNotifier],
+    discord: DiscordConfig(
+      webhook_url_env: "NIGHT_SHIFT_DISCORD_WEBHOOK_URL",
+    ),
   )
 }
 

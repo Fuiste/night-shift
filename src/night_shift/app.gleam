@@ -9,6 +9,7 @@ import night_shift/dashboard
 import night_shift/demo
 import night_shift/git
 import night_shift/journal
+import night_shift/notifier
 import night_shift/orchestrator
 import night_shift/system
 import night_shift/types
@@ -41,8 +42,12 @@ pub fn run(command: types.Command) -> Nil {
           )
         {
           Ok(run) ->
-            case orchestrator.start(run, config) {
-              Ok(completed_run) -> render_run_summary(completed_run)
+            case notifier.notify_run_started(config, run) {
+              Ok(notified_run) ->
+                case orchestrator.start(notified_run, config) {
+                  Ok(completed_run) -> render_run_summary(completed_run)
+                  Error(message) -> message
+                }
               Error(message) -> message
             }
           Error(message) -> message
@@ -62,13 +67,25 @@ pub fn run(command: types.Command) -> Nil {
         )
       {
         Ok(run) ->
-          case
-            dashboard.start_start_session(repo_root, run.run_id, run, config)
-          {
-            Ok(session) -> {
-              io.println(render_dashboard_summary(session.url, run.run_id))
-              system.wait_forever()
-            }
+          case notifier.notify_run_started(config, run) {
+            Ok(notified_run) ->
+              case
+                dashboard.start_start_session(
+                  repo_root,
+                  notified_run.run_id,
+                  notified_run,
+                  config,
+                )
+              {
+                Ok(session) -> {
+                  io.println(render_dashboard_summary(session.url, notified_run.run_id))
+                  system.wait_forever()
+                }
+                Error(message) -> {
+                  let _ = journal.mark_status(notified_run, types.RunFailed, message)
+                  io.println(message)
+                }
+              }
             Error(message) -> {
               let _ = journal.mark_status(run, types.RunFailed, message)
               io.println(message)
@@ -151,8 +168,12 @@ fn review(
 
   case review_run {
     Ok(run) ->
-      case orchestrator.review(run, config) {
-        Ok(updated_run) -> render_run_summary(updated_run)
+      case notifier.notify_run_started(config, run) {
+        Ok(notified_run) ->
+          case orchestrator.review(notified_run, config) {
+            Ok(updated_run) -> render_run_summary(updated_run)
+            Error(message) -> message
+          }
         Error(message) -> message
       }
     Error(message) -> message

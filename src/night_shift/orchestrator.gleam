@@ -7,7 +7,7 @@ import gleam/string
 import night_shift/git
 import night_shift/github
 import night_shift/harness
-import night_shift/journal
+import night_shift/notifier
 import night_shift/shell
 import night_shift/system
 import night_shift/types
@@ -27,7 +27,7 @@ pub fn start(run: types.RunRecord, config: types.Config) -> Result(types.RunReco
       task_id: None,
     )
 
-  use persisted_run <- result.try(journal.append_event(planned_run, planned_event))
+  use persisted_run <- result.try(notifier.append_event(config, planned_run, planned_event))
   scheduler_loop(config, persisted_run)
 }
 
@@ -46,7 +46,7 @@ pub fn resume(run: types.RunRecord, config: types.Config) -> Result(types.RunRec
       task_id: None,
     )
 
-  use persisted_run <- result.try(journal.append_event(resumed_run, event))
+  use persisted_run <- result.try(notifier.append_event(config, resumed_run, event))
   scheduler_loop(config, persisted_run)
 }
 
@@ -73,7 +73,7 @@ pub fn review(run: types.RunRecord, config: types.Config) -> Result(types.RunRec
       task_id: None,
     )
 
-  use persisted_run <- result.try(journal.append_event(seeded_run, event))
+  use persisted_run <- result.try(notifier.append_event(config, seeded_run, event))
   scheduler_loop(config, persisted_run)
 }
 
@@ -85,7 +85,7 @@ fn scheduler_loop(
   let batch = next_batch(refreshed_run.tasks, refreshed_run.max_workers)
 
   case batch {
-    [] -> finish_run(refreshed_run)
+    [] -> finish_run(config, refreshed_run)
     _ -> {
       use #(running_run, task_runs) <- result.try(launch_batch(config, refreshed_run, batch))
       use completed_run <- result.try(await_batch(config, running_run, task_runs))
@@ -94,7 +94,10 @@ fn scheduler_loop(
   }
 }
 
-fn finish_run(run: types.RunRecord) -> Result(types.RunRecord, String) {
+fn finish_run(
+  config: types.Config,
+  run: types.RunRecord,
+) -> Result(types.RunRecord, String) {
   let status = final_status(run.tasks)
   let message =
     case status {
@@ -104,7 +107,7 @@ fn finish_run(run: types.RunRecord) -> Result(types.RunRecord, String) {
       _ -> "Night Shift stopped."
     }
 
-  journal.mark_status(run, status, message)
+  notifier.mark_status(config, run, status, message)
 }
 
 fn launch_batch(
@@ -160,7 +163,7 @@ fn launch_batch_loop(
               task_id: Some(task.id),
             )
 
-          use persisted_run <- result.try(journal.append_event(updated_run, event))
+          use persisted_run <- result.try(notifier.append_event(config, updated_run, event))
           use task_run <- result.try(
             harness.start_task(
               persisted_run.harness,
@@ -184,7 +187,7 @@ fn launch_batch_loop(
               message: message,
               task_id: Some(task.id),
             )
-          use persisted_run <- result.try(journal.append_event(failed_run, event))
+          use persisted_run <- result.try(notifier.append_event(config, failed_run, event))
           launch_batch_loop(config, persisted_run, rest, acc)
         }
       }
@@ -216,12 +219,13 @@ fn complete_task(
   case execution_result.status {
     types.Completed -> finalize_success(config, run, task_run, execution_result)
     types.Blocked | types.ManualAttention | types.Failed ->
-      finalize_non_success(run, task_run.task, execution_result)
-    _ -> finalize_non_success(run, task_run.task, execution_result)
+      finalize_non_success(config, run, task_run.task, execution_result)
+    _ -> finalize_non_success(config, run, task_run.task, execution_result)
   }
 }
 
 fn finalize_non_success(
+  config: types.Config,
   run: types.RunRecord,
   task: types.Task,
   execution_result: types.ExecutionResult,
@@ -241,7 +245,7 @@ fn finalize_non_success(
       task_id: Some(task.id),
     )
 
-  journal.append_event(updated_run, event)
+  notifier.append_event(config, updated_run, event)
 }
 
 fn finalize_success(
@@ -291,7 +295,8 @@ fn finalize_success(
               summary: "Harness reported completion but produced no changes.",
             )
           let updated_run = types.RunRecord(..run, tasks: replace_task(run.tasks, task))
-          journal.append_event(
+          notifier.append_event(
+            config,
             updated_run,
             types.RunEvent(
               kind: "task_blocked",
@@ -311,7 +316,16 @@ fn finalize_success(
             )
           )
           use _ <- result.try(git.push_branch(task_run.worktree_path, task_run.branch_name, git_log))
-          let pr_body = build_pr_body(run, task_run.task, final_execution, verification_output)
+          let pr_body =
+            build_pr_body(
+              config,
+              run,
+              task_run.task,
+              task_run.branch_name,
+              task_run.base_ref,
+              final_execution,
+              verification_output,
+            )
           use pull_request <- result.try(
             github.open_or_update_pr(
               task_run.worktree_path,
@@ -347,8 +361,9 @@ fn finalize_success(
               message: "Verification passed for " <> task_run.task.title,
               task_id: Some(task_run.task.id),
             )
-          use verified_run <- result.try(journal.append_event(updated_run, verified_event))
-          journal.append_event(
+          use verified_run <- result.try(notifier.append_event(config, updated_run, verified_event))
+          notifier.append_event(
+            config,
             types.RunRecord(..verified_run, tasks: replace_task(verified_run.tasks, types.Task(..completed_task, summary: final_execution.summary <> " Changed files: " <> string.join(changed_files, ", ")))),
             types.RunEvent(
               kind: "pr_opened",
@@ -368,7 +383,8 @@ fn finalize_success(
           summary: "Verification failed:\n" <> output,
         )
       let failed_run = types.RunRecord(..run, tasks: replace_task(run.tasks, failed_task))
-      journal.append_event(
+      notifier.append_event(
+        config,
         failed_run,
         types.RunEvent(
           kind: "task_blocked",
@@ -560,19 +576,31 @@ fn recover_task(task: types.Task) -> types.Task {
 }
 
 fn build_pr_body(
+  config: types.Config,
   run: types.RunRecord,
   task: types.Task,
+  branch_name: String,
+  base_ref: String,
   execution_result: types.ExecutionResult,
   verification_output: String,
 ) -> String {
   "## Summary\n"
   <> execution_result.pr.summary
-  <> "\n\n## Demo\n"
+  <> "\n\n## Stack\n"
+  <> "- Head branch: `"
+  <> branch_name
+  <> "`\n"
+  <> "- Base branch: `"
+  <> base_ref
+  <> "`\n"
+  <> "\n## Demo\n"
   <> bullet_list(execution_result.pr.demo)
   <> "\n\n## Verification\n```\n"
   <> verification_output
   <> "\n```\n\n## Known Risks\n"
   <> bullet_list(execution_result.pr.risks)
+  <> "\n\n## Follow-Up\n"
+  <> bullet_list(pr_follow_up_items(config))
   <> "\n\n<!-- night-shift:run="
   <> run.run_id
   <> ";task="
@@ -589,6 +617,32 @@ fn bullet_list(items: List(String)) -> String {
       items
       |> list.map(fn(item) { "- " <> item })
       |> string.join(with: "\n")
+  }
+}
+
+fn pr_follow_up_items(config: types.Config) -> List(String) {
+  let review_note =
+    "Leave this PR open for human review. Do not merge or auto-merge the stack."
+
+  case discord_setup_note(config) {
+    Ok(note) -> [review_note, note]
+    Error(Nil) -> [review_note]
+  }
+}
+
+fn discord_setup_note(config: types.Config) -> Result(String, Nil) {
+  case list.contains(config.notifiers, types.DiscordNotifier) {
+    False -> Error(Nil)
+    True ->
+      case system.get_env(config.discord.webhook_url_env) {
+        "" ->
+          Ok(
+            "Discord notifications are enabled, but env "
+            <> config.discord.webhook_url_env
+            <> " is not set in this environment.",
+          )
+        _ -> Error(Nil)
+      }
   }
 }
 

@@ -10,7 +10,9 @@ import night_shift/dashboard
 import night_shift/demo
 import night_shift/harness
 import night_shift/journal
+import night_shift/notifier
 import night_shift/orchestrator
+import night_shift/report
 import night_shift/shell
 import night_shift/system
 import night_shift/types
@@ -74,6 +76,119 @@ pub fn parse_notifiers_and_verification_commands_test() {
   assert parsed.verification_commands == ["gleam test", "npm test"]
 }
 
+pub fn parse_discord_notifier_config_test() {
+  let source =
+    "notifiers = [\"console\", \"discord\"]\n"
+    <> "[discord]\n"
+    <> "webhook_url_env = \"NIGHT_SHIFT_TEST_WEBHOOK\"\n"
+
+  let assert Ok(parsed) = config.parse(source)
+
+  assert parsed.notifiers == [types.ConsoleNotifier, types.DiscordNotifier]
+  assert parsed.discord.webhook_url_env == "NIGHT_SHIFT_TEST_WEBHOOK"
+}
+
+pub fn discord_config_defaults_test() {
+  let defaults = types.default_config()
+
+  assert defaults.discord.webhook_url_env == "NIGHT_SHIFT_DISCORD_WEBHOOK_URL"
+}
+
+pub fn report_render_includes_shipped_work_and_manual_setup_test() {
+  let run =
+    types.RunRecord(
+      run_id: "run-123",
+      repo_root: "/tmp/night-shift-demo",
+      run_path: "/tmp/night-shift-demo/run-123",
+      brief_path: "/tmp/night-shift-demo/run-123/brief.md",
+      state_path: "/tmp/night-shift-demo/run-123/state.json",
+      events_path: "/tmp/night-shift-demo/run-123/events.jsonl",
+      report_path: "/tmp/night-shift-demo/run-123/report.md",
+      lock_path: "/tmp/night-shift-demo/active.lock",
+      harness: types.Codex,
+      max_workers: 2,
+      status: types.RunBlocked,
+      created_at: "2026-04-10T00:00:00Z",
+      updated_at: "2026-04-10T01:00:00Z",
+      tasks: [
+        types.Task(
+          id: "ship-discord",
+          title: "Ship Discord notifier",
+          description: "Add outbound Discord notifications.",
+          dependencies: [],
+          acceptance: [],
+          demo_plan: [],
+          parallel_safe: False,
+          state: types.Completed,
+          worktree_path: "/tmp/worktree",
+          branch_name: "night-shift/run-123-ship-discord",
+          pr_number: "42",
+          summary: "Implemented the Discord notifier.",
+        ),
+        types.Task(
+          id: "review-config",
+          title: "Confirm production webhook name",
+          description: "Decide which env var name should be used in production.",
+          dependencies: ["ship-discord"],
+          acceptance: ["Agree on the env var contract."],
+          demo_plan: [],
+          parallel_safe: False,
+          state: types.Queued,
+          worktree_path: "",
+          branch_name: "",
+          pr_number: "",
+          summary: "",
+        ),
+        types.Task(
+          id: "fix-delivery",
+          title: "Repair failing Discord delivery",
+          description: "Investigate why the webhook call failed.",
+          dependencies: [],
+          acceptance: [],
+          demo_plan: [],
+          parallel_safe: False,
+          state: types.ManualAttention,
+          worktree_path: "",
+          branch_name: "",
+          pr_number: "",
+          summary: "Webhook returned 401 Unauthorized.",
+        ),
+      ],
+    )
+
+  let events = [
+    types.RunEvent(
+      kind: "run_started",
+      at: "2026-04-10T00:00:00Z",
+      message: "Night Shift started.",
+      task_id: Some("ship-discord"),
+    ),
+    types.RunEvent(
+      kind: "pr_opened",
+      at: "2026-04-10T00:30:00Z",
+      message: "https://example.test/pr/42",
+      task_id: Some("ship-discord"),
+    ),
+    types.RunEvent(
+      kind: "discord_notification_skipped",
+      at: "2026-04-10T00:31:00Z",
+      message: "Discord notifier skipped for pr_opened: env NIGHT_SHIFT_DISCORD_WEBHOOK_URL is not set.",
+      task_id: Some("ship-discord"),
+    ),
+  ]
+
+  let output = report.render(run, events)
+
+  assert string.contains(does: output, contain: "## Shipped Work")
+  assert string.contains(does: output, contain: "PR #42 (https://example.test/pr/42)")
+  assert string.contains(does: output, contain: "## Manual Setup Remaining")
+  assert string.contains(
+    does: output,
+    contain: "env NIGHT_SHIFT_DISCORD_WEBHOOK_URL is not set",
+  )
+  assert string.contains(does: output, contain: "## Recommended Next Steps")
+}
+
 pub fn start_run_creates_report_and_state_test() {
   let unique = system.unique_id()
   let base_dir =
@@ -92,6 +207,81 @@ pub fn start_run_creates_report_and_state_test() {
 
   assert string.contains(does: report_contents, contain: "Night Shift Report")
   assert string.contains(does: state_contents, contain: "\"run_id\"")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn discord_notifier_skips_when_webhook_env_missing_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    filepath.join(system.state_directory(), "night-shift-discord-skip-" <> unique)
+  let repo_root = filepath.join(base_dir, "repo-" <> unique)
+  let brief_path = filepath.join(base_dir, "brief.md")
+  let webhook_env = "NIGHT_SHIFT_TEST_DISCORD_SKIP"
+  let old_webhook = system.get_env(webhook_env)
+
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(base_dir)
+  let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
+
+  let config =
+    types.Config(
+      ..types.default_config(),
+      notifiers: [types.DiscordNotifier],
+      discord: types.DiscordConfig(webhook_url_env: webhook_env),
+    )
+
+  system.set_env(webhook_env, "")
+
+  let assert Ok(run) = journal.start_run(repo_root, brief_path, types.Codex, 1)
+  let assert Ok(updated_run) = notifier.notify_run_started(config, run)
+  let assert Ok(report_contents) = simplifile.read(updated_run.report_path)
+
+  system.set_env(webhook_env, old_webhook)
+
+  assert string.contains(
+    does: report_contents,
+    contain: "Discord notifier skipped for run_started",
+  )
+  assert string.contains(does: report_contents, contain: webhook_env)
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn discord_notifier_records_delivery_failures_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    filepath.join(system.state_directory(), "night-shift-discord-fail-" <> unique)
+  let repo_root = filepath.join(base_dir, "repo-" <> unique)
+  let brief_path = filepath.join(base_dir, "brief.md")
+  let webhook_env = "NIGHT_SHIFT_TEST_DISCORD_FAIL"
+  let old_webhook = system.get_env(webhook_env)
+
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(base_dir)
+  let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
+
+  let config =
+    types.Config(
+      ..types.default_config(),
+      notifiers: [types.DiscordNotifier],
+      discord: types.DiscordConfig(webhook_url_env: webhook_env),
+    )
+
+  system.set_env(webhook_env, "http://127.0.0.1:9/night-shift")
+
+  let assert Ok(run) = journal.start_run(repo_root, brief_path, types.Codex, 1)
+  let assert Ok(updated_run) = notifier.notify_run_started(config, run)
+  let assert Ok(report_contents) = simplifile.read(updated_run.report_path)
+
+  system.set_env(webhook_env, old_webhook)
+
+  assert string.contains(
+    does: report_contents,
+    contain: "Discord notification failed for run_started",
+  )
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
@@ -349,6 +539,117 @@ pub fn orchestrator_start_runs_fake_harness_test() {
   assert completed_run.status == types.RunCompleted
   assert completed_task.pr_number == "1"
   assert string.contains(does: completed_task.summary, contain: "Implemented")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn orchestrator_start_with_discord_enabled_leaves_report_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    filepath.join(
+      system.state_directory(),
+      "night-shift-discord-integration-" <> unique,
+    )
+  let repo_root = filepath.join(base_dir, "repo")
+  let remote_root = filepath.join(base_dir, "remote.git")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let brief_path = filepath.join(base_dir, "brief.md")
+  let fake_harness = filepath.join(bin_dir, "fake-harness")
+  let fake_gh = filepath.join(bin_dir, "gh")
+  let webhook_env = "NIGHT_SHIFT_TEST_DISCORD_E2E"
+  let old_path = system.get_env("PATH")
+  let old_fake_harness = system.get_env("NIGHT_SHIFT_FAKE_HARNESS")
+  let old_webhook = system.get_env(webhook_env)
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
+  let assert Ok(_) = write_fake_harness(fake_harness)
+  let assert Ok(_) = write_fake_gh(fake_gh)
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_harness) <> " " <> shell.quote(fake_gh),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+  let _ =
+    shell.run(
+      "git init --bare " <> shell.quote(remote_root),
+      base_dir,
+      filepath.join(base_dir, "remote.log"),
+    )
+  let _ =
+    shell.run(
+      "git init --initial-branch=main " <> shell.quote(repo_root),
+      base_dir,
+      filepath.join(base_dir, "repo-init.log"),
+    )
+  let _ =
+    shell.run(
+      "git config user.name 'Night Shift Test'",
+      repo_root,
+      filepath.join(base_dir, "git-user.log"),
+    )
+  let _ =
+    shell.run(
+      "git config user.email 'night-shift@example.com'",
+      repo_root,
+      filepath.join(base_dir, "git-email.log"),
+    )
+  let assert Ok(_) =
+    simplifile.write("# Demo\n", to: filepath.join(repo_root, "README.md"))
+  let _ =
+    shell.run(
+      "git add README.md && git commit -m 'chore: seed repo'",
+      repo_root,
+      filepath.join(base_dir, "seed.log"),
+    )
+  let _ =
+    shell.run(
+      "git remote add origin " <> shell.quote(remote_root),
+      repo_root,
+      filepath.join(base_dir, "remote-add.log"),
+    )
+  let _ =
+    shell.run(
+      "git push -u origin main",
+      repo_root,
+      filepath.join(base_dir, "push-main.log"),
+    )
+
+  system.set_env("NIGHT_SHIFT_FAKE_HARNESS", fake_harness)
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env(webhook_env, "")
+
+  let config =
+    types.Config(
+      ..types.default_config(),
+      verification_commands: [],
+      max_workers: 1,
+      notifiers: [types.DiscordNotifier],
+      discord: types.DiscordConfig(webhook_url_env: webhook_env),
+    )
+
+  let assert Ok(run) = journal.start_run(repo_root, brief_path, types.Codex, 1)
+  let assert Ok(notified_run) = notifier.notify_run_started(config, run)
+  let assert Ok(completed_run) = orchestrator.start(notified_run, config)
+  let assert Ok(report_contents) = simplifile.read(completed_run.report_path)
+
+  system.set_env("PATH", old_path)
+  system.set_env("NIGHT_SHIFT_FAKE_HARNESS", old_fake_harness)
+  system.set_env(webhook_env, old_webhook)
+
+  assert completed_run.status == types.RunCompleted
+  assert string.contains(does: report_contents, contain: "## Manual Setup Remaining")
+  assert string.contains(does: report_contents, contain: webhook_env)
+  assert string.contains(does: report_contents, contain: "## Recommended Next Steps")
+  assert string.contains(
+    does: report_contents,
+    contain: "Review the open PR stack before merging anything into main.",
+  )
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }

@@ -53,7 +53,31 @@ notifiers = ["console", "report_file"]
 
 [verification]
 commands = []
+
+[discord]
+webhook_url_env = "NIGHT_SHIFT_DISCORD_WEBHOOK_URL"
 ```
+
+To enable Discord delivery, add `"discord"` to `notifiers` and provide the
+webhook through the configured environment variable. Keep the webhook secret
+out of repo-tracked files.
+
+Example:
+
+```toml
+notifiers = ["console", "report_file", "discord"]
+
+[discord]
+webhook_url_env = "NIGHT_SHIFT_DISCORD_WEBHOOK_URL"
+```
+
+```sh
+export NIGHT_SHIFT_DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/..."
+```
+
+Discord delivery is best-effort. If the webhook env var is missing or delivery
+fails, Night Shift continues the run, leaves PRs open for review, and records
+the gap in the final Markdown report.
 
 ## Commands
 
@@ -141,6 +165,14 @@ Each run directory includes:
 - `report.md`
 - `logs/`
 
+The Markdown report now includes:
+
+- shipped work and opened PRs
+- blocked or manual-attention items
+- queued follow-up tasks and open questions
+- manual setup gaps such as missing Discord webhook configuration
+- recommended next steps for the morning reviewer
+
 An `active.lock` file is kept at the repo state root so only one active run can
 operate on a repo at a time.
 
@@ -170,7 +202,10 @@ implements:
 
 - Each completed task is delivered as a pull request.
 - Dependent tasks may be delivered as stacked pull requests.
+- PR bodies include stack context, verification output, known risks, and
+  follow-up notes for reviewers.
 - Verification is run locally before PR creation.
 - A local Markdown report is updated throughout the run.
+- Notifications can be delivered to Discord via webhook when enabled.
 - Review mode reopens open Night Shift PRs, turns review state into
   stabilization tasks, and reruns the scheduler.
