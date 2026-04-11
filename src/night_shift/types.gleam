@@ -1,7 +1,7 @@
 import gleam/list
 import gleam/option.{type Option, None}
 
-pub const default_brief_filename = "night-shift.md"
+pub const default_brief_filename = "execution-brief.md"
 
 pub type Provider {
   Codex
@@ -148,6 +148,49 @@ pub fn task_state_to_string(state: TaskState) -> String {
   }
 }
 
+pub type ExecutionMode {
+  Parallel
+  Serial
+  Exclusive
+}
+
+pub fn execution_mode_from_string(value: String) -> Result(ExecutionMode, String) {
+  case value {
+    "parallel" -> Ok(Parallel)
+    "serial" -> Ok(Serial)
+    "exclusive" -> Ok(Exclusive)
+    _ -> Error("Unsupported execution mode: " <> value)
+  }
+}
+
+pub fn execution_mode_to_string(mode: ExecutionMode) -> String {
+  case mode {
+    Parallel -> "parallel"
+    Serial -> "serial"
+    Exclusive -> "exclusive"
+  }
+}
+
+pub type TaskKind {
+  ImplementationTask
+  ManualAttentionTask
+}
+
+pub fn task_kind_from_string(value: String) -> Result(TaskKind, String) {
+  case value {
+    "implementation" -> Ok(ImplementationTask)
+    "manual_attention" -> Ok(ManualAttentionTask)
+    _ -> Error("Unsupported task kind: " <> value)
+  }
+}
+
+pub fn task_kind_to_string(kind: TaskKind) -> String {
+  case kind {
+    ImplementationTask -> "implementation"
+    ManualAttentionTask -> "manual_attention"
+  }
+}
+
 pub type FollowUpTask {
   FollowUpTask(
     id: String,
@@ -156,7 +199,8 @@ pub type FollowUpTask {
     dependencies: List(String),
     acceptance: List(String),
     demo_plan: List(String),
-    parallel_safe: Bool,
+    kind: TaskKind,
+    execution_mode: ExecutionMode,
   )
 }
 
@@ -168,7 +212,8 @@ pub type Task {
     dependencies: List(String),
     acceptance: List(String),
     demo_plan: List(String),
-    parallel_safe: Bool,
+    kind: TaskKind,
+    execution_mode: ExecutionMode,
     state: TaskState,
     worktree_path: String,
     branch_name: String,
@@ -242,6 +287,7 @@ pub type RunRecord {
     lock_path: String,
     planning_agent: ResolvedAgentConfig,
     execution_agent: ResolvedAgentConfig,
+    environment_name: String,
     max_workers: Int,
     status: RunStatus,
     created_at: String,
@@ -291,8 +337,14 @@ pub type Command {
   Start(
     brief_path: Option(String),
     agent_overrides: AgentOverrides,
+    environment_name: Option(String),
     max_workers: Result(Int, Nil),
     ui_enabled: Bool,
+  )
+  Init(
+    agent_overrides: AgentOverrides,
+    generate_setup: Bool,
+    assume_yes: Bool,
   )
   Plan(
     notes_path: String,
@@ -302,7 +354,7 @@ pub type Command {
   Status(run: RunSelector)
   Report(run: RunSelector)
   Resume(run: RunSelector, ui_enabled: Bool)
-  Review(agent_overrides: AgentOverrides)
+  Review(agent_overrides: AgentOverrides, environment_name: Option(String))
   Demo(ui_enabled: Bool)
   Help
 }

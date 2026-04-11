@@ -34,6 +34,19 @@ pub fn wait_forever() -> Nil
 @external(erlang, "night_shift_system", "stdout_is_tty")
 pub fn stdout_is_tty() -> Bool
 
+@external(erlang, "night_shift_system", "stdin_is_tty")
+pub fn stdin_is_tty() -> Bool
+
+@external(erlang, "night_shift_system", "read_line")
+pub fn read_line() -> String
+
+@external(erlang, "night_shift_system", "select_option")
+pub fn select_option(
+  prompt: String,
+  options: List(String),
+  default_index: Int,
+) -> Int
+
 @external(erlang, "night_shift_system", "terminal_columns")
 pub fn terminal_columns() -> Int
 

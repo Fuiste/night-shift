@@ -1,3 +1,4 @@
+import gleam/list
 import gleam/string
 
 pub type CommandResult {
@@ -104,6 +105,24 @@ pub fn succeeded(result: CommandResult) -> Bool {
 
 pub fn quote(value: String) -> String {
   "'" <> string.replace(in: value, each: "'", with: "'\"'\"'") <> "'"
+}
+
+pub fn with_env(
+  command: String,
+  env_vars: List(#(String, String)),
+) -> String {
+  case env_vars {
+    [] -> command
+    _ ->
+      "env "
+      <> {
+        env_vars
+        |> list.map(fn(entry) { entry.0 <> "=" <> quote(entry.1) })
+        |> string.join(with: " ")
+      }
+      <> " "
+      <> command
+  }
 }
 
 pub fn stream_metadata(
