@@ -469,13 +469,14 @@ fn start(
   case load_start_run(repo_root, run_selector) {
     Ok(run) ->
       case ensure_clean_repo_for_start(repo_root) {
-        Ok(Nil) ->
+        Ok(warning) ->
           case journal.activate_run(run) {
             Ok(active_run) ->
-              case orchestrator.start(active_run, config) {
-                Ok(completed_run) -> render_run_summary(completed_run)
-                Error(message) -> message
-              }
+              render_active_run_outcome(
+                active_run,
+                warning,
+                orchestrator.start(active_run, config),
+              )
             Error(message) -> message
           }
         Error(message) -> message
@@ -518,17 +519,30 @@ fn ensure_saved_environment_is_valid(
   }
 }
 
-fn ensure_clean_repo_for_start(repo_root: String) -> Result(Nil, String) {
+fn ensure_clean_repo_for_start(repo_root: String) -> Result(Option(String), String) {
   let log_path =
     filepath.join(system.state_directory(), "night-shift/start-clean.log")
   let changed_files = git.changed_files(repo_root, log_path)
-  case changed_files {
-    [] -> Ok(Nil)
-    _ ->
+  let source_changes =
+    changed_files
+    |> list.filter(fn(path) { !is_control_plane_path(path) })
+  let control_changes =
+    changed_files
+    |> list.filter(is_control_plane_path)
+
+  case source_changes, control_changes {
+    [], [] -> Ok(None)
+    [], _ ->
+      Ok(Some(
+        "Night Shift noticed repo-local control-plane changes under `.night-shift/` and will continue.\nChanged control files:\n"
+        <> render_changed_paths(control_changes)
+        <> "\nThese files stay in the source checkout and are not part of execution worktrees or delivery PRs.",
+      ))
+    _, _ ->
       Error(
         "Night Shift start requires a clean source repository so execution worktrees and delivery stay aligned.\nChanged files:\n"
-        <> render_changed_paths(changed_files)
-        <> start_clean_repo_suggestion(changed_files, repo_root),
+        <> render_changed_paths(source_changes)
+        <> start_clean_repo_suggestion(source_changes, repo_root),
       )
   }
 }
@@ -679,7 +693,7 @@ fn status(repo_root: String, run: types.RunSelector) -> String {
       <> "Notes: "
       <> render_notes_source(saved_run.notes_source)
       <> "\n"
-      <> status_summary(saved_run)
+      <> status_summary(saved_run, events)
       <> "\n"
       <> "Events: "
       <> int.to_string(list.length(events))
@@ -725,10 +739,11 @@ fn resume(
         saved_run.environment_name,
       ) {
         Ok(Nil) ->
-          case orchestrator.resume(saved_run, config) {
-            Ok(updated_run) -> render_run_summary(updated_run)
-            Error(message) -> message
-          }
+          render_active_run_outcome(
+            saved_run,
+            None,
+            orchestrator.resume(saved_run, config),
+          )
         Error(message) -> message
       }
     Error(message) -> message
@@ -757,10 +772,11 @@ fn review(
         )
       {
         Ok(run) ->
-          case orchestrator.review(run, config) {
-            Ok(updated_run) -> render_run_summary(updated_run)
-            Error(message) -> message
-          }
+          render_active_run_outcome(
+            run,
+            None,
+            orchestrator.review(run, config),
+          )
         Error(message) -> message
       }
     Error(message), _ -> message
@@ -794,6 +810,26 @@ fn render_run_summary(run: types.RunRecord) -> String {
   <> "\n"
   <> "Journal: "
   <> run.run_path
+}
+
+fn render_active_run_outcome(
+  active_run: types.RunRecord,
+  warning: Option(String),
+  outcome: Result(types.RunRecord, String),
+) -> String {
+  case outcome {
+    Ok(updated_run) ->
+      prefix_warning(warning, render_run_summary(updated_run))
+    Error(message) ->
+      case journal.mark_status(active_run, types.RunFailed, message) {
+        Ok(failed_run) ->
+          prefix_warning(
+            warning,
+            message <> "\n" <> render_run_summary(failed_run),
+          )
+        Error(_) -> prefix_warning(warning, message)
+      }
+  }
 }
 
 fn render_planning_summary(
@@ -999,8 +1035,25 @@ fn render_notes_source(notes_source: Option(types.NotesSource)) -> String {
   }
 }
 
-fn status_summary(run: types.RunRecord) -> String {
-  case run.status == types.RunBlocked || run.planning_dirty {
+fn status_summary(
+  run: types.RunRecord,
+  events: List(types.RunEvent),
+) -> String {
+  case latest_environment_preflight_failure(events) {
+    Some(message) ->
+      "Environment bootstrap blocker: yes\n"
+      <> "Failure: "
+      <> message
+      <> "\n"
+      <> "Ready implementation tasks: "
+      <> int.to_string(ready_implementation_task_count(run.tasks))
+      <> "\n"
+      <> "Queued tasks: "
+      <> int.to_string(queued_task_count(run.tasks))
+      <> "\n"
+      <> "Next action: fix the worktree environment, then rerun `night-shift start` or `night-shift reset`"
+    None ->
+      case run.status == types.RunBlocked || run.planning_dirty {
     True ->
       "Blocked tasks: "
       <> int.to_string(blocked_task_count(run))
@@ -1028,6 +1081,7 @@ fn status_summary(run: types.RunRecord) -> String {
       <> "\n"
       <> "Queued tasks: "
       <> int.to_string(queued_task_count(run.tasks))
+      }
   }
 }
 
@@ -1456,6 +1510,10 @@ fn render_changed_paths(paths: List(String)) -> String {
   |> string.join(with: "\n")
 }
 
+fn is_control_plane_path(path: String) -> Bool {
+  path == ".night-shift" || string.starts_with(path, ".night-shift/")
+}
+
 fn start_clean_repo_suggestion(paths: List(String), repo_root: String) -> String {
   let only_night_shift =
     list.all(paths, fn(path) {
@@ -1470,6 +1528,32 @@ fn start_clean_repo_suggestion(paths: List(String), repo_root: String) -> String
       "\nCommit, stash, or move those changes out of "
       <> repo_root
       <> " and rerun `night-shift start`."
+  }
+}
+
+fn prefix_warning(warning: Option(String), body: String) -> String {
+  case warning {
+    Some(message) -> message <> "\n\n" <> body
+    None -> body
+  }
+}
+
+fn latest_environment_preflight_failure(
+  events: List(types.RunEvent),
+) -> Option(String) {
+  latest_environment_preflight_failure_loop(list.reverse(events))
+}
+
+fn latest_environment_preflight_failure_loop(
+  events: List(types.RunEvent),
+) -> Option(String) {
+  case events {
+    [] -> None
+    [event, ..rest] ->
+      case event.kind == "environment_preflight_failed" {
+        True -> Some(event.message)
+        False -> latest_environment_preflight_failure_loop(rest)
+      }
   }
 }
 
@@ -1651,7 +1735,7 @@ fn start_with_ui(
   case load_start_run(repo_root, selector) {
     Ok(run) ->
       case ensure_clean_repo_for_start(repo_root) {
-        Ok(Nil) ->
+        Ok(warning) ->
           case journal.activate_run(run) {
             Ok(active_run) ->
               case
@@ -1663,6 +1747,10 @@ fn start_with_ui(
                 )
               {
                 Ok(session) -> {
+                  case warning {
+                    Some(message) -> io.println(message)
+                    None -> Nil
+                  }
                   io.println(render_dashboard_summary(session.url, active_run.run_id))
                   system.wait_forever()
                 }

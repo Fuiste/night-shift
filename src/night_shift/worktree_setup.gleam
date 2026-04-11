@@ -10,6 +10,7 @@ import simplifile
 type Section {
   RootSection
   EnvSection(name: String)
+  PreflightSection(name: String)
   SetupSection(name: String)
   MaintenanceSection(name: String)
 }
@@ -36,6 +37,7 @@ pub type WorktreeEnvironment {
   WorktreeEnvironment(
     name: String,
     env_vars: List(#(String, String)),
+    preflight: CommandSet,
     setup: CommandSet,
     maintenance: CommandSet,
   )
@@ -57,6 +59,7 @@ pub fn default_config() -> WorktreeSetupConfig {
       WorktreeEnvironment(
         name: "default",
         env_vars: [],
+        preflight: empty_command_set(),
         setup: empty_command_set(),
         maintenance: empty_command_set(),
       ),
@@ -221,6 +224,7 @@ pub fn prepare_worktree(
     Some(environment) ->
       run_environment_commands(
         commands_for_phase(environment, phase),
+        phase_name,
         environment.env_vars,
         worktree_path,
         log_path,
@@ -250,8 +254,7 @@ pub fn preflight_environment(
       Ok(Nil)
     }
     Some(environment) -> {
-      let setup_commands = commands_for_phase(environment, SetupPhase)
-      let maintenance_commands = commands_for_phase(environment, MaintenancePhase)
+      let required_executables = preflight_requirements_for(environment)
       use _ <- result.try(write_log(
         log_path,
         string.join([
@@ -263,32 +266,23 @@ pub fn preflight_environment(
           "",
         ], with: "\n"),
       ))
-      use missing <- result.try(preflight_phase_commands(
-        setup_commands,
-        "setup",
+      use missing <- result.try(preflight_required_executables(
+        required_executables,
         environment.env_vars,
         repo_root,
         log_path,
         [],
       ))
-      use all_missing <- result.try(preflight_phase_commands(
-        maintenance_commands,
-        "maintenance",
-        environment.env_vars,
-        repo_root,
-        log_path,
-        missing,
-      ))
-      case all_missing {
+      case missing {
         [] -> Ok(Nil)
         _ ->
           Error(
             "Environment preflight failed for "
             <> environment.name
             <> ". Missing required executable"
-            <> plural_suffix(list.length(all_missing))
+            <> plural_suffix(list.length(missing))
             <> ": "
-            <> string.join(list.reverse(all_missing), with: ", ")
+            <> string.join(list.reverse(missing), with: ", ")
             <> ". See "
             <> log_path
             <> ".",
@@ -382,6 +376,7 @@ fn parse_section(section: String) -> Result(Section, String) {
 
   case string.split(inner, ".") {
     ["environments", name, "env"] -> Ok(EnvSection(name))
+    ["environments", name, "preflight"] -> Ok(PreflightSection(name))
     ["environments", name, "setup"] -> Ok(SetupSection(name))
     ["environments", name, "maintenance"] -> Ok(MaintenanceSection(name))
     _ -> Error("Unsupported worktree setup section: " <> section)
@@ -439,8 +434,18 @@ fn apply_value(
         state.section,
       ))
 
+    PreflightSection(name), script_key ->
+      update_command_set(
+        config,
+        name,
+        script_key,
+        raw_value,
+        "preflight",
+        state,
+      )
+
     SetupSection(name), script_key ->
-      update_command_set(config, name, script_key, raw_value, SetupPhase, state)
+      update_command_set(config, name, script_key, raw_value, "setup", state)
 
     MaintenanceSection(name), script_key ->
       update_command_set(
@@ -448,7 +453,7 @@ fn apply_value(
         name,
         script_key,
         raw_value,
-        MaintenancePhase,
+        "maintenance",
         state,
       )
 
@@ -461,7 +466,7 @@ fn update_command_set(
   name: String,
   script_key: String,
   raw_value: String,
-  phase: BootstrapPhase,
+  section_name: String,
   state: ParseState,
 ) -> Result(ParseState, String) {
   let commands = parse_string_list(raw_value)
@@ -479,13 +484,18 @@ fn update_command_set(
     "default" | "macos" | "linux" | "windows" ->
       Ok(ParseState(
         update_environment(config, name, fn(environment) {
-          case phase {
-            SetupPhase ->
+          case section_name {
+            "preflight" ->
+              WorktreeEnvironment(
+                ..environment,
+                preflight: update(environment.preflight),
+              )
+            "setup" ->
               WorktreeEnvironment(
                 ..environment,
                 setup: update(environment.setup),
               )
-            MaintenancePhase ->
+            _ ->
               WorktreeEnvironment(
                 ..environment,
                 maintenance: update(environment.maintenance),
@@ -529,6 +539,7 @@ fn blank_environment(name: String) -> WorktreeEnvironment {
   WorktreeEnvironment(
     name: name,
     env_vars: [],
+    preflight: empty_command_set(),
     setup: empty_command_set(),
     maintenance: empty_command_set(),
   )
@@ -559,6 +570,10 @@ fn render_environment(environment: WorktreeEnvironment) -> String {
 
   env_block
   <> "[environments."
+  <> environment.name
+  <> ".preflight]\n"
+  <> render_command_set(environment.preflight)
+  <> "\n\n[environments."
   <> environment.name
   <> ".setup]\n"
   <> render_command_set(environment.setup)
@@ -694,6 +709,7 @@ fn redacted_env_names(selected: Option(WorktreeEnvironment)) -> String {
 
 fn run_environment_commands(
   commands: List(String),
+  phase_name: String,
   env_vars: List(#(String, String)),
   cwd: String,
   log_path: String,
@@ -718,58 +734,106 @@ fn run_environment_commands(
       ))
       case shell.succeeded(command_result) {
         True ->
-          run_environment_commands(rest, env_vars, cwd, log_path, index + 1)
+          run_environment_commands(
+            rest,
+            phase_name,
+            env_vars,
+            cwd,
+            log_path,
+            index + 1,
+          )
         False ->
-          Error("Worktree environment command failed. See " <> log_path <> ".")
+          Error(
+            "Worktree "
+            <> phase_name
+            <> " phase failed while running `"
+            <> command
+            <> "`. See "
+            <> log_path
+            <> ".",
+          )
       }
     }
   }
 }
 
-fn preflight_phase_commands(
-  commands: List(String),
-  phase_name: String,
+fn preflight_requirements_for(environment: WorktreeEnvironment) -> List(String) {
+  let configured = commands_for_platform(environment.preflight)
+  case configured {
+    [] -> default_preflight_requirements(environment)
+    _ -> configured
+  }
+}
+
+fn default_preflight_requirements(environment: WorktreeEnvironment) -> List(String) {
+  let from_setup =
+    commands_for_phase(environment, SetupPhase)
+    |> first_detected_executable
+  case from_setup {
+    [] ->
+      commands_for_phase(environment, MaintenancePhase)
+      |> first_detected_executable
+    _ -> from_setup
+  }
+}
+
+fn first_detected_executable(commands: List(String)) -> List(String) {
+  case commands {
+    [] -> []
+    [command, ..rest] ->
+      case extract_executable(command) {
+        Some(executable) -> [executable]
+        None -> first_detected_executable(rest)
+      }
+  }
+}
+
+fn commands_for_platform(command_set: CommandSet) -> List(String) {
+  let platform_commands = case current_platform() {
+    "macos" -> command_set.macos
+    "linux" -> command_set.linux
+    "windows" -> command_set.windows
+    _ -> []
+  }
+
+  case platform_commands {
+    [] -> command_set.default
+    _ -> platform_commands
+  }
+}
+
+fn preflight_required_executables(
+  executables: List(String),
   env_vars: List(#(String, String)),
   cwd: String,
   log_path: String,
   missing: List(String),
 ) -> Result(List(String), String) {
-  case commands {
+  case executables {
     [] -> {
       use _ <- result.try(append_log(
         log_path,
-        "[" <> phase_name <> "] no commands configured\n",
+        "[preflight] no required executables configured\n",
       ))
       Ok(missing)
     }
-    [command, ..rest] -> {
+    [executable, ..rest] -> {
       let next_missing =
-        case extract_executable(command) {
-          Some(executable) ->
-            case list.contains(missing, executable) {
+        case list.contains(missing, executable) {
+          True -> missing
+          False ->
+            case executable_exists(executable, env_vars, cwd, log_path) {
               True -> missing
-              False ->
-                case executable_exists(executable, env_vars, cwd, log_path) {
-                  True -> missing
-                  False -> [executable, ..missing]
-                }
+              False -> [executable, ..missing]
             }
-          None -> missing
         }
 
       use _ <- result.try(append_log(
         log_path,
-        "["
-          <> phase_name
-          <> "] command="
-          <> command
-          <> " executable="
-          <> executable_label(command)
-          <> "\n",
+        "[preflight] executable=" <> executable <> "\n",
       ))
-      preflight_phase_commands(
+      preflight_required_executables(
         rest,
-        phase_name,
         env_vars,
         cwd,
         log_path,
@@ -792,13 +856,6 @@ fn executable_exists(
       log_path <> ".preflight-" <> executable <> ".log",
     )
   shell.succeeded(result)
-}
-
-fn executable_label(command: String) -> String {
-  case extract_executable(command) {
-    Some(executable) -> executable
-    None -> "(skipped detection)"
-  }
 }
 
 fn extract_executable(command: String) -> Option(String) {

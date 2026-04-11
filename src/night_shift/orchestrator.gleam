@@ -413,13 +413,25 @@ fn await_batch(
   case task_runs {
     [] -> Ok(run)
     [task_run, ..rest] -> {
-      use execution_result <- result.try(provider.await_task(task_run))
-      use updated_run <- result.try(complete_task(
-        config,
-        run,
-        task_run,
-        execution_result,
-      ))
+      let next_run_result = case provider.await_task(task_run) {
+        Ok(execution_result) ->
+          complete_task(
+            config,
+            run,
+            task_run,
+            execution_result,
+          )
+        Error(message) ->
+          mark_task_with_event(
+            run,
+            task_run.task,
+            types.Failed,
+            message,
+            "task_failed",
+          )
+      }
+
+      use updated_run <- result.try(next_run_result)
       await_batch(config, updated_run, rest)
     }
   }

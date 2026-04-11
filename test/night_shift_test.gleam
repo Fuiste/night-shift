@@ -482,6 +482,15 @@ pub fn extract_json_payload_uses_last_result_block_test() {
   assert payload == "{\"tasks\":[{\"id\":\"real-task\"}]}"
 }
 
+pub fn sanitize_json_payload_recovers_trailing_junk_test() {
+  let payload =
+    "{\"status\":\"completed\",\"summary\":\"ok\",\"files_touched\":[],\"demo_evidence\":[],\"pr\":{\"title\":\"t\",\"summary\":\"s\",\"demo\":[],\"risks\":[]},\"follow_up_tasks\":[]}}\n"
+
+  let assert Ok(sanitized) = provider.sanitize_json_payload(payload)
+  assert string.trim(sanitized)
+    == "{\"status\":\"completed\",\"summary\":\"ok\",\"files_touched\":[],\"demo_evidence\":[],\"pr\":{\"title\":\"t\",\"summary\":\"s\",\"demo\":[],\"risks\":[]},\"follow_up_tasks\":[]}"
+}
+
 pub fn extract_payload_from_codex_json_stream_test() {
   let output =
     "{\"type\":\"thread.started\",\"thread_id\":\"demo\"}\n"
@@ -1455,7 +1464,7 @@ pub fn stale_blocked_run_status_and_start_guidance_test() {
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
 
-pub fn start_dirty_night_shift_config_suggests_reset_test() {
+pub fn start_dirty_night_shift_control_files_do_not_block_test() {
   let unique = system.unique_id()
   let base_dir =
     absolute_path(filepath.join(
@@ -1517,7 +1526,14 @@ pub fn start_dirty_night_shift_config_suggests_reset_test() {
     does: start_output,
     contain: ".night-shift/worktree-setup.toml",
   )
-  assert string.contains(does: start_output, contain: "night-shift reset")
+  assert string.contains(
+    does: start_output,
+    contain: "repo-local control-plane changes under `.night-shift/`",
+  )
+  assert string.contains(
+    does: start_output,
+    contain: "are not part of execution worktrees or delivery PRs",
+  )
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
@@ -2208,6 +2224,91 @@ pub fn start_task_runs_codex_execution_in_worktree_test() {
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
 
+pub fn provider_await_task_recovers_trailing_junk_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-provider-recover-" <> unique,
+    ))
+  let run_path = filepath.join(base_dir, "run")
+  let worktree_path = filepath.join(base_dir, "worktree")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let fake_provider = filepath.join(bin_dir, "fake-provider")
+  let old_path = system.get_env("PATH")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(filepath.join(run_path, "logs"))
+  let assert Ok(_) = simplifile.create_directory_all(worktree_path)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = write_recoverable_execution_fake_provider(fake_provider)
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_provider),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+
+  let task =
+    types.Task(
+      id: "demo-task",
+      title: "Recoverable provider output",
+      description: "Return a result with trailing junk that Night Shift should sanitize.",
+      dependencies: [],
+      acceptance: ["Return a completed execution result."],
+      demo_plan: ["Recover the sanitized payload."],
+      decision_requests: [],
+      kind: types.ImplementationTask,
+      execution_mode: types.Serial,
+      state: types.Ready,
+      worktree_path: worktree_path,
+      branch_name: "night-shift/demo",
+      pr_number: "",
+      summary: "",
+    )
+
+  let assert Ok(task_run) =
+    provider.start_task(
+      types.resolved_agent_from_provider(types.Codex),
+      base_dir,
+      run_path,
+      task,
+      worktree_path,
+      [],
+      "seed-head",
+      "night-shift/demo",
+      "main",
+    )
+  let assert Ok(result) = provider.await_task(task_run)
+
+  system.set_env("PATH", old_path)
+  restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
+
+  let assert Ok(raw_payload) =
+    simplifile.read(filepath.join(
+      run_path,
+      "logs/demo-task.result.raw.jsonish",
+    ))
+  let assert Ok(sanitized_payload) =
+    simplifile.read(filepath.join(
+      run_path,
+      "logs/demo-task.result.sanitized.json",
+    ))
+
+  assert result.status == types.Completed
+  assert string.contains(does: raw_payload, contain: "\"follow_up_tasks\":[]}}")
+  assert string.contains(
+    does: sanitized_payload,
+    contain: "\"follow_up_tasks\":[]}",
+  )
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
 pub fn orchestrator_start_blocks_manual_attention_before_bootstrap_test() {
   let unique = system.unique_id()
   let base_dir =
@@ -2373,6 +2474,7 @@ pub fn orchestrator_start_fails_environment_preflight_before_task_launch_test() 
   let preflight_log =
     filepath.join(failed_run.run_path, "logs/environment-preflight.log")
   let assert Ok(preflight_contents) = simplifile.read(preflight_log)
+  let assert Ok(report_contents) = simplifile.read(failed_run.report_path)
 
   assert failed_run.status == types.RunFailed
   assert string.contains(
@@ -2382,6 +2484,197 @@ pub fn orchestrator_start_fails_environment_preflight_before_task_launch_test() 
   assert string.contains(does: events, contain: "\"kind\":\"task_started\"")
     == False
   assert string.contains(does: preflight_contents, contain: "missing-tool")
+  assert string.contains(
+    does: report_contents,
+    contain: "- Run-level failures: 1",
+  )
+  assert string.contains(
+    does: report_contents,
+    contain: "## Failure",
+  )
+  assert string.contains(
+    does: report_contents,
+    contain: "environment bootstrap",
+  )
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn environment_preflight_uses_explicit_bootstrap_requirements_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-preflight-generic-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let setup_path = project.worktree_setup_path(repo_root)
+  let log_path = filepath.join(base_dir, "preflight.log")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) = initialize_project_home(repo_root)
+  let assert Ok(_) = write_test_worktree_setup_with_preflight(
+    setup_path,
+    ["sh"],
+    ["sh -c 'echo bootstrap >/dev/null'", "missing-tool install"],
+    ["missing-tool verify"],
+  )
+
+  let result =
+    worktree_setup.preflight_environment(
+      repo_root,
+      "default",
+      setup_path,
+      log_path,
+    )
+  let assert Ok(preflight_contents) = simplifile.read(log_path)
+
+  let assert Ok(_) = result
+  assert string.contains(does: preflight_contents, contain: "[preflight] executable=sh")
+  assert string.contains(does: preflight_contents, contain: "missing-tool") == False
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn environment_preflight_defaults_to_first_setup_executable_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-preflight-default-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let setup_path = project.worktree_setup_path(repo_root)
+  let log_path = filepath.join(base_dir, "preflight.log")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) = initialize_project_home(repo_root)
+  let assert Ok(_) = write_test_worktree_setup(
+    setup_path,
+    ["sh -c 'echo bootstrap >/dev/null'", "missing-tool install"],
+    ["missing-tool verify"],
+  )
+
+  let result =
+    worktree_setup.preflight_environment(
+      repo_root,
+      "default",
+      setup_path,
+      log_path,
+    )
+  let assert Ok(preflight_contents) = simplifile.read(log_path)
+
+  let assert Ok(_) = result
+  assert string.contains(does: preflight_contents, contain: "[preflight] executable=sh")
+  assert string.contains(does: preflight_contents, contain: "missing-tool") == False
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn orchestrator_start_reports_setup_phase_failures_after_preflight_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-setup-runtime-failure-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let brief_path = filepath.join(base_dir, "brief.md")
+  let fake_provider = filepath.join(bin_dir, "fake-provider")
+  let state_home = filepath.join(base_dir, "state")
+  let old_path = system.get_env("PATH")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
+  let old_state_home = system.get_env("XDG_STATE_HOME")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
+  let assert Ok(_) = initialize_project_home(repo_root)
+  let assert Ok(_) = write_fake_provider(fake_provider)
+  let assert Ok(_) = write_test_worktree_setup_with_preflight(
+    project.worktree_setup_path(repo_root),
+    ["sh"],
+    ["sh -c 'echo bootstrap >/dev/null'", "missing-tool install"],
+    [],
+  )
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_provider),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+  seed_git_repo(repo_root, base_dir)
+
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("XDG_STATE_HOME", state_home)
+
+  let config =
+    types.Config(
+      ..types.default_config(),
+      verification_commands: [],
+      max_workers: 1,
+    )
+
+  let assert Ok(run) =
+    planned_run_in_environment(
+      repo_root,
+      brief_path,
+      types.Codex,
+      "default",
+      1,
+    )
+  let assert Ok(failed_run) = orchestrator.start(run, config)
+
+  system.set_env("PATH", old_path)
+  restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
+  restore_env("XDG_STATE_HOME", old_state_home)
+
+  let assert Ok(events) = simplifile.read(failed_run.events_path)
+  let env_log =
+    filepath.join(failed_run.run_path, "logs/demo-task.env.log")
+  let assert Ok(env_contents) = simplifile.read(env_log)
+  let failed_task =
+    failed_run.tasks
+    |> list.find(fn(task) { task.id == "demo-task" })
+    |> result.unwrap(or: types.Task(
+      id: "",
+      title: "",
+      description: "",
+      dependencies: [],
+      acceptance: [],
+      demo_plan: [],
+      decision_requests: [],
+      kind: types.ImplementationTask,
+      execution_mode: types.Serial,
+      state: types.Queued,
+      worktree_path: "",
+      branch_name: "",
+      pr_number: "",
+      summary: "",
+    ))
+
+  assert failed_run.status == types.RunFailed
+  assert string.contains(does: events, contain: "\"kind\":\"task_started\"")
+  assert string.contains(does: events, contain: "\"kind\":\"task_failed\"")
+  assert string.contains(
+    does: env_contents,
+    contain: "(exit 127)",
+  )
+  assert string.contains(
+    does: env_contents,
+    contain: "$ missing-tool install",
+  )
+  assert string.contains(
+    does: failed_task.summary,
+    contain: "Worktree setup phase failed while running `missing-tool install`",
+  )
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
@@ -2485,6 +2778,204 @@ pub fn orchestrator_start_uses_setup_phase_for_new_worktrees_test() {
     contain: "maintenance-phase",
   )
     == False
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn orchestrator_start_marks_decode_failures_failed_and_clears_lock_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-decode-failure-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let brief_path = filepath.join(base_dir, "brief.md")
+  let fake_provider = filepath.join(bin_dir, "fake-provider")
+  let state_home = filepath.join(base_dir, "state")
+  let old_path = system.get_env("PATH")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
+  let old_state_home = system.get_env("XDG_STATE_HOME")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
+  let assert Ok(_) = initialize_project_home(repo_root)
+  let assert Ok(_) = write_invalid_execution_fake_provider(fake_provider)
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_provider),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+  seed_git_repo(repo_root, base_dir)
+
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("XDG_STATE_HOME", state_home)
+
+  let config =
+    types.Config(
+      ..types.default_config(),
+      verification_commands: [],
+      max_workers: 1,
+    )
+
+  let assert Ok(run) = planned_run(repo_root, brief_path, types.Codex, 1)
+  let assert Ok(active_run) = journal.activate_run(run)
+  let assert Ok(failed_run) = orchestrator.start(active_run, config)
+
+  system.set_env("PATH", old_path)
+  restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
+  restore_env("XDG_STATE_HOME", old_state_home)
+
+  let failed_task =
+    failed_run.tasks
+    |> list.find(fn(task) { task.id == "demo-task" })
+    |> result.unwrap(or: types.Task(
+      id: "",
+      title: "",
+      description: "",
+      dependencies: [],
+      acceptance: [],
+      demo_plan: [],
+      decision_requests: [],
+      kind: types.ImplementationTask,
+      execution_mode: types.Serial,
+      state: types.Queued,
+      worktree_path: "",
+      branch_name: "",
+      pr_number: "",
+      summary: "",
+    ))
+  let assert Ok(events) = simplifile.read(failed_run.events_path)
+  let assert Ok(raw_payload) =
+    simplifile.read(filepath.join(
+      failed_run.run_path,
+      "logs/demo-task.result.raw.jsonish",
+    ))
+
+  assert failed_run.status == types.RunFailed
+  assert failed_task.state == types.Failed
+  assert string.contains(
+    does: failed_task.summary,
+    contain: "Unable to decode execution output for task demo-task.",
+  )
+  assert string.contains(does: events, contain: "\"kind\":\"task_failed\"")
+  assert string.contains(does: events, contain: "\"kind\":\"run_failed\"")
+  assert string.contains(
+    does: raw_payload,
+    contain: "\"follow_up_tasks\":[}",
+  )
+  let assert Error(_) = simplifile.read(project.active_lock_path(repo_root))
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn orchestrator_start_continues_awaiting_batch_after_decode_failure_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-batch-decode-failure-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let brief_path = filepath.join(base_dir, "brief.md")
+  let fake_provider = filepath.join(bin_dir, "fake-provider")
+  let state_home = filepath.join(base_dir, "state")
+  let old_path = system.get_env("PATH")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
+  let old_state_home = system.get_env("XDG_STATE_HOME")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
+  let assert Ok(_) = initialize_project_home(repo_root)
+  let assert Ok(_) = write_batch_decode_fake_provider(fake_provider)
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_provider),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+  seed_git_repo(repo_root, base_dir)
+
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("XDG_STATE_HOME", state_home)
+
+  let config =
+    types.Config(
+      ..types.default_config(),
+      verification_commands: [],
+      max_workers: 2,
+    )
+
+  let assert Ok(run) = planned_run(repo_root, brief_path, types.Codex, 2)
+  let assert Ok(active_run) = journal.activate_run(run)
+  let assert Ok(failed_run) = orchestrator.start(active_run, config)
+
+  system.set_env("PATH", old_path)
+  restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
+  restore_env("XDG_STATE_HOME", old_state_home)
+
+  let assert Ok(events) = simplifile.read(failed_run.events_path)
+  let bad_task =
+    failed_run.tasks
+    |> list.find(fn(task) { task.id == "bad-task" })
+    |> result.unwrap(or: types.Task(
+      id: "",
+      title: "",
+      description: "",
+      dependencies: [],
+      acceptance: [],
+      demo_plan: [],
+      decision_requests: [],
+      kind: types.ImplementationTask,
+      execution_mode: types.Serial,
+      state: types.Queued,
+      worktree_path: "",
+      branch_name: "",
+      pr_number: "",
+      summary: "",
+    ))
+  let fail_task =
+    failed_run.tasks
+    |> list.find(fn(task) { task.id == "fail-task" })
+    |> result.unwrap(or: types.Task(
+      id: "",
+      title: "",
+      description: "",
+      dependencies: [],
+      acceptance: [],
+      demo_plan: [],
+      decision_requests: [],
+      kind: types.ImplementationTask,
+      execution_mode: types.Serial,
+      state: types.Queued,
+      worktree_path: "",
+      branch_name: "",
+      pr_number: "",
+      summary: "",
+    ))
+
+  assert failed_run.status == types.RunFailed
+  assert bad_task.state == types.Failed
+  assert fail_task.state == types.Failed
+  assert string.contains(
+    does: fail_task.summary,
+    contain: "Provider intentionally blocked the task.",
+  )
+  assert string.contains(does: events, contain: "\"task_id\":\"bad-task\"")
+  assert string.contains(does: events, contain: "\"task_id\":\"fail-task\"")
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
@@ -2865,10 +3356,31 @@ fn write_test_worktree_setup(
   setup_commands: List(String),
   maintenance_commands: List(String),
 ) -> Result(Nil, simplifile.FileError) {
+  write_test_worktree_setup_with_preflight(
+    path,
+    [],
+    setup_commands,
+    maintenance_commands,
+  )
+}
+
+fn write_test_worktree_setup_with_preflight(
+  path: String,
+  preflight_commands: List(String),
+  setup_commands: List(String),
+  maintenance_commands: List(String),
+) -> Result(Nil, simplifile.FileError) {
   simplifile.write(
     "version = 1\n"
       <> "default_environment = \"default\"\n\n"
       <> "[environments.default.env]\n\n"
+      <> "[environments.default.preflight]\n"
+      <> "default = "
+      <> render_command_list(preflight_commands)
+      <> "\n"
+      <> "macos = []\n"
+      <> "linux = []\n"
+      <> "windows = []\n\n"
       <> "[environments.default.setup]\n"
       <> "default = "
       <> render_command_list(setup_commands)
@@ -2930,6 +3442,60 @@ fn write_fake_provider(path: String) -> Result(Nil, simplifile.FileError) {
       <> "else\n"
       <> "  echo 'completed by fake provider' > IMPLEMENTED.md\n"
       <> "  printf 'execution\\nNIGHT_SHIFT_RESULT_START\\n{\"status\":\"completed\",\"summary\":\"Implemented demo task\",\"files_touched\":[\"IMPLEMENTED.md\"],\"demo_evidence\":[\"IMPLEMENTED.md created\"],\"pr\":{\"title\":\"[night-shift] Implement demo task\",\"summary\":\"Implemented the fake provider task.\",\"demo\":[\"IMPLEMENTED.md created\"],\"risks\":[]},\"follow_up_tasks\":[]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "fi\n",
+    to: path,
+  )
+}
+
+fn write_recoverable_execution_fake_provider(
+  path: String,
+) -> Result(Nil, simplifile.FileError) {
+  simplifile.write(
+    "#!/bin/sh\n"
+      <> "MODE=$1\n"
+      <> "if [ \"$MODE\" = \"plan\" ]; then\n"
+      <> "  printf 'planning\\nNIGHT_SHIFT_RESULT_START\\n{\"tasks\":[{\"id\":\"demo-task\",\"title\":\"Recoverable task\",\"description\":\"Recover a malformed payload.\",\"dependencies\":[],\"acceptance\":[\"Recover the execution payload.\"],\"demo_plan\":[\"Show the recovered result.\"],\"execution_mode\":\"serial\"}]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "elif [ \"$MODE\" = \"plan-doc\" ]; then\n"
+      <> "  printf 'planning-doc\\nNIGHT_SHIFT_RESULT_START\\n# Brief\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "else\n"
+      <> "  printf 'execution\\nNIGHT_SHIFT_RESULT_START\\n{\"status\":\"completed\",\"summary\":\"Recovered demo task\",\"files_touched\":[],\"demo_evidence\":[\"Recovered from trailing junk\"],\"pr\":{\"title\":\"t\",\"summary\":\"s\",\"demo\":[],\"risks\":[]},\"follow_up_tasks\":[]}}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "fi\n",
+    to: path,
+  )
+}
+
+fn write_invalid_execution_fake_provider(
+  path: String,
+) -> Result(Nil, simplifile.FileError) {
+  simplifile.write(
+    "#!/bin/sh\n"
+      <> "MODE=$1\n"
+      <> "if [ \"$MODE\" = \"plan\" ]; then\n"
+      <> "  printf 'planning\\nNIGHT_SHIFT_RESULT_START\\n{\"tasks\":[{\"id\":\"demo-task\",\"title\":\"Invalid result task\",\"description\":\"Return an invalid execution payload.\",\"dependencies\":[],\"acceptance\":[\"Night Shift reports a decode failure.\"],\"demo_plan\":[\"Inspect the task failure.\"],\"execution_mode\":\"serial\"}]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "elif [ \"$MODE\" = \"plan-doc\" ]; then\n"
+      <> "  printf 'planning-doc\\nNIGHT_SHIFT_RESULT_START\\n# Brief\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "else\n"
+      <> "  printf 'execution\\nNIGHT_SHIFT_RESULT_START\\n{\"status\":\"completed\",\"summary\":\"Broken payload\",\"files_touched\":[],\"demo_evidence\":[],\"pr\":{\"title\":\"t\",\"summary\":\"s\",\"demo\":[],\"risks\":[]},\"follow_up_tasks\":[}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "fi\n",
+    to: path,
+  )
+}
+
+fn write_batch_decode_fake_provider(
+  path: String,
+) -> Result(Nil, simplifile.FileError) {
+  simplifile.write(
+    "#!/bin/sh\n"
+      <> "MODE=$1\n"
+      <> "PROMPT_FILE=$2\n"
+      <> "if [ \"$MODE\" = \"plan\" ]; then\n"
+      <> "  printf 'planning\\nNIGHT_SHIFT_RESULT_START\\n{\"tasks\":[{\"id\":\"bad-task\",\"title\":\"Bad task\",\"description\":\"Return malformed JSON.\",\"dependencies\":[],\"acceptance\":[\"Night Shift marks this failed.\"],\"demo_plan\":[\"Inspect bad-task.\"],\"execution_mode\":\"parallel\"},{\"id\":\"fail-task\",\"title\":\"Fail task\",\"description\":\"Return a valid failed result.\",\"dependencies\":[],\"acceptance\":[\"Night Shift marks this failed too.\"],\"demo_plan\":[\"Inspect fail-task.\"],\"execution_mode\":\"parallel\"}]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "elif [ \"$MODE\" = \"plan-doc\" ]; then\n"
+      <> "  printf 'planning-doc\\nNIGHT_SHIFT_RESULT_START\\n# Brief\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "elif grep -q 'ID: bad-task' \"$PROMPT_FILE\"; then\n"
+      <> "  printf 'execution\\nNIGHT_SHIFT_RESULT_START\\n{\"status\":\"completed\",\"summary\":\"Bad task broke JSON\",\"files_touched\":[],\"demo_evidence\":[],\"pr\":{\"title\":\"t\",\"summary\":\"s\",\"demo\":[],\"risks\":[]},\"follow_up_tasks\":[}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "else\n"
+      <> "  printf 'execution\\nNIGHT_SHIFT_RESULT_START\\n{\"status\":\"failed\",\"summary\":\"Provider intentionally blocked the task.\",\"files_touched\":[],\"demo_evidence\":[],\"pr\":{\"title\":\"t\",\"summary\":\"s\",\"demo\":[],\"risks\":[]},\"follow_up_tasks\":[]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
       <> "fi\n",
     to: path,
   )

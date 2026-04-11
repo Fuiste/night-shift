@@ -1,6 +1,6 @@
 import gleam/int
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/option.{type Option, None, Some}
 import gleam/string
 import night_shift/agent_config
 import night_shift/types
@@ -23,7 +23,8 @@ pub fn render(run: types.RunRecord, events: List(types.RunEvent)) -> String {
     "- Brief: " <> run.brief_path,
     "",
     "## Summary",
-    render_summary(run.decisions, run.planning_dirty, run.tasks),
+    render_summary(run.decisions, run.planning_dirty, run.tasks, events),
+    render_failure_summary(events),
     "",
     "## Tasks",
     render_tasks(run.decisions, run.planning_dirty, run.tasks),
@@ -38,6 +39,7 @@ fn render_summary(
   decisions: List(types.RecordedDecision),
   planning_dirty: Bool,
   tasks: List(types.Task),
+  events: List(types.RunEvent),
 ) -> String {
   let completed_count =
     tasks
@@ -65,6 +67,10 @@ fn render_summary(
     tasks
     |> list.filter(fn(task) { task.state == types.Failed })
     |> list.length
+  let run_level_failure_count = case latest_environment_preflight_failure(events) {
+    Some(_) -> 1
+    None -> 0
+  }
   let queued_count =
     tasks
     |> list.filter(fn(task) {
@@ -86,6 +92,7 @@ fn render_summary(
     "- Blocked tasks: " <> int.to_string(derived_blocked_count),
     "- Manual-attention tasks: " <> int.to_string(manual_attention_count),
     "- Outstanding decisions: " <> int.to_string(outstanding_decisions),
+    "- Run-level failures: " <> int.to_string(run_level_failure_count),
     "- Failed tasks: " <> int.to_string(failed_count),
     "- Queued tasks: " <> int.to_string(queued_count),
   ]
@@ -210,5 +217,32 @@ fn render_bool(value: Bool) -> String {
   case value {
     True -> "yes"
     False -> "no"
+  }
+}
+
+fn render_failure_summary(events: List(types.RunEvent)) -> String {
+  case latest_environment_preflight_failure(events) {
+    Some(message) ->
+      "\n## Failure\n- Type: environment bootstrap\n- Details: " <> message
+    None -> ""
+  }
+}
+
+fn latest_environment_preflight_failure(
+  events: List(types.RunEvent),
+) -> Option(String) {
+  latest_environment_preflight_failure_loop(list.reverse(events))
+}
+
+fn latest_environment_preflight_failure_loop(
+  events: List(types.RunEvent),
+) -> Option(String) {
+  case events {
+    [] -> None
+    [event, ..rest] ->
+      case event.kind == "environment_preflight_failed" {
+        True -> Some(event.message)
+        False -> latest_environment_preflight_failure_loop(rest)
+      }
   }
 }

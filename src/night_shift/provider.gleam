@@ -16,6 +16,9 @@ const start_marker = "NIGHT_SHIFT_RESULT_START"
 
 const end_marker = "NIGHT_SHIFT_RESULT_END"
 
+@external(erlang, "night_shift_provider_support", "extract_balanced_json")
+fn extract_balanced_json_raw(payload: String) -> String
+
 pub type TaskRun {
   TaskRun(
     task: types.Task,
@@ -219,13 +222,12 @@ pub fn start_task(
 pub fn await_task(run: TaskRun) -> Result(types.ExecutionResult, String) {
   let command_result = shell.wait(run.handle)
   case shell.succeeded(command_result) {
-    True -> {
-      use payload <- result.try(extract_json_payload(command_result.output))
-      json.parse(payload, execution_decoder())
-      |> result.map_error(fn(_) {
-        "Unable to decode execution output for task " <> run.task.id <> "."
-      })
-    }
+    True ->
+      decode_execution_result(
+        command_result.output,
+        run.log_path,
+        "Unable to decode execution output for task " <> run.task.id <> ".",
+      )
     False ->
       Error(
         "Provider execution failed for task "
@@ -272,13 +274,12 @@ pub fn repair_task(
     )
 
   case shell.succeeded(command_result) {
-    True -> {
-      use payload <- result.try(extract_json_payload(command_result.output))
-      json.parse(payload, execution_decoder())
-      |> result.map_error(fn(_) {
-        "Unable to decode repair output for task " <> task.id <> "."
-      })
-    }
+    True ->
+      decode_execution_result(
+        command_result.output,
+        log_path,
+        "Unable to decode repair output for task " <> task.id <> ".",
+      )
     False ->
       Error(
         "Repair provider failed for task " <> task.id <> ". See " <> log_path,
@@ -641,6 +642,7 @@ fn execution_prompt(task: types.Task) -> String {
   <> "Run your own validation before responding.\n"
   <> "Do not exceed the task scope.\n"
   <> "Return only one JSON object between the exact sentinel markers below.\n"
+  <> "The content between the markers must be exactly one valid JSON object with no trailing braces, notes, or extra text.\n"
   <> "Status must be one of: completed, blocked, failed, manual_attention.\n"
   <> "The JSON shape is:\n"
   <> start_marker
@@ -665,6 +667,11 @@ fn worktree_setup_prompt(output_path: String) -> String {
   <> "default_environment = \"default\"\n"
   <> "[environments.<name>.env]\n"
   <> "KEY = \"value\"\n"
+  <> "[environments.<name>.preflight]\n"
+  <> "default = [\"bootstrap-tool\"]\n"
+  <> "macos = []\n"
+  <> "linux = []\n"
+  <> "windows = []\n"
   <> "[environments.<name>.setup]\n"
   <> "default = [\"...\"]\n"
   <> "macos = []\n"
@@ -676,6 +683,9 @@ fn worktree_setup_prompt(output_path: String) -> String {
   <> "linux = []\n"
   <> "windows = []\n"
   <> "\n"
+  <> "Use the optional preflight section to list only executables that must exist before setup begins.\n"
+  <> "Do not list downstream tools that setup is expected to install or activate.\n"
+  <> "Examples: corepack-backed pnpm => preflight default = [\"corepack\"]; direct pnpm => [\"pnpm\"]; uv-based Python => [\"uv\"].\n"
   <> "If you are unsure, keep commands empty instead of guessing.\n"
   <> "\n"
   <> start_marker
@@ -770,6 +780,13 @@ pub fn extract_json_payload(output: String) -> Result(String, String) {
   extract_payload(output)
 }
 
+pub fn sanitize_json_payload(payload: String) -> Result(String, String) {
+  case string.trim(extract_balanced_json_raw(payload)) {
+    "" -> Error("Unable to recover a balanced JSON payload.")
+    sanitized -> Ok(sanitized)
+  }
+}
+
 fn extract_marker_payload(output: String) -> Result(String, String) {
   let sections =
     output
@@ -811,6 +828,72 @@ fn extract_structured_output(output: String) -> Result(String, String) {
     [] -> Error("Harness output did not contain a structured assistant result.")
     _ -> Ok(string.join(messages, with: "\n"))
   }
+}
+
+fn decode_execution_result(
+  output: String,
+  log_path: String,
+  failure_prefix: String,
+) -> Result(types.ExecutionResult, String) {
+  use payload <- result.try(extract_payload(output))
+  let raw_payload_path = raw_payload_artifact_path(log_path)
+  use _ <- result.try(write_file(raw_payload_path, payload))
+
+  case json.parse(payload, execution_decoder()) {
+    Ok(decoded) -> Ok(decoded)
+    Error(_) ->
+      case sanitize_json_payload(payload) {
+        Ok(sanitized) if sanitized != payload -> {
+          let sanitized_payload_path = sanitized_payload_artifact_path(log_path)
+          use _ <- result.try(write_file(sanitized_payload_path, sanitized))
+          json.parse(sanitized, execution_decoder())
+          |> result.map_error(fn(_) {
+            execution_decode_failure(
+              failure_prefix,
+              log_path,
+              raw_payload_path,
+              Some(sanitized_payload_path),
+            )
+          })
+        }
+        _ ->
+          Error(
+            execution_decode_failure(
+              failure_prefix,
+              log_path,
+              raw_payload_path,
+              None,
+            ),
+          )
+      }
+  }
+}
+
+fn execution_decode_failure(
+  prefix: String,
+  log_path: String,
+  raw_payload_path: String,
+  sanitized_payload_path: Option(String),
+) -> String {
+  prefix
+  <> " Night Shift captured the provider result, but it was not a valid execution JSON object.\n"
+  <> "Task log: "
+  <> log_path
+  <> "\n"
+  <> "Raw payload: "
+  <> raw_payload_path
+  <> case sanitized_payload_path {
+    Some(path) -> "\nSanitized payload: " <> path
+    None -> ""
+  }
+}
+
+fn raw_payload_artifact_path(log_path: String) -> String {
+  string.replace(in: log_path, each: ".log", with: ".result.raw.jsonish")
+}
+
+fn sanitized_payload_artifact_path(log_path: String) -> String {
+  string.replace(in: log_path, each: ".log", with: ".result.sanitized.json")
 }
 
 fn structured_output_decoder() -> decode.Decoder(String) {
