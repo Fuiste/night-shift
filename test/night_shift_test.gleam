@@ -272,6 +272,41 @@ pub fn extract_payload_markdown_test() {
   assert string.contains(does: payload, contain: "# Night Shift Brief")
 }
 
+pub fn extract_payload_uses_last_result_block_test() {
+  let output =
+    "user\n"
+    <> "NIGHT_SHIFT_RESULT_START\n"
+    <> "# Night Shift Brief\n"
+    <> "## Objective\n"
+    <> "...\n"
+    <> "NIGHT_SHIFT_RESULT_END\n"
+    <> "codex\n"
+    <> "NIGHT_SHIFT_RESULT_START\n"
+    <> "# Night Shift Brief\n"
+    <> "## Objective\n"
+    <> "Real brief.\n"
+    <> "NIGHT_SHIFT_RESULT_END\n"
+
+  let assert Ok(payload) = harness.extract_payload(output)
+  assert string.contains(does: payload, contain: "Real brief.")
+  assert !string.contains(does: payload, contain: "...\n")
+}
+
+pub fn extract_json_payload_uses_last_result_block_test() {
+  let output =
+    "user\n"
+    <> "NIGHT_SHIFT_RESULT_START\n"
+    <> "{\"tasks\":[]}\n"
+    <> "NIGHT_SHIFT_RESULT_END\n"
+    <> "codex\n"
+    <> "NIGHT_SHIFT_RESULT_START\n"
+    <> "{\"tasks\":[{\"id\":\"real-task\"}]}\n"
+    <> "NIGHT_SHIFT_RESULT_END\n"
+
+  let assert Ok(payload) = harness.extract_json_payload(output)
+  assert payload == "{\"tasks\":[{\"id\":\"real-task\"}]}"
+}
+
 pub fn start_without_brief_requires_default_doc_test() {
   let unique = system.unique_id()
   let base_dir =
@@ -549,6 +584,55 @@ pub fn plan_document_reports_empty_payload_test() {
 
   let assert Error(message) = result
   assert string.contains(does: message, contain: "empty brief")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn codex_plan_document_reads_prompt_from_stdin_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-codex-plan-stdin-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let notes_path = filepath.join(base_dir, "notes.md")
+  let doc_path = filepath.join(repo_root, types.default_brief_filename)
+  let fake_codex = filepath.join(bin_dir, "codex")
+  let state_home = filepath.join(base_dir, "state")
+  let old_path = system.get_env("PATH")
+  let old_fake_harness = system.get_env("NIGHT_SHIFT_FAKE_HARNESS")
+  let old_state_home = system.get_env("XDG_STATE_HOME")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = write_fake_codex(fake_codex)
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_codex),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+  let assert Ok(_) = simplifile.write("# Notes\n- add a hello script\n", to: notes_path)
+
+  system.unset_env("NIGHT_SHIFT_FAKE_HARNESS")
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("XDG_STATE_HOME", state_home)
+
+  let result =
+    harness.plan_document(types.Codex, repo_root, notes_path, doc_path)
+
+  system.set_env("PATH", old_path)
+  restore_env("NIGHT_SHIFT_FAKE_HARNESS", old_fake_harness)
+  restore_env("XDG_STATE_HOME", old_state_home)
+
+  let assert Ok(#(document, _artifact_path)) = result
+  assert string.contains(does: document, contain: "# Night Shift Brief")
+  assert string.contains(does: document, contain: "Add the hello script.")
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
@@ -925,6 +1009,55 @@ fn write_fake_harness(path: String) -> Result(Nil, simplifile.FileError) {
       <> "fi\n",
     to: path,
   )
+}
+
+fn write_fake_codex(path: String) -> Result(Nil, simplifile.FileError) {
+  simplifile.write(
+    "#!/bin/sh\n"
+      <> "if [ \"$1\" != \"exec\" ]; then\n"
+      <> "  printf 'unexpected codex subcommand: %s\\n' \"$1\" >&2\n"
+      <> "  exit 1\n"
+      <> "fi\n"
+      <> "shift\n"
+      <> "while [ $# -gt 0 ]; do\n"
+      <> "  case \"$1\" in\n"
+      <> "    --skip-git-repo-check|--dangerously-bypass-approvals-and-sandbox)\n"
+      <> "      shift\n"
+      <> "      ;;\n"
+      <> "    --sandbox)\n"
+      <> "      shift 2\n"
+      <> "      ;;\n"
+      <> "    -C)\n"
+      <> "      shift 2\n"
+      <> "      ;;\n"
+      <> "    -)\n"
+      <> "      INPUT=$(cat)\n"
+      <> "      printf 'planning-doc\\nNIGHT_SHIFT_RESULT_START\\n# Night Shift Brief\\n## Objective\\n'\n"
+      <> "      if printf '%s' \"$INPUT\" | grep -q 'add a hello script'; then\n"
+      <> "        printf 'Add the hello script.\\n'\n"
+      <> "      else\n"
+      <> "        printf 'Missing notes.\\n'\n"
+      <> "      fi\n"
+      <> "      printf '## Scope\\n- Add a hello script.\\n## Constraints\\n- Keep scope tight.\\n## Deliverables\\n- hello script\\n## Acceptance Criteria\\n- script exists\\n## Risks and Open Questions\\n- None.\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "      exit 0\n"
+      <> "      ;;\n"
+      <> "    *)\n"
+      <> "      printf 'expected prompt on stdin, got positional argument: %s\\n' \"$1\" >&2\n"
+      <> "      exit 7\n"
+      <> "      ;;\n"
+      <> "  esac\n"
+      <> "done\n"
+      <> "printf 'missing stdin prompt sentinel\\n' >&2\n"
+      <> "exit 8\n",
+    to: path,
+  )
+}
+
+fn restore_env(name: String, value: String) -> Nil {
+  case value {
+    "" -> system.unset_env(name)
+    _ -> system.set_env(name, value)
+  }
 }
 
 fn wait_for_run_payload(

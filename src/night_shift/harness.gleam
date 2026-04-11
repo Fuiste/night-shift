@@ -177,7 +177,7 @@ fn planner_command(
 ) -> String {
   let fake_harness = system.get_env("NIGHT_SHIFT_FAKE_HARNESS")
   case fake_harness {
-    "" -> real_command(harness, repo_root, prompt_path)
+    "" -> planning_command(harness, repo_root, prompt_path)
     command -> command <> " plan " <> shell.quote(prompt_path)
   }
 }
@@ -189,7 +189,7 @@ fn plan_document_command(
 ) -> String {
   let fake_harness = system.get_env("NIGHT_SHIFT_FAKE_HARNESS")
   case fake_harness {
-    "" -> real_command(harness, repo_root, prompt_path)
+    "" -> planning_command(harness, repo_root, prompt_path)
     command -> command <> " plan-doc " <> shell.quote(prompt_path)
   }
 }
@@ -204,10 +204,10 @@ fn executor_command(
   case fake_harness {
     "" ->
       case harness {
-        types.Codex ->
-          "PROMPT=$(cat "
-          <> shell.quote(prompt_path)
-          <> "); codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox \"$PROMPT\""
+        types.Codex -> codex_exec_command(
+          "--skip-git-repo-check --dangerously-bypass-approvals-and-sandbox",
+          prompt_path,
+        )
         types.Cursor ->
           "PROMPT=$(cat "
           <> shell.quote(prompt_path)
@@ -226,18 +226,17 @@ fn executor_command(
   }
 }
 
-fn real_command(
+fn planning_command(
   harness: types.Harness,
   repo_root: String,
   prompt_path: String,
 ) -> String {
   case harness {
-    types.Codex ->
-      "PROMPT=$(cat "
-      <> shell.quote(prompt_path)
-      <> "); codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -C "
-      <> shell.quote(repo_root)
-      <> " \"$PROMPT\""
+    types.Codex -> codex_exec_command(
+      "--skip-git-repo-check --sandbox read-only -C "
+        <> shell.quote(repo_root),
+      prompt_path,
+    )
     types.Cursor ->
       "PROMPT=$(cat "
       <> shell.quote(prompt_path)
@@ -247,9 +246,15 @@ fn real_command(
   }
 }
 
+fn codex_exec_command(arguments: String, prompt_path: String) -> String {
+  "codex exec " <> arguments <> " - < " <> shell.quote(prompt_path)
+}
+
 fn planner_prompt(brief_contents: String) -> String {
   "You are Night Shift's planning harness.\n"
   <> "Break the supplied brief into a task DAG.\n"
+  <> "Do not write files, apply patches, or make any repository changes.\n"
+  <> "Read only the files you need to plan the work.\n"
   <> "Stay strictly within the brief. Do not create adjacent scope.\n"
   <> "If ambiguity would change public behavior, create a single task whose description asks for manual attention.\n"
   <> "Return only one JSON object between the exact sentinel markers below.\n"
@@ -273,6 +278,8 @@ fn planning_document_prompt(
 ) -> String {
   "You are Night Shift's planning harness.\n"
   <> "Update the repository's cumulative Night Shift brief.\n"
+  <> "Do not write files, apply patches, or make any repository changes.\n"
+  <> "Read only the files needed to ground the brief.\n"
   <> "Inspect the repository as needed to understand the work being added.\n"
   <> "Preserve valid prior brief content unless the new notes supersede it.\n"
   <> "If the new notes conflict with the prior brief, the new notes win.\n"
@@ -360,12 +367,17 @@ fn render_lines(lines: List(String)) -> String {
 }
 
 pub fn extract_payload(output: String) -> Result(String, String) {
-  use #(_, after_start) <- result.try(
-    string.split_once(output, start_marker)
-    |> result.map_error(fn(_) {
-      "Harness output did not contain the start marker."
-    }),
-  )
+  let sections =
+    output
+    |> string.split(start_marker)
+    |> list.reverse
+
+  use after_start <- result.try(case sections {
+    [_] ->
+      Error("Harness output did not contain the start marker.")
+    [last_payload, ..] -> Ok(last_payload)
+    [] -> Error("Harness output did not contain the start marker.")
+  })
 
   use #(payload, _) <- result.try(
     string.split_once(after_start, end_marker)
