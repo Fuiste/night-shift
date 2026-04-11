@@ -449,12 +449,14 @@ renderer_loop() ->
             mode => ui_mode(),
             color => color_enabled(),
             width => terminal_width(),
+            height => terminal_height(),
             streams => #{},
             finished => [],
             focus => undefined,
             pinned => undefined,
             render_pending => false,
-            alt_active => false
+            alt_active => false,
+            spinner_index => 0
         }
     ).
 
@@ -722,27 +724,38 @@ render_now(State) ->
             print_finished_summary(State1),
             State1#{finished := []};
         _ ->
-            State
+            _ = erlang:send_after(120, self(), render),
+            State#{render_pending := true, spinner_index := maps:get(spinner_index, State) + 1}
     end.
 
 render_screen(State) ->
     Width = maps:get(width, State),
+    Height = maps:get(height, State),
     Streams = maps:values(maps:get(streams, State)),
-    Header = render_header(State, Streams, Width),
-    Footer = render_footer(Streams, Width),
+    HeaderLines = render_header_lines(State, Streams, Width),
+    FooterLines = render_footer_lines(State, Streams, Width),
     Focused = focused_stream(State, Streams),
-    Cards = render_task_cards(Streams, Width),
-    Transcript = render_transcript(Focused, Width),
-    case Width >= 100 of
+    BodyLines =
+        case Width >= 100 of
         true ->
             LeftWidth = 32,
             RightWidth = Width - LeftWidth - 3,
-            join_columns(Cards, Transcript, LeftWidth, RightWidth, Header, Footer);
+                join_columns_lines(
+                    render_task_cards_lines(Streams, LeftWidth),
+                    render_transcript_lines(Focused, RightWidth),
+                    LeftWidth,
+                    RightWidth
+                );
         false ->
-            iolist_to_binary([Header, "\n", Cards, "\n", Transcript, "\n", Footer])
-    end.
+                render_task_cards_lines(Streams, Width)
+                ++ [<<>>]
+                ++ render_transcript_lines(Focused, Width)
+    end,
+    MiddleHeight = max(Height - length(HeaderLines) - length(FooterLines) - 2, 0),
+    BodyLines1 = pad_lines(BodyLines, MiddleHeight),
+    join_lines(HeaderLines ++ [<<>>] ++ BodyLines1 ++ [<<>>] ++ FooterLines).
 
-render_header(State, Streams, Width) ->
+render_header_lines(State, Streams, Width) ->
     Active = length([Stream || Stream <- Streams, maps:get(status, Stream) =:= running]),
     Completed = length([Stream || Stream <- Streams, maps:get(status, Stream) =:= completed]),
     Failed = length([Stream || Stream <- Streams, maps:get(status, Stream) =:= failed]),
@@ -753,39 +766,46 @@ render_header(State, Streams, Width) ->
             FocusedStream ->
                 <<"Night Shift stream | ", (maps:get(harness, FocusedStream))/binary, " ", (maps:get(phase, FocusedStream))/binary, " | ", (maps:get(label, FocusedStream))/binary>>
         end,
-    Header1 = pad_or_trim(Title, Width),
-    Header2 =
-        <<Header1/binary, "\nActive: ", (integer_to_binary(Active))/binary, "  Completed: ", (integer_to_binary(Completed))/binary, "  Failed: ", (integer_to_binary(Failed))/binary>>,
-    PromptLine =
+    StatsLine =
+        <<"Active: ", (integer_to_binary(Active))/binary, "  Completed: ", (integer_to_binary(Completed))/binary, "  Failed: ", (integer_to_binary(Failed))/binary>>,
+    PromptLine0 =
         case Focus of
             undefined -> <<"Prompt hidden; see stream prompt artifacts and logs.">>;
-            FocusedPromptStream -> <<"Prompt hidden; see ", (maps:get(prompt_path, FocusedPromptStream))/binary>>
+            FocusedPromptStream ->
+                <<"Prompt hidden; see ", (display_path(maps:get(prompt_path, FocusedPromptStream), max(Width - 20, 24)))/binary>>
         end,
-    <<Header2/binary, "\n", PromptLine/binary>>.
+    wrap_lines(Title, Width)
+    ++ wrap_lines(StatsLine, Width)
+    ++ wrap_lines(PromptLine0, Width).
 
-render_footer(Streams, Width) ->
-    Summary =
-        case Streams of
-            [] -> <<"Waiting for streams...">>;
-            _ -> <<"Logs are being written alongside raw .stream.jsonl artifacts.">>
+render_footer_lines(State, Streams, Width) ->
+    Spinner = spinner_frame(maps:get(spinner_index, State)),
+    Focus = focused_stream(State, Streams),
+    StatusLine =
+        case Focus of
+            undefined ->
+                <<"Idle ", Spinner/binary, "  Waiting for streams...">>;
+            FocusedStream ->
+                <<"Thinking ", Spinner/binary, "  ", (maps:get(last_activity, FocusedStream))/binary>>
         end,
-    pad_or_trim(Summary, Width).
+    InfoLine = <<"Logs are being written alongside raw .stream.jsonl artifacts.">>,
+    wrap_lines(StatusLine, Width)
+    ++ wrap_lines(InfoLine, Width).
 
-render_task_cards(Streams, Width) ->
-    CardWidth = min(max(24, Width div 3), 32),
+render_task_cards_lines(Streams, Width) ->
     Lines =
         case Streams of
-            [] -> wrap_lines(<<"No active harness streams.">>, CardWidth);
+            [] -> wrap_lines(<<"No active harness streams.">>, Width);
             _ ->
-                lists:append([render_task_card(Stream, CardWidth) ++ [""] || Stream <- lists:sort(fun sort_streams/2, Streams)])
+                lists:append([render_task_card_lines(Stream, Width) ++ [<<>>] || Stream <- lists:sort(fun sort_streams/2, Streams)])
         end,
-    iolist_to_binary(string:join(Lines, "\n")).
+    trim_trailing_blank_lines(Lines).
 
-render_task_card(Stream, Width) ->
+render_task_card_lines(Stream, Width) ->
     Status = status_badge(maps:get(status, Stream), true),
     Label = trim_binary(<<"[", (maps:get(label, Stream))/binary, "] ", Status/binary>>),
     Body = wrap_lines(maps:get(last_activity, Stream), Width),
-    [binary_to_list(pad_or_trim(Label, Width)) | Body].
+    [pad_or_trim(Label, Width) | Body].
 
 sort_streams(A, B) ->
     maps:get(updated_at, A) >= maps:get(updated_at, B).
@@ -798,39 +818,107 @@ finished_stream(Stream) ->
         log_path => maps:get(log_path, Stream)
     }.
 
-render_transcript(undefined, Width) ->
-    iolist_to_binary(string:join(wrap_lines(<<"Waiting for a focused stream...">>, Width), "\n"));
-render_transcript(Stream, Width) ->
-    BaseLines = [<<"Transcript: ", (maps:get(label, Stream))/binary>>, <<"Log: ", (maps:get(log_path, Stream))/binary>>],
+render_transcript_lines(undefined, Width) ->
+    wrap_lines(<<"Waiting for a focused stream...">>, Width);
+render_transcript_lines(Stream, Width) ->
+    BaseLines = [
+        <<"Transcript: ", (maps:get(label, Stream))/binary>>,
+        <<"Log: ", (display_path(maps:get(log_path, Stream), max(Width - 5, 24)))/binary>>
+    ],
     TranscriptLines = maps:get(transcript, Stream),
     Live =
         case trim_binary(maps:get(live_assistant, Stream)) of
             <<>> -> [];
             Text -> [<<"assistant (live): ", Text/binary>>]
         end,
-    Wrapped =
-        lists:append([wrap_lines(Line, Width) || Line <- BaseLines ++ TranscriptLines ++ Live]),
-    iolist_to_binary(string:join(Wrapped, "\n")).
+    lists:append([wrap_lines(Line, Width) || Line <- BaseLines ++ TranscriptLines ++ Live]).
 
-join_columns(Cards, Transcript, LeftWidth, RightWidth, Header, Footer) ->
-    LeftLines = string:split(binary_to_list(Cards), "\n", all),
-    RightLines = string:split(binary_to_list(Transcript), "\n", all),
+join_columns_lines(LeftLines0, RightLines0, LeftWidth, RightWidth) ->
+    LeftLines = trim_trailing_blank_lines(LeftLines0),
+    RightLines = trim_trailing_blank_lines(RightLines0),
     Height = max(length(LeftLines), length(RightLines)),
     PaddedLeft = pad_lines(LeftLines, Height),
     PaddedRight = pad_lines(RightLines, Height),
-    BodyLines =
-        [
-            binary_to_list(pad_or_trim(list_to_binary(L), LeftWidth))
-            ++ " | "
-            ++ binary_to_list(pad_or_trim(list_to_binary(R), RightWidth))
-         || {L, R} <- lists:zip(PaddedLeft, PaddedRight)
-        ],
-    iolist_to_binary([Header, "\n", string:join(BodyLines, "\n"), "\n", Footer]).
+    [
+        <<(pad_or_trim(L, LeftWidth))/binary, " | ", (pad_or_trim(R, RightWidth))/binary>>
+     || {L, R} <- lists:zip(PaddedLeft, PaddedRight)
+    ].
+
+trim_trailing_blank_lines(Lines) ->
+    lists:reverse(trim_leading_blank_lines(lists:reverse(Lines))).
+
+trim_leading_blank_lines([<<>> | Rest]) ->
+    trim_leading_blank_lines(Rest);
+trim_leading_blank_lines(Lines) ->
+    Lines.
+
+join_lines([]) ->
+    <<>>;
+join_lines(Lines) ->
+    lists:foldl(
+        fun(Line, Acc) ->
+            case Acc of
+                <<>> -> Line;
+                _ -> <<Acc/binary, "\n", Line/binary>>
+            end
+        end,
+        <<>>,
+        Lines
+    ).
+
+display_path(Path, Width) ->
+    Chars = to_chars(Path),
+    case length(Chars) =< Width of
+        true ->
+            Path;
+        false ->
+            PrefixWidth = max(4, (Width - 3) div 2),
+            SuffixWidth = max(4, Width - PrefixWidth - 3),
+            Prefix = lists:sublist(Chars, PrefixWidth),
+            Suffix = lists:nthtail(length(Chars) - SuffixWidth, Chars),
+            from_chars(Prefix ++ "..." ++ Suffix)
+    end.
+
+spinner_frame(Index) ->
+    case Index rem 4 of
+        0 -> <<"|">>;
+        1 -> <<"/">>;
+        2 -> <<"-">>;
+        _ -> <<"\\">>
+    end.
 
 pad_lines(Lines, Height) when length(Lines) < Height ->
-    pad_lines(Lines ++ [""], Height);
+    pad_lines(Lines ++ [<<>>], Height);
 pad_lines(Lines, _Height) ->
     Lines.
+
+to_chars(Value) when is_binary(Value) ->
+    unicode:characters_to_list(Value);
+to_chars(Value) ->
+    unicode:characters_to_list(Value).
+
+from_chars(Value) ->
+    unicode:characters_to_binary(Value).
+
+strip_ansi(Text) ->
+    strip_ansi_chars(to_chars(Text)).
+
+strip_ansi_chars([27, $[ | Rest]) ->
+    strip_ansi_chars(skip_csi(Rest));
+strip_ansi_chars([Char | Rest]) ->
+    [Char | strip_ansi_chars(Rest)];
+strip_ansi_chars([]) ->
+    [].
+
+skip_csi([Char | Rest]) when
+    (Char >= $A andalso Char =< $Z)
+        orelse (Char >= $a andalso Char =< $z)
+        orelse Char =:= $~ ->
+    Rest;
+skip_csi([_ | Rest]) ->
+    skip_csi(Rest);
+skip_csi([]) ->
+    [].
 
 focused_stream(State, Streams) ->
     FocusId =
@@ -920,6 +1008,16 @@ terminal_width() ->
             end
     end.
 
+terminal_height() ->
+    case os:getenv("LINES") of
+        false -> 30;
+        Value ->
+            case string:to_integer(Value) of
+                {Int, _} when Int > 0 -> Int;
+                _ -> 30
+            end
+    end.
+
 color_enabled() ->
     stdout_is_tty() andalso os:getenv("NO_COLOR") =:= false.
 
@@ -948,12 +1046,13 @@ normalize_raw_text(Data) ->
     trim_binary(Data).
 
 trim_binary(Value) when is_binary(Value) ->
-    unicode:characters_to_binary(string:trim(binary_to_list(Value))).
+    unicode:characters_to_binary(string:trim(to_chars(Value))).
 
 should_suppress_line(Data) ->
     is_plugin_manifest_warning(Data)
         orelse is_featured_plugin_warning(Data)
-        orelse is_shell_snapshot_warning(Data).
+        orelse is_shell_snapshot_warning(Data)
+        orelse is_terminal_input_noise(Data).
 
 is_warning_line(Data) ->
     binary:match(Data, <<" WARN ">>) =/= nomatch
@@ -967,6 +1066,50 @@ is_featured_plugin_warning(Data) ->
 
 is_shell_snapshot_warning(Data) ->
     binary:match(Data, <<"WARN codex_core::shell_snapshot: Failed to delete shell snapshot">>) =/= nomatch.
+
+is_terminal_input_noise(Data) ->
+    Trimmed = trim_binary(Data),
+    case Trimmed of
+        <<>> ->
+            false;
+        _ ->
+            contains_terminal_noise_sequence(Trimmed)
+                orelse looks_like_terminal_noise(Trimmed)
+    end.
+
+contains_terminal_noise_sequence(Data) ->
+    lists:any(
+        fun(Pattern) -> binary:match(Data, Pattern) =/= nomatch end,
+        [
+            <<"^[[A">>,
+            <<"^[[B">>,
+            <<"^[[C">>,
+            <<"^[[D">>,
+            <<"^[OA">>,
+            <<"^[OB">>,
+            <<"^[OC">>,
+            <<"^[OD">>,
+            <<27, "[A">>,
+            <<27, "[B">>,
+            <<27, "[C">>,
+            <<27, "[D">>,
+            <<27, "OA">>,
+            <<27, "OB">>,
+            <<27, "OC">>,
+            <<27, "OD">>
+        ]
+    ).
+
+looks_like_terminal_noise(Data) ->
+    Chars = to_chars(Data),
+    length(Chars) >= 6
+        andalso lists:all(
+            fun(Char) ->
+                lists:member(Char, "^[]ABCDOHFMPQRS~0123456789;")
+                    orelse Char =:= 27
+            end,
+            Chars
+        ).
 
 append_file(Path, _Data) when Path =:= <<>> ->
     ok;
@@ -1001,22 +1144,23 @@ unique_handle() ->
     integer_to_binary(erlang:unique_integer([positive, monotonic])).
 
 wrap_lines(Text, Width) ->
-    Text1 = binary_to_list(trim_binary(Text)),
+    Width1 = max(Width, 1),
+    Text1 = to_chars(trim_binary(Text)),
     case Text1 of
-        [] -> [""];
+        [] -> [<<>>];
         _ ->
             RawLines = string:split(Text1, "\n", all),
-            lists:append([wrap_line(Line, Width) || Line <- RawLines])
+            lists:append([wrap_line(Line, Width1) || Line <- RawLines])
     end.
 
 wrap_line(Line, Width) ->
     case length(Line) =< Width of
-        true -> [Line];
+        true -> [from_chars(Line)];
         false ->
             {Chunk, Rest} = split_at_width(Line, Width),
             case string:trim(Rest, leading) of
-                [] -> [Chunk];
-                Next -> [Chunk | wrap_line(Next, Width)]
+                [] -> [from_chars(Chunk)];
+                Next -> [from_chars(Chunk) | wrap_line(Next, Width)]
             end
     end.
 
@@ -1024,11 +1168,11 @@ split_at_width(Line, Width) ->
     {lists:sublist(Line, Width), lists:nthtail(Width, Line)}.
 
 pad_or_trim(Text, Width) ->
-    List = binary_to_list(Text),
-    case length(List) of
+    Visible = to_chars(strip_ansi(Text)),
+    case length(Visible) of
         Len when Len =:= Width -> Text;
-        Len when Len < Width -> iolist_to_binary([Text, lists:duplicate(Width - Len, $\s)]);
-        _ -> list_to_binary(lists:sublist(List, Width))
+        Len when Len < Width -> iolist_to_binary([Text, from_chars(lists:duplicate(Width - Len, $\s))]);
+        _ -> from_chars(lists:sublist(Visible, Width))
     end.
 
 maybe_append_raw_log(LogPath, none, Data) ->
