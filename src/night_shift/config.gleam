@@ -227,7 +227,8 @@ fn upsert_profile(
   profile_name: String,
   update: fn(types.AgentProfile) -> types.AgentProfile,
 ) -> types.Config {
-  let updated_profiles = upsert_profile_in_list(config.profiles, profile_name, update)
+  let updated_profiles =
+    upsert_profile_in_list(config.profiles, profile_name, update)
   types.Config(..config, profiles: updated_profiles)
 }
 
@@ -238,18 +239,19 @@ fn upsert_profile_in_list(
 ) -> List(types.AgentProfile) {
   case profiles {
     [] -> [update(blank_profile(profile_name))]
-    [profile, ..rest] if profile.name == profile_name ->
-      [update(profile), ..rest]
-    [profile, ..rest] ->
-      [profile, ..upsert_profile_in_list(rest, profile_name, update)]
+    [profile, ..rest] if profile.name == profile_name -> [
+      update(profile),
+      ..rest
+    ]
+    [profile, ..rest] -> [
+      profile,
+      ..upsert_profile_in_list(rest, profile_name, update)
+    ]
   }
 }
 
 fn blank_profile(name: String) -> types.AgentProfile {
-  types.AgentProfile(
-    ..types.default_agent_profile(),
-    name: name,
-  )
+  types.AgentProfile(..types.default_agent_profile(), name: name)
 }
 
 fn upsert_provider_override(
@@ -259,10 +261,14 @@ fn upsert_provider_override(
 ) -> List(types.ProviderOverride) {
   case overrides {
     [] -> [types.ProviderOverride(key: key, value: value)]
-    [override, ..rest] if override.key == key ->
-      [types.ProviderOverride(key: key, value: value), ..rest]
-    [override, ..rest] ->
-      [override, ..upsert_provider_override(rest, key, value)]
+    [override, ..rest] if override.key == key -> [
+      types.ProviderOverride(key: key, value: value),
+      ..rest
+    ]
+    [override, ..rest] -> [
+      override,
+      ..upsert_provider_override(rest, key, value)
+    ]
   }
 }
 

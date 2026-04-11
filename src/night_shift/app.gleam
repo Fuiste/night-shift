@@ -32,39 +32,44 @@ pub fn run(command: types.Command) -> Nil {
             <> crate_summary(config),
           )
         types.Plan(notes_path, doc_path, agent_overrides) ->
-          io.println(case agent_config.resolve_plan_agent(config, agent_overrides) {
-            Ok(planning_agent) -> plan(repo_root, notes_path, doc_path, planning_agent)
-            Error(message) -> message
-          })
+          io.println(
+            case agent_config.resolve_plan_agent(config, agent_overrides) {
+              Ok(planning_agent) ->
+                plan(repo_root, notes_path, doc_path, planning_agent)
+              Error(message) -> message
+            },
+          )
         types.Start(brief_path, agent_overrides, max_workers, False) -> {
           let resolved_brief = resolve_start_brief_path(repo_root, brief_path)
           let resolved_workers = choose_max_workers(max_workers, config)
 
-          io.println(case resolved_brief, agent_config.resolve_start_agents(
-            config,
-            agent_overrides,
-          ) {
-            Ok(path), Ok(#(planning_agent, execution_agent)) ->
-              start(
-                repo_root,
-                path,
-                planning_agent,
-                execution_agent,
-                resolved_workers,
-                config,
-              )
-            Error(message), _ -> message
-            _, Error(message) -> message
-          })
+          io.println(
+            case
+              resolved_brief,
+              agent_config.resolve_start_agents(config, agent_overrides)
+            {
+              Ok(path), Ok(#(planning_agent, execution_agent)) ->
+                start(
+                  repo_root,
+                  path,
+                  planning_agent,
+                  execution_agent,
+                  resolved_workers,
+                  config,
+                )
+              Error(message), _ -> message
+              _, Error(message) -> message
+            },
+          )
         }
         types.Start(brief_path, agent_overrides, max_workers, True) -> {
           let resolved_brief = resolve_start_brief_path(repo_root, brief_path)
           let resolved_workers = choose_max_workers(max_workers, config)
 
-          case resolved_brief, agent_config.resolve_start_agents(
-            config,
-            agent_overrides,
-          ) {
+          case
+            resolved_brief,
+            agent_config.resolve_start_agents(config, agent_overrides)
+          {
             Ok(path), Ok(#(planning_agent, execution_agent)) ->
               case
                 journal.start_run(
@@ -85,7 +90,10 @@ pub fn run(command: types.Command) -> Nil {
                     )
                   {
                     Ok(session) -> {
-                      io.println(render_dashboard_summary(session.url, run.run_id))
+                      io.println(render_dashboard_summary(
+                        session.url,
+                        run.run_id,
+                      ))
                       system.wait_forever()
                     }
                     Error(message) -> {

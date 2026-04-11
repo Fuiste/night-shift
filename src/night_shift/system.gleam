@@ -30,3 +30,23 @@ pub fn sleep(milliseconds: Int) -> Nil
 
 @external(erlang, "night_shift_system", "wait_forever")
 pub fn wait_forever() -> Nil
+
+@external(erlang, "night_shift_system", "stdout_is_tty")
+pub fn stdout_is_tty() -> Bool
+
+@external(erlang, "night_shift_system", "terminal_columns")
+pub fn terminal_columns() -> Int
+
+@external(erlang, "night_shift_system", "color_enabled")
+pub fn color_enabled() -> Bool
+
+@external(erlang, "night_shift_system", "os_name")
+pub fn os_name() -> String
+
+pub fn stream_ui_mode() -> String {
+  case get_env("NIGHT_SHIFT_STREAM_UI") {
+    "tui" -> "tui"
+    "plain" -> "plain"
+    _ -> "auto"
+  }
+}

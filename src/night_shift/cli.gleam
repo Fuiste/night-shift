@@ -119,7 +119,13 @@ fn parse_demo(
 }
 
 fn parse_start(args: List(String)) -> Result(types.Command, String) {
-  parse_start_flags(args, None, types.empty_agent_overrides(), Error(Nil), False)
+  parse_start_flags(
+    args,
+    None,
+    types.empty_agent_overrides(),
+    Error(Nil),
+    False,
+  )
 }
 
 fn parse_start_flags(
@@ -133,7 +139,13 @@ fn parse_start_flags(
     [] -> Ok(types.Start(brief_path, agent_overrides, max_workers, ui_enabled))
 
     ["--brief", path, ..rest] ->
-      parse_start_flags(rest, Some(path), agent_overrides, max_workers, ui_enabled)
+      parse_start_flags(
+        rest,
+        Some(path),
+        agent_overrides,
+        max_workers,
+        ui_enabled,
+      )
 
     ["--profile", profile_name, ..rest] ->
       parse_start_flags(

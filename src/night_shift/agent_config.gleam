@@ -7,7 +7,11 @@ pub fn resolve_plan_agent(
   config: types.Config,
   overrides: types.AgentOverrides,
 ) -> Result(types.ResolvedAgentConfig, String) {
-  resolve_profile(config, fallback_phase_profile(config.planning_profile, config), overrides)
+  resolve_profile(
+    config,
+    fallback_phase_profile(config.planning_profile, config),
+    overrides,
+  )
 }
 
 pub fn resolve_start_agents(
@@ -31,7 +35,11 @@ pub fn resolve_review_agent(
   config: types.Config,
   overrides: types.AgentOverrides,
 ) -> Result(types.ResolvedAgentConfig, String) {
-  resolve_profile(config, fallback_phase_profile(config.review_profile, config), overrides)
+  resolve_profile(
+    config,
+    fallback_phase_profile(config.review_profile, config),
+    overrides,
+  )
 }
 
 pub fn effective_phase_profile_name(
@@ -120,7 +128,10 @@ fn choose_optional_reasoning(
   }
 }
 
-fn fallback_phase_profile(phase_profile_name: String, config: types.Config) -> String {
+fn fallback_phase_profile(
+  phase_profile_name: String,
+  config: types.Config,
+) -> String {
   case phase_profile_name {
     "" -> config.default_profile
     profile_name -> profile_name

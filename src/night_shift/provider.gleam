@@ -47,13 +47,25 @@ pub fn plan_document(
     ),
   ))
   use command <- result.try(plan_document_command(agent, repo_root, prompt_path))
-  let command_result = run_planner_command(command, repo_root, log_path)
+  let command_result =
+    run_planner_command(
+      command,
+      repo_root,
+      log_path,
+      shell.stream_metadata(
+        label: "brief",
+        prompt_path: prompt_path,
+        harness: types.provider_to_string(agent.provider),
+        phase: "plan_document",
+      ),
+    )
 
   case shell.succeeded(command_result) {
     True -> {
       use document <- result.try(extract_payload(command_result.output))
       case string.trim(document) {
-        "" -> Error("Planning provider returned an empty brief. See " <> log_path)
+        "" ->
+          Error("Planning provider returned an empty brief. See " <> log_path)
         trimmed -> Ok(#(trimmed, artifact_path))
       }
     }
@@ -72,7 +84,18 @@ pub fn plan_tasks(
   use brief_contents <- result.try(read_file(brief_path))
   use _ <- result.try(write_file(prompt_path, planner_prompt(brief_contents)))
   use command <- result.try(planner_command(agent, repo_root, prompt_path))
-  let command_result = run_planner_command(command, repo_root, log_path)
+  let command_result =
+    run_planner_command(
+      command,
+      repo_root,
+      log_path,
+      shell.stream_metadata(
+        label: "planner",
+        prompt_path: prompt_path,
+        harness: types.provider_to_string(agent.provider),
+        phase: "plan_tasks",
+      ),
+    )
 
   case shell.succeeded(command_result) {
     True -> {
@@ -102,7 +125,18 @@ pub fn start_task(
     worktree_path,
     prompt_path,
   ))
-  let handle = start_provider_command(command, worktree_path, log_path, task.id)
+  let handle =
+    start_provider_command(
+      command,
+      worktree_path,
+      log_path,
+      shell.stream_metadata(
+        label: task.id,
+        prompt_path: prompt_path,
+        harness: types.provider_to_string(agent.provider),
+        phase: "execute",
+      ),
+    )
 
   Ok(TaskRun(
     task: task,
@@ -156,7 +190,17 @@ pub fn repair_task(
     prompt_path,
   ))
   let command_result =
-    run_provider_command(command, worktree_path, log_path, task.id <> " repair")
+    run_provider_command(
+      command,
+      worktree_path,
+      log_path,
+      shell.stream_metadata(
+        label: task.id <> " repair",
+        prompt_path: prompt_path,
+        harness: types.provider_to_string(agent.provider),
+        phase: "repair",
+      ),
+    )
 
   case shell.succeeded(command_result) {
     True -> {
@@ -199,10 +243,11 @@ fn run_planner_command(
   command: String,
   cwd: String,
   log_path: String,
+  metadata: shell.StreamMetadata,
 ) -> shell.CommandResult {
   case fake_provider_command() {
     Some(_) -> shell.run(command, cwd, log_path)
-    None -> shell.run_streaming(command, cwd, log_path)
+    None -> shell.run_streaming(command, cwd, log_path, metadata)
   }
 }
 
@@ -210,11 +255,11 @@ fn start_provider_command(
   command: String,
   cwd: String,
   log_path: String,
-  prefix: String,
+  metadata: shell.StreamMetadata,
 ) -> shell.JobHandle {
   case fake_provider_command() {
     Some(_) -> shell.start(command, cwd, log_path)
-    None -> shell.start_streaming(command, cwd, log_path, prefix)
+    None -> shell.start_streaming(command, cwd, log_path, metadata)
   }
 }
 
@@ -222,11 +267,11 @@ fn run_provider_command(
   command: String,
   cwd: String,
   log_path: String,
-  prefix: String,
+  metadata: shell.StreamMetadata,
 ) -> shell.CommandResult {
   case fake_provider_command() {
     Some(_) -> shell.run(command, cwd, log_path)
-    None -> shell.run_streaming_prefixed(command, cwd, log_path, prefix)
+    None -> shell.run_streaming(command, cwd, log_path, metadata)
   }
 }
 
@@ -262,7 +307,8 @@ fn executor_command(
             "--skip-git-repo-check --dangerously-bypass-approvals-and-sandbox",
             prompt_path,
           )
-        types.Cursor -> cursor_execute_command(agent, worktree_path, prompt_path)
+        types.Cursor ->
+          cursor_execute_command(agent, worktree_path, prompt_path)
       }
   }
 }
@@ -276,7 +322,8 @@ fn planning_command(
     types.Codex ->
       codex_exec_command(
         agent,
-        "--skip-git-repo-check --sandbox read-only -C " <> shell.quote(repo_root),
+        "--skip-git-repo-check --sandbox read-only -C "
+          <> shell.quote(repo_root),
         prompt_path,
       )
     types.Cursor -> cursor_plan_command(agent, repo_root, prompt_path)
@@ -290,7 +337,7 @@ fn codex_exec_command(
 ) -> Result(String, String) {
   use extra_arguments <- result.try(codex_extra_arguments(agent))
   Ok(
-    "codex exec "
+    "codex exec --json --color never "
     <> base_arguments
     <> extra_arguments
     <> " - < "
@@ -298,9 +345,15 @@ fn codex_exec_command(
   )
 }
 
-fn codex_extra_arguments(agent: types.ResolvedAgentConfig) -> Result(String, String) {
+fn codex_extra_arguments(
+  agent: types.ResolvedAgentConfig,
+) -> Result(String, String) {
   case agent.provider_overrides {
-    [] -> Ok(codex_model_argument(agent.model) <> codex_reasoning_argument(agent.reasoning))
+    [] ->
+      Ok(
+        codex_model_argument(agent.model)
+        <> codex_reasoning_argument(agent.reasoning),
+      )
     _ ->
       Error(
         "Codex does not support `provider_overrides` in Night Shift yet. Remove the overrides from profile "
@@ -317,9 +370,7 @@ fn codex_model_argument(model: Option(String)) -> String {
   }
 }
 
-fn codex_reasoning_argument(
-  reasoning: Option(types.ReasoningLevel),
-) -> String {
+fn codex_reasoning_argument(reasoning: Option(types.ReasoningLevel)) -> String {
   case reasoning {
     Some(value) ->
       " -c "
@@ -335,11 +386,15 @@ fn cursor_plan_command(
   repo_root: String,
   prompt_path: String,
 ) -> Result(String, String) {
-  use flags <- result.try(cursor_shared_arguments(agent, repo_root, Some("plan")))
+  use flags <- result.try(cursor_shared_arguments(
+    agent,
+    repo_root,
+    Some("plan"),
+  ))
   Ok(
     "PROMPT=$(cat "
     <> shell.quote(prompt_path)
-    <> "); cursor-agent --print --output-format text --force --trust"
+    <> "); cursor-agent --print --output-format stream-json --stream-partial-output --force --trust"
     <> flags
     <> " \"$PROMPT\"",
   )
@@ -354,7 +409,7 @@ fn cursor_execute_command(
   Ok(
     "PROMPT=$(cat "
     <> shell.quote(prompt_path)
-    <> "); cursor-agent --print --output-format text --force --trust"
+    <> "); cursor-agent --print --output-format stream-json --stream-partial-output --force --trust"
     <> flags
     <> " \"$PROMPT\"",
   )
@@ -388,10 +443,7 @@ fn cursor_shared_arguments(
   }
 
   Ok(
-    model_argument
-    <> mode_argument
-    <> " --workspace "
-    <> shell.quote(workspace),
+    model_argument <> mode_argument <> " --workspace " <> shell.quote(workspace),
   )
 }
 
@@ -419,7 +471,9 @@ fn cursor_mode(
         <> ". Supported keys: mode.",
       )
     _ ->
-      Error("Cursor accepts only a single `mode` provider override in Night Shift.")
+      Error(
+        "Cursor accepts only a single `mode` provider override in Night Shift.",
+      )
   }
 }
 
@@ -540,6 +594,17 @@ fn render_lines(lines: List(String)) -> String {
 }
 
 pub fn extract_payload(output: String) -> Result(String, String) {
+  case extract_structured_output(output) {
+    Ok(structured_output) -> extract_marker_payload(structured_output)
+    Error(_) -> extract_marker_payload(output)
+  }
+}
+
+pub fn extract_json_payload(output: String) -> Result(String, String) {
+  extract_payload(output)
+}
+
+fn extract_marker_payload(output: String) -> Result(String, String) {
   let sections =
     output
     |> string.split(start_marker)
@@ -561,8 +626,58 @@ pub fn extract_payload(output: String) -> Result(String, String) {
   Ok(string.trim(payload))
 }
 
-pub fn extract_json_payload(output: String) -> Result(String, String) {
-  extract_payload(output)
+fn extract_structured_output(output: String) -> Result(String, String) {
+  let messages =
+    output
+    |> string.split("\n")
+    |> list.filter_map(fn(line) {
+      case string.trim(line) {
+        "" -> Error(Nil)
+        trimmed ->
+          case json.parse(trimmed, structured_output_decoder()) {
+            Ok(text) -> Ok(text)
+            Error(_) -> Error(Nil)
+          }
+      }
+    })
+
+  case messages {
+    [] -> Error("Harness output did not contain a structured assistant result.")
+    _ -> Ok(string.join(messages, with: "\n"))
+  }
+}
+
+fn structured_output_decoder() -> decode.Decoder(String) {
+  decode.one_of(cursor_result_decoder(), or: [codex_agent_message_decoder()])
+}
+
+fn codex_agent_message_decoder() -> decode.Decoder(String) {
+  use event_type <- decode.field("type", decode.string)
+  case event_type {
+    "item.completed" -> {
+      use item <- decode.field("item", {
+        use item_type <- decode.field("type", decode.string)
+        use text <- decode.field("text", decode.string)
+        case item_type {
+          "agent_message" -> decode.success(text)
+          _ -> decode.failure("", "CodexAgentMessage")
+        }
+      })
+      decode.success(item)
+    }
+    _ -> decode.failure("", "CodexAgentMessage")
+  }
+}
+
+fn cursor_result_decoder() -> decode.Decoder(String) {
+  use event_type <- decode.field("type", decode.string)
+  case event_type {
+    "result" -> {
+      use result <- decode.field("result", decode.string)
+      decode.success(result)
+    }
+    _ -> decode.failure("", "CursorResult")
+  }
 }
 
 fn planner_decoder() -> decode.Decoder(List(types.Task)) {

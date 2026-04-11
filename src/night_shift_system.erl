@@ -1,6 +1,6 @@
 -module(night_shift_system).
 
--export([argv/0, cwd/0, home_directory/0, state_directory/0, get_env/1, set_env/2, unset_env/1, timestamp/0, unique_id/0, sleep/1, wait_forever/0]).
+-export([argv/0, cwd/0, home_directory/0, state_directory/0, get_env/1, set_env/2, unset_env/1, timestamp/0, unique_id/0, sleep/1, wait_forever/0, stdout_is_tty/0, terminal_columns/0, color_enabled/0, os_name/0]).
 
 argv() ->
     lists:map(fun to_binary/1, init:get_plain_arguments()).
@@ -49,6 +49,34 @@ wait_forever() ->
     receive
     after infinity ->
         nil
+    end.
+
+stdout_is_tty() ->
+    case catch begin
+        ok = prim_tty:load(),
+        prim_tty:isatty(stdout)
+    end of
+        true -> true;
+        false -> false;
+        _ -> false
+    end.
+
+terminal_columns() ->
+    case os:getenv("COLUMNS") of
+        false -> 100;
+        Value ->
+            case string:to_integer(Value) of
+                {Int, _} when Int > 0 -> Int;
+                _ -> 100
+            end
+    end.
+
+color_enabled() ->
+    stdout_is_tty() andalso os:getenv("NO_COLOR") =:= false.
+
+os_name() ->
+    case os:type() of
+        {_, Name} -> atom_to_binary(Name, utf8)
     end.
 
 to_binary(Value) when is_binary(Value) ->

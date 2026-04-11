@@ -290,7 +290,9 @@ fn list_run_ids(repo_path: String) -> Result(List(String), String) {
 
 fn read_run(path: String) -> Result(types.RunRecord, String) {
   use contents <- result.try(read_string(path))
-  let decoder = case string.contains(does: contents, contain: "\"planning_agent\"") {
+  let decoder = case
+    string.contains(does: contents, contain: "\"planning_agent\"")
+  {
     True -> run_decoder()
     False -> legacy_run_decoder()
   }
@@ -413,7 +415,10 @@ fn run_decoder() -> decode.Decoder(types.RunRecord) {
   use report_path <- decode.field("report_path", decode.string)
   use lock_path <- decode.field("lock_path", decode.string)
   use planning_agent <- decode.field("planning_agent", resolved_agent_decoder())
-  use execution_agent <- decode.field("execution_agent", resolved_agent_decoder())
+  use execution_agent <- decode.field(
+    "execution_agent",
+    resolved_agent_decoder(),
+  )
   use max_workers <- decode.field("max_workers", decode.int)
   use status <- decode.field("status", run_status_decoder())
   use created_at <- decode.field("created_at", decode.string)
@@ -477,7 +482,10 @@ fn resolved_agent_decoder() -> decode.Decoder(types.ResolvedAgentConfig) {
   use profile_name <- decode.field("profile_name", decode.string)
   use provider <- decode.field("provider", provider_decoder())
   use model <- decode.field("model", decode.optional(decode.string))
-  use reasoning <- decode.field("reasoning", decode.optional(reasoning_decoder()))
+  use reasoning <- decode.field(
+    "reasoning",
+    decode.optional(reasoning_decoder()),
+  )
   use provider_overrides <- decode.field(
     "provider_overrides",
     decode.list(provider_override_decoder()),
