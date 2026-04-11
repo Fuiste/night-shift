@@ -220,13 +220,13 @@ fn crate_summary(config: types.Config) -> String {
   <> config.default_profile
   <> "\n"
   <> "Planning profile: "
-  <> config.planning_profile
+  <> agent_config.effective_phase_profile_name(config.planning_profile, config)
   <> "\n"
   <> "Execution profile: "
-  <> config.execution_profile
+  <> agent_config.effective_phase_profile_name(config.execution_profile, config)
   <> "\n"
   <> "Review profile: "
-  <> config.review_profile
+  <> agent_config.effective_phase_profile_name(config.review_profile, config)
   <> "\n"
   <> "Max workers: "
   <> int.to_string(config.max_workers)

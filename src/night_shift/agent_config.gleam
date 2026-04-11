@@ -7,7 +7,7 @@ pub fn resolve_plan_agent(
   config: types.Config,
   overrides: types.AgentOverrides,
 ) -> Result(types.ResolvedAgentConfig, String) {
-  resolve_profile(config, config.planning_profile, overrides)
+  resolve_profile(config, fallback_phase_profile(config.planning_profile, config), overrides)
 }
 
 pub fn resolve_start_agents(
@@ -16,12 +16,12 @@ pub fn resolve_start_agents(
 ) -> Result(#(types.ResolvedAgentConfig, types.ResolvedAgentConfig), String) {
   use planning_agent <- result.try(resolve_profile(
     config,
-    config.planning_profile,
+    fallback_phase_profile(config.planning_profile, config),
     overrides,
   ))
   use execution_agent <- result.try(resolve_profile(
     config,
-    config.execution_profile,
+    fallback_phase_profile(config.execution_profile, config),
     overrides,
   ))
   Ok(#(planning_agent, execution_agent))
@@ -31,7 +31,14 @@ pub fn resolve_review_agent(
   config: types.Config,
   overrides: types.AgentOverrides,
 ) -> Result(types.ResolvedAgentConfig, String) {
-  resolve_profile(config, config.review_profile, overrides)
+  resolve_profile(config, fallback_phase_profile(config.review_profile, config), overrides)
+}
+
+pub fn effective_phase_profile_name(
+  phase_profile_name: String,
+  config: types.Config,
+) -> String {
+  fallback_phase_profile(phase_profile_name, config)
 }
 
 pub fn summary(agent: types.ResolvedAgentConfig) -> String {
@@ -110,5 +117,12 @@ fn choose_optional_reasoning(
   case candidate {
     Some(value) -> Some(value)
     None -> fallback
+  }
+}
+
+fn fallback_phase_profile(phase_profile_name: String, config: types.Config) -> String {
+  case phase_profile_name {
+    "" -> config.default_profile
+    profile_name -> profile_name
   }
 }

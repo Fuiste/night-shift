@@ -275,9 +275,9 @@ pub fn default_config() -> Config {
   Config(
     base_branch: "main",
     default_profile: "default",
-    planning_profile: "default",
-    execution_profile: "default",
-    review_profile: "default",
+    planning_profile: "",
+    execution_profile: "",
+    review_profile: "",
     profiles: [default_agent_profile()],
     max_workers: 4,
     branch_prefix: "night-shift",

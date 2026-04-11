@@ -5,6 +5,7 @@ import gleam/result
 import gleam/string
 import gleeunit
 import night_shift/cli
+import night_shift/agent_config
 import night_shift/config
 import night_shift/dashboard
 import night_shift/demo
@@ -120,6 +121,26 @@ pub fn parse_profile_config_test() {
   assert planner.reasoning == Some(types.Medium)
   assert planner.provider_overrides
     == [types.ProviderOverride(key: "mode", value: "plan")]
+}
+
+pub fn default_profile_is_phase_fallback_test() {
+  let source =
+    "default_profile = \"reviewer\"\n"
+    <> "[profiles.reviewer]\n"
+    <> "provider = \"cursor\"\n"
+
+  let assert Ok(parsed) = config.parse(source)
+  let assert Ok(planning_agent) =
+    agent_config.resolve_plan_agent(parsed, types.empty_agent_overrides())
+  let assert Ok(#(_planning_agent, execution_agent)) =
+    agent_config.resolve_start_agents(parsed, types.empty_agent_overrides())
+  let assert Ok(review_agent) =
+    agent_config.resolve_review_agent(parsed, types.empty_agent_overrides())
+
+  assert planning_agent.profile_name == "reviewer"
+  assert planning_agent.provider == types.Cursor
+  assert execution_agent.profile_name == "reviewer"
+  assert review_agent.profile_name == "reviewer"
 }
 
 pub fn parse_notifiers_and_verification_commands_test() {
