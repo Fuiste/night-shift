@@ -19,7 +19,39 @@ This repository currently contains the v1 runtime for:
 - review-loop task ingestion for open Night Shift PRs
 - local notifier and report output
 
-## Tooling
+## Install
+
+Night Shift prerelease assets are published from merges to `main` as GitHub
+Release artifacts for:
+
+- Linux x64
+- macOS arm64
+- macOS x64
+
+Each asset bundles the `night-shift` launcher, the compiled Gleam shipment, and
+an Erlang runtime, so end users do not need to install Erlang or Gleam just to
+run the CLI.
+
+Download the `.tar.gz` for your platform from the repository's Releases page,
+unpack it, move the unpacked directory somewhere stable, and symlink the
+launcher into your `PATH`. For example:
+
+```sh
+tar -xzf night-shift-<tag>-macos-arm64.tar.gz
+mkdir -p ~/.local/opt ~/.local/bin
+mv night-shift-<tag>-macos-arm64 ~/.local/opt/
+ln -sf ~/.local/opt/night-shift-<tag>-macos-arm64/night-shift ~/.local/bin/night-shift
+```
+
+The unpacked directory must stay intact because `night-shift` runs alongside
+its bundled `shipment/` and `erlang/` directories.
+
+These bundles remove the Erlang/Gleam setup requirement, but you still need the
+provider CLIs you plan to use locally, such as Codex CLI or Cursor Agent.
+
+Windows release assets are not published in this first cut.
+
+## Source Development
 
 Night Shift targets Erlang through Gleam. This machine does not currently ship
 with Gleam or Erlang by default, so the repo pins expected versions in
