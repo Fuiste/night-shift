@@ -68,12 +68,10 @@ pub fn load(
 ) -> Result(#(types.RunRecord, List(types.RunEvent)), String) {
   let repo_path = repo_state_path(repo_root)
 
-  use run_id <- result.try(
-    case selector {
-      types.LatestRun -> latest_run_id(repo_path)
-      types.RunId(run_id) -> Ok(run_id)
-    }
-  )
+  use run_id <- result.try(case selector {
+    types.LatestRun -> latest_run_id(repo_path)
+    types.RunId(run_id) -> Ok(run_id)
+  })
 
   let run_path = filepath.join(repo_path, run_id)
   let state_path = filepath.join(run_path, "state.json")
@@ -90,16 +88,20 @@ pub fn list_runs(repo_root: String) -> Result(List(types.RunRecord), String) {
   Ok(
     run_ids
     |> list.filter_map(fn(run_id) {
-      let state_path = filepath.join(filepath.join(repo_path, run_id), "state.json")
+      let state_path =
+        filepath.join(filepath.join(repo_path, run_id), "state.json")
       case read_run(state_path) {
         Ok(run) -> Ok(run)
         Error(_) -> Error(Nil)
       }
-    })
+    }),
   )
 }
 
-pub fn save(run: types.RunRecord, events: List(types.RunEvent)) -> Result(Nil, String) {
+pub fn save(
+  run: types.RunRecord,
+  events: List(types.RunEvent),
+) -> Result(Nil, String) {
   use _ <- result.try(write_string(run.state_path, encode_run(run)))
   use _ <- result.try(write_events(run.events_path, events))
   write_string(run.report_path, report.render(run, events))
@@ -128,12 +130,7 @@ pub fn mark_status(
       task_id: None,
     )
 
-  let updated_run =
-    types.RunRecord(
-      ..run,
-      status: status,
-      updated_at: event.at,
-    )
+  let updated_run = types.RunRecord(..run, status: status, updated_at: event.at)
 
   use existing_events <- result.try(read_events(run.events_path))
   use _ <- result.try(save(updated_run, list.append(existing_events, [event])))
@@ -146,7 +143,10 @@ pub fn mark_status(
   }
 }
 
-pub fn read_report(repo_root: String, selector: types.RunSelector) -> Result(String, String) {
+pub fn read_report(
+  repo_root: String,
+  selector: types.RunSelector,
+) -> Result(String, String) {
   use #(run, _) <- result.try(load(repo_root, selector))
   read_string(run.report_path)
 }
@@ -155,7 +155,8 @@ pub fn active_run_id(repo_root: String) -> Result(String, String) {
   let lock_path = filepath.join(repo_state_path(repo_root), "active.lock")
   case simplifile.read(lock_path) {
     Ok(run_id) -> Ok(string.trim(run_id))
-    Error(_) -> Error("No active Night Shift run was found for this repository.")
+    Error(_) ->
+      Error("No active Night Shift run was found for this repository.")
   }
 }
 
@@ -167,7 +168,10 @@ pub fn repo_state_path_for(repo_root: String) -> String {
   repo_state_path(repo_root)
 }
 
-fn ensure_repo_ready(repo_path: String, lock_path: String) -> Result(Nil, String) {
+fn ensure_repo_ready(
+  repo_path: String,
+  lock_path: String,
+) -> Result(Nil, String) {
   use _ <- result.try(create_directory(repo_path))
   case simplifile.read(lock_path) {
     Ok(existing_run) ->
@@ -187,14 +191,24 @@ fn create_run_directories(run_path: String) -> Result(Nil, String) {
 fn create_directory(path: String) -> Result(Nil, String) {
   case simplifile.create_directory_all(path) {
     Ok(Nil) -> Ok(Nil)
-    Error(error) -> Error("Unable to create directory " <> path <> ": " <> simplifile.describe_error(error))
+    Error(error) ->
+      Error(
+        "Unable to create directory "
+        <> path
+        <> ": "
+        <> simplifile.describe_error(error),
+      )
   }
 }
 
-fn copy_brief(from source: String, to destination: String) -> Result(Nil, String) {
+fn copy_brief(
+  from source: String,
+  to destination: String,
+) -> Result(Nil, String) {
   case simplifile.copy_file(at: source, to: destination) {
     Ok(Nil) -> Ok(Nil)
-    Error(error) -> Error("Unable to copy brief: " <> simplifile.describe_error(error))
+    Error(error) ->
+      Error("Unable to copy brief: " <> simplifile.describe_error(error))
   }
 }
 
@@ -205,18 +219,27 @@ fn write_lock(lock_path: String, run_id: String) -> Result(Nil, String) {
 fn write_string(path: String, contents: String) -> Result(Nil, String) {
   case simplifile.write(contents, to: path) {
     Ok(Nil) -> Ok(Nil)
-    Error(error) -> Error("Unable to write " <> path <> ": " <> simplifile.describe_error(error))
+    Error(error) ->
+      Error(
+        "Unable to write " <> path <> ": " <> simplifile.describe_error(error),
+      )
   }
 }
 
 fn read_string(path: String) -> Result(String, String) {
   case simplifile.read(path) {
     Ok(contents) -> Ok(contents)
-    Error(error) -> Error("Unable to read " <> path <> ": " <> simplifile.describe_error(error))
+    Error(error) ->
+      Error(
+        "Unable to read " <> path <> ": " <> simplifile.describe_error(error),
+      )
   }
 }
 
-fn write_events(path: String, events: List(types.RunEvent)) -> Result(Nil, String) {
+fn write_events(
+  path: String,
+  events: List(types.RunEvent),
+) -> Result(Nil, String) {
   let contents =
     events
     |> list.map(encode_event)
@@ -245,7 +268,7 @@ fn read_events(path: String) -> Result(List(types.RunEvent), String) {
 fn latest_run_id(repo_path: String) -> Result(String, String) {
   use run_ids <- result.try(list_run_ids(repo_path))
   case run_ids {
-    [latest, .._] -> Ok(latest)
+    [latest, ..] -> Ok(latest)
     [] -> Error("No Night Shift runs were found for this repository.")
   }
 }
@@ -257,7 +280,7 @@ fn list_run_ids(repo_path: String) -> Result(List(String), String) {
         entries
         |> list.filter(fn(entry) { entry != "active.lock" })
         |> list.sort(string.compare)
-        |> list.reverse
+        |> list.reverse,
       )
     Error(_) -> Error("No Night Shift runs were found for this repository.")
   }
@@ -362,24 +385,22 @@ fn run_decoder() -> decode.Decoder(types.RunRecord) {
   use created_at <- decode.field("created_at", decode.string)
   use updated_at <- decode.field("updated_at", decode.string)
   use tasks <- decode.field("tasks", decode.list(task_decoder()))
-  decode.success(
-    types.RunRecord(
-      run_id: run_id,
-      repo_root: repo_root,
-      run_path: run_path,
-      brief_path: brief_path,
-      state_path: state_path,
-      events_path: events_path,
-      report_path: report_path,
-      lock_path: lock_path,
-      harness: harness,
-      max_workers: max_workers,
-      status: status,
-      created_at: created_at,
-      updated_at: updated_at,
-      tasks: tasks,
-    ),
-  )
+  decode.success(types.RunRecord(
+    run_id: run_id,
+    repo_root: repo_root,
+    run_path: run_path,
+    brief_path: brief_path,
+    state_path: state_path,
+    events_path: events_path,
+    report_path: report_path,
+    lock_path: lock_path,
+    harness: harness,
+    max_workers: max_workers,
+    status: status,
+    created_at: created_at,
+    updated_at: updated_at,
+    tasks: tasks,
+  ))
 }
 
 fn task_decoder() -> decode.Decoder(types.Task) {
@@ -395,22 +416,20 @@ fn task_decoder() -> decode.Decoder(types.Task) {
   use branch_name <- decode.field("branch_name", decode.string)
   use pr_number <- decode.field("pr_number", decode.string)
   use summary <- decode.field("summary", decode.string)
-  decode.success(
-    types.Task(
-      id: id,
-      title: title,
-      description: description,
-      dependencies: dependencies,
-      acceptance: acceptance,
-      demo_plan: demo_plan,
-      parallel_safe: parallel_safe,
-      state: state,
-      worktree_path: worktree_path,
-      branch_name: branch_name,
-      pr_number: pr_number,
-      summary: summary,
-    ),
-  )
+  decode.success(types.Task(
+    id: id,
+    title: title,
+    description: description,
+    dependencies: dependencies,
+    acceptance: acceptance,
+    demo_plan: demo_plan,
+    parallel_safe: parallel_safe,
+    state: state,
+    worktree_path: worktree_path,
+    branch_name: branch_name,
+    pr_number: pr_number,
+    summary: summary,
+  ))
 }
 
 fn decode_event(line: String) -> Result(types.RunEvent, String) {
@@ -423,7 +442,12 @@ fn event_decoder() -> decode.Decoder(types.RunEvent) {
   use at <- decode.field("at", decode.string)
   use message <- decode.field("message", decode.string)
   use task_id <- decode.field("task_id", decode.optional(decode.string))
-  decode.success(types.RunEvent(kind: kind, at: at, message: message, task_id: task_id))
+  decode.success(types.RunEvent(
+    kind: kind,
+    at: at,
+    message: message,
+    task_id: task_id,
+  ))
 }
 
 fn harness_decoder() -> decode.Decoder(types.Harness) {

@@ -57,11 +57,10 @@ fn render_events(events: List(types.RunEvent)) -> String {
 }
 
 fn render_event(event: types.RunEvent) -> String {
-  let task_label =
-    case event.task_id {
-      Some(task_id) -> " (" <> task_id <> ")"
-      None -> ""
-    }
+  let task_label = case event.task_id {
+    Some(task_id) -> " (" <> task_id <> ")"
+    None -> ""
+  }
 
   "- "
   <> event.at

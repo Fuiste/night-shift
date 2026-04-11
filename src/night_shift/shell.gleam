@@ -36,7 +36,5 @@ pub fn succeeded(result: CommandResult) -> Bool {
 }
 
 pub fn quote(value: String) -> String {
-  "'"
-  <> string.replace(in: value, each: "'", with: "'\"'\"'")
-  <> "'"
+  "'" <> string.replace(in: value, each: "'", with: "'\"'\"'") <> "'"
 }

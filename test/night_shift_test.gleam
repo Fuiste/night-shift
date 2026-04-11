@@ -1,6 +1,6 @@
 import filepath
 import gleam/list
-import gleam/option.{Some}
+import gleam/option.{None, Some}
 import gleam/result
 import gleam/string
 import gleeunit
@@ -21,7 +21,7 @@ pub fn main() -> Nil {
 }
 
 pub fn parse_start_command_test() {
-  let assert Ok(types.Start("brief.md", Ok(types.Cursor), Ok(2), False)) =
+  let assert Ok(types.Start(Some("brief.md"), Ok(types.Cursor), Ok(2), False)) =
     cli.parse([
       "start",
       "--brief",
@@ -33,13 +33,41 @@ pub fn parse_start_command_test() {
     ])
 }
 
+pub fn parse_plan_command_test() {
+  let assert Ok(types.Plan("notes.md", None, Error(Nil))) =
+    cli.parse(["plan", "--notes", "notes.md"])
+}
+
+pub fn parse_plan_command_with_doc_and_harness_test() {
+  let assert Ok(types.Plan("notes.md", Some("custom.md"), Ok(types.Cursor))) =
+    cli.parse([
+      "plan",
+      "--notes",
+      "notes.md",
+      "--doc",
+      "custom.md",
+      "--harness",
+      "cursor",
+    ])
+}
+
 pub fn parse_status_defaults_to_latest_test() {
   let assert Ok(types.Status(types.LatestRun)) = cli.parse(["status"])
 }
 
 pub fn parse_start_command_with_ui_test() {
-  let assert Ok(types.Start("brief.md", Error(Nil), Error(Nil), True)) =
+  let assert Ok(types.Start(Some("brief.md"), Error(Nil), Error(Nil), True)) =
     cli.parse(["start", "--brief", "brief.md", "--ui"])
+}
+
+pub fn parse_start_command_without_brief_test() {
+  let assert Ok(types.Start(None, Error(Nil), Error(Nil), False)) =
+    cli.parse(["start"])
+}
+
+pub fn parse_plan_requires_notes_test() {
+  let assert Error(message) = cli.parse(["plan"])
+  assert message == "The plan command requires --notes <path>."
 }
 
 pub fn parse_resume_command_with_ui_test() {
@@ -99,10 +127,10 @@ pub fn start_run_creates_report_and_state_test() {
 pub fn latest_run_round_trip_test() {
   let unique = system.unique_id()
   let base_dir =
-    filepath.join(
+    absolute_path(filepath.join(
       system.state_directory(),
       "night-shift-test-round-trip-" <> unique,
-    )
+    ))
   let repo_root = filepath.join(base_dir, "repo-" <> unique)
   let brief_path = filepath.join(base_dir, "brief.md")
 
@@ -121,10 +149,10 @@ pub fn latest_run_round_trip_test() {
 pub fn list_runs_returns_newest_first_test() {
   let unique = system.unique_id()
   let base_dir =
-    filepath.join(
+    absolute_path(filepath.join(
       system.state_directory(),
       "night-shift-test-history-" <> unique,
-    )
+    ))
   let repo_root = filepath.join(base_dir, "repo-" <> unique)
   let brief_a = filepath.join(base_dir, "brief-a.md")
   let brief_b = filepath.join(base_dir, "brief-b.md")
@@ -152,10 +180,10 @@ pub fn list_runs_returns_newest_first_test() {
 pub fn dashboard_payloads_include_run_data_test() {
   let unique = system.unique_id()
   let base_dir =
-    filepath.join(
+    absolute_path(filepath.join(
       system.state_directory(),
       "night-shift-test-dashboard-" <> unique,
-    )
+    ))
   let repo_root = filepath.join(base_dir, "repo-" <> unique)
   let brief_path = filepath.join(base_dir, "brief.md")
 
@@ -188,10 +216,10 @@ pub fn dashboard_payloads_include_run_data_test() {
 pub fn dashboard_server_serves_run_data_test() {
   let unique = system.unique_id()
   let base_dir =
-    filepath.join(
+    absolute_path(filepath.join(
       system.state_directory(),
       "night-shift-test-dashboard-server-" <> unique,
-    )
+    ))
   let repo_root = filepath.join(base_dir, "repo-" <> unique)
   let brief_path = filepath.join(base_dir, "brief.md")
 
@@ -231,6 +259,300 @@ pub fn extract_json_payload_test() {
   assert payload == "{\"tasks\":[]}"
 }
 
+pub fn extract_payload_markdown_test() {
+  let output =
+    "planning-doc\n"
+    <> "NIGHT_SHIFT_RESULT_START\n"
+    <> "# Night Shift Brief\n"
+    <> "## Objective\n"
+    <> "Capture the work.\n"
+    <> "NIGHT_SHIFT_RESULT_END\n"
+
+  let assert Ok(payload) = harness.extract_payload(output)
+  assert string.contains(does: payload, contain: "# Night Shift Brief")
+}
+
+pub fn start_without_brief_requires_default_doc_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-start-default-missing-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let state_home = filepath.join(base_dir, "state")
+  let old_demo_command = system.get_env("NIGHT_SHIFT_DEMO_COMMAND")
+  let old_state_home = system.get_env("XDG_STATE_HOME")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) =
+    simplifile.write("", to: filepath.join(repo_root, ".night-shift.toml"))
+  let _ =
+    shell.run(
+      "git init --initial-branch=main " <> shell.quote(repo_root),
+      base_dir,
+      filepath.join(base_dir, "repo-init.log"),
+    )
+
+  system.set_env("NIGHT_SHIFT_DEMO_COMMAND", local_demo_command())
+  system.set_env("XDG_STATE_HOME", state_home)
+
+  let output =
+    run_local_cli_command(
+      ["start"],
+      repo_root,
+      filepath.join(base_dir, "start.log"),
+    )
+
+  system.set_env("NIGHT_SHIFT_DEMO_COMMAND", old_demo_command)
+  system.set_env("XDG_STATE_HOME", old_state_home)
+
+  let assert Ok(message) = output
+  assert string.contains(
+    does: message,
+    contain: "No default brief was found at",
+  )
+  assert string.contains(
+    does: message,
+    contain: filepath.join(repo_root, types.default_brief_filename),
+  )
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn plan_command_creates_and_updates_default_brief_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-plan-cli-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let notes_a = filepath.join(base_dir, "notes-a.md")
+  let notes_b = filepath.join(base_dir, "notes-b.md")
+  let fake_harness = filepath.join(bin_dir, "fake-harness")
+  let state_home = filepath.join(base_dir, "state")
+  let default_doc = filepath.join(repo_root, types.default_brief_filename)
+  let old_demo_command = system.get_env("NIGHT_SHIFT_DEMO_COMMAND")
+  let old_fake_harness = system.get_env("NIGHT_SHIFT_FAKE_HARNESS")
+  let old_state_home = system.get_env("XDG_STATE_HOME")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = write_fake_harness(fake_harness)
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_harness),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+  let _ =
+    shell.run(
+      "git init --initial-branch=main " <> shell.quote(repo_root),
+      base_dir,
+      filepath.join(base_dir, "repo-init.log"),
+    )
+  let assert Ok(_) =
+    simplifile.write("", to: filepath.join(repo_root, ".night-shift.toml"))
+  let assert Ok(_) = simplifile.write("Alpha task\n", to: notes_a)
+  let assert Ok(_) = simplifile.write("Beta task\n", to: notes_b)
+
+  system.set_env("NIGHT_SHIFT_DEMO_COMMAND", local_demo_command())
+  system.set_env("NIGHT_SHIFT_FAKE_HARNESS", fake_harness)
+  system.set_env("XDG_STATE_HOME", state_home)
+
+  let first_result =
+    run_local_cli_command(
+      ["plan", "--notes", notes_a],
+      repo_root,
+      filepath.join(base_dir, "plan-a.log"),
+    )
+  let second_result =
+    run_local_cli_command(
+      ["plan", "--notes", notes_b],
+      repo_root,
+      filepath.join(base_dir, "plan-b.log"),
+    )
+
+  system.set_env("NIGHT_SHIFT_DEMO_COMMAND", old_demo_command)
+  system.set_env("NIGHT_SHIFT_FAKE_HARNESS", old_fake_harness)
+  system.set_env("XDG_STATE_HOME", old_state_home)
+
+  let assert Ok(first_output) = first_result
+  let assert Ok(second_output) = second_result
+  let assert Ok(document) = simplifile.read(default_doc)
+
+  assert string.contains(does: first_output, contain: "Updated planning brief:")
+  assert string.contains(
+    does: second_output,
+    contain: "Updated planning brief:",
+  )
+  assert string.contains(does: document, contain: "Alpha task")
+  assert string.contains(does: document, contain: "Beta task")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn plan_command_leaves_existing_doc_on_failed_harness_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-plan-cli-failure-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let notes_path = filepath.join(base_dir, "notes.md")
+  let fake_harness = filepath.join(bin_dir, "fake-harness")
+  let state_home = filepath.join(base_dir, "state")
+  let default_doc = filepath.join(repo_root, types.default_brief_filename)
+  let old_demo_command = system.get_env("NIGHT_SHIFT_DEMO_COMMAND")
+  let old_fake_harness = system.get_env("NIGHT_SHIFT_FAKE_HARNESS")
+  let old_state_home = system.get_env("XDG_STATE_HOME")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = write_fake_harness(fake_harness)
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_harness),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+  let _ =
+    shell.run(
+      "git init --initial-branch=main " <> shell.quote(repo_root),
+      base_dir,
+      filepath.join(base_dir, "repo-init.log"),
+    )
+  let assert Ok(_) =
+    simplifile.write("", to: filepath.join(repo_root, ".night-shift.toml"))
+  let assert Ok(_) = simplifile.write("Keep this brief.\n", to: default_doc)
+  let assert Ok(_) = simplifile.write("fail-plan-doc-exit\n", to: notes_path)
+
+  system.set_env("NIGHT_SHIFT_DEMO_COMMAND", local_demo_command())
+  system.set_env("NIGHT_SHIFT_FAKE_HARNESS", fake_harness)
+  system.set_env("XDG_STATE_HOME", state_home)
+
+  let result =
+    run_local_cli_command(
+      ["plan", "--notes", notes_path],
+      repo_root,
+      filepath.join(base_dir, "plan-fail.log"),
+    )
+
+  system.set_env("NIGHT_SHIFT_DEMO_COMMAND", old_demo_command)
+  system.set_env("NIGHT_SHIFT_FAKE_HARNESS", old_fake_harness)
+  system.set_env("XDG_STATE_HOME", old_state_home)
+
+  let assert Ok(output) = result
+  let assert Ok(document) = simplifile.read(default_doc)
+
+  assert string.contains(does: output, contain: "Planning harness failed.")
+  assert document == "Keep this brief.\n"
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn plan_document_reports_missing_markers_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-plan-markers-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let notes_path = filepath.join(base_dir, "notes.md")
+  let doc_path = filepath.join(repo_root, types.default_brief_filename)
+  let fake_harness = filepath.join(bin_dir, "fake-harness")
+  let state_home = filepath.join(base_dir, "state")
+  let old_fake_harness = system.get_env("NIGHT_SHIFT_FAKE_HARNESS")
+  let old_state_home = system.get_env("XDG_STATE_HOME")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = write_fake_harness(fake_harness)
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_harness),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+  let assert Ok(_) =
+    simplifile.write("fail-plan-doc-no-marker\n", to: notes_path)
+
+  system.set_env("NIGHT_SHIFT_FAKE_HARNESS", fake_harness)
+  system.set_env("XDG_STATE_HOME", state_home)
+
+  let result =
+    harness.plan_document(types.Codex, repo_root, notes_path, doc_path)
+
+  system.set_env("NIGHT_SHIFT_FAKE_HARNESS", old_fake_harness)
+  system.set_env("XDG_STATE_HOME", old_state_home)
+
+  let assert Error(message) = result
+  assert string.contains(does: message, contain: "start marker")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn plan_document_reports_empty_payload_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-plan-empty-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let notes_path = filepath.join(base_dir, "notes.md")
+  let doc_path = filepath.join(repo_root, types.default_brief_filename)
+  let fake_harness = filepath.join(bin_dir, "fake-harness")
+  let state_home = filepath.join(base_dir, "state")
+  let old_fake_harness = system.get_env("NIGHT_SHIFT_FAKE_HARNESS")
+  let old_state_home = system.get_env("XDG_STATE_HOME")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = write_fake_harness(fake_harness)
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_harness),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+  let assert Ok(_) = simplifile.write("fail-plan-doc-empty\n", to: notes_path)
+
+  system.set_env("NIGHT_SHIFT_FAKE_HARNESS", fake_harness)
+  system.set_env("XDG_STATE_HOME", state_home)
+
+  let result =
+    harness.plan_document(types.Codex, repo_root, notes_path, doc_path)
+
+  system.set_env("NIGHT_SHIFT_FAKE_HARNESS", old_fake_harness)
+  system.set_env("XDG_STATE_HOME", old_state_home)
+
+  let assert Error(message) = result
+  assert string.contains(does: message, contain: "empty brief")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
 pub fn repo_state_path_is_stable_test() {
   let repo_root = "/tmp/night-shift-demo"
   assert journal.repo_state_path_for(repo_root)
@@ -240,18 +562,20 @@ pub fn repo_state_path_is_stable_test() {
 pub fn orchestrator_start_runs_fake_harness_test() {
   let unique = system.unique_id()
   let base_dir =
-    filepath.join(
+    absolute_path(filepath.join(
       system.state_directory(),
       "night-shift-integration-" <> unique,
-    )
+    ))
   let repo_root = filepath.join(base_dir, "repo")
   let remote_root = filepath.join(base_dir, "remote.git")
   let bin_dir = filepath.join(base_dir, "bin")
   let brief_path = filepath.join(base_dir, "brief.md")
   let fake_harness = filepath.join(bin_dir, "fake-harness")
   let fake_gh = filepath.join(bin_dir, "gh")
+  let state_home = filepath.join(base_dir, "state")
   let old_path = system.get_env("PATH")
   let old_fake_harness = system.get_env("NIGHT_SHIFT_FAKE_HARNESS")
+  let old_state_home = system.get_env("XDG_STATE_HOME")
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
   let _ =
@@ -314,6 +638,7 @@ pub fn orchestrator_start_runs_fake_harness_test() {
 
   system.set_env("NIGHT_SHIFT_FAKE_HARNESS", fake_harness)
   system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("XDG_STATE_HOME", state_home)
 
   let config =
     types.Config(
@@ -327,6 +652,7 @@ pub fn orchestrator_start_runs_fake_harness_test() {
 
   system.set_env("PATH", old_path)
   system.set_env("NIGHT_SHIFT_FAKE_HARNESS", old_fake_harness)
+  system.set_env("XDG_STATE_HOME", old_state_home)
 
   let completed_task =
     completed_run.tasks
@@ -356,18 +682,20 @@ pub fn orchestrator_start_runs_fake_harness_test() {
 pub fn dashboard_start_session_tracks_completed_run_test() {
   let unique = system.unique_id()
   let base_dir =
-    filepath.join(
+    absolute_path(filepath.join(
       system.state_directory(),
       "night-shift-ui-integration-" <> unique,
-    )
+    ))
   let repo_root = filepath.join(base_dir, "repo")
   let remote_root = filepath.join(base_dir, "remote.git")
   let bin_dir = filepath.join(base_dir, "bin")
   let brief_path = filepath.join(base_dir, "brief.md")
   let fake_harness = filepath.join(bin_dir, "fake-harness")
   let fake_gh = filepath.join(bin_dir, "gh")
+  let state_home = filepath.join(base_dir, "state")
   let old_path = system.get_env("PATH")
   let old_fake_harness = system.get_env("NIGHT_SHIFT_FAKE_HARNESS")
+  let old_state_home = system.get_env("XDG_STATE_HOME")
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
   let _ =
@@ -430,6 +758,7 @@ pub fn dashboard_start_session_tracks_completed_run_test() {
 
   system.set_env("NIGHT_SHIFT_FAKE_HARNESS", fake_harness)
   system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("XDG_STATE_HOME", state_home)
 
   let config =
     types.Config(
@@ -445,6 +774,7 @@ pub fn dashboard_start_session_tracks_completed_run_test() {
 
   system.set_env("PATH", old_path)
   system.set_env("NIGHT_SHIFT_FAKE_HARNESS", old_fake_harness)
+  system.set_env("XDG_STATE_HOME", old_state_home)
 
   assert string.contains(
     does: final_payload,
@@ -507,6 +837,13 @@ pub fn demo_run_succeeds_with_ui_test() {
   )
 }
 
+fn absolute_path(path: String) -> String {
+  case string.starts_with(path, "/") {
+    True -> path
+    False -> filepath.join(system.cwd(), path)
+  }
+}
+
 fn local_demo_command() -> String {
   let cwd = system.cwd()
   let erlang_root = filepath.join(cwd, "build/dev/erlang")
@@ -530,6 +867,31 @@ fn local_demo_command() -> String {
   <> " -extra"
 }
 
+fn run_local_cli_command(
+  args: List(String),
+  cwd: String,
+  log_path: String,
+) -> Result(String, String) {
+  let command = local_demo_command()
+  let result =
+    shell.run(
+      command
+        <> " "
+        <> {
+        args
+        |> list.map(shell.quote)
+        |> string.join(with: " ")
+      },
+      cwd,
+      log_path,
+    )
+
+  case shell.succeeded(result) {
+    True -> Ok(result.output)
+    False -> Error("CLI command failed. See " <> log_path <> ".")
+  }
+}
+
 fn write_fake_harness(path: String) -> Result(Nil, simplifile.FileError) {
   simplifile.write(
     "#!/bin/sh\n"
@@ -537,6 +899,26 @@ fn write_fake_harness(path: String) -> Result(Nil, simplifile.FileError) {
       <> "PROMPT_FILE=$2\n"
       <> "if [ \"$MODE\" = \"plan\" ]; then\n"
       <> "  printf 'planning\\nNIGHT_SHIFT_RESULT_START\\n{\"tasks\":[{\"id\":\"demo-task\",\"title\":\"Implement demo task\",\"description\":\"Create a file to prove execution\",\"dependencies\":[],\"acceptance\":[\"Create IMPLEMENTED.md\"],\"demo_plan\":[\"Show the new file\"],\"parallel_safe\":false}]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "elif [ \"$MODE\" = \"plan-doc\" ]; then\n"
+      <> "  if grep -q 'fail-plan-doc-exit' \"$PROMPT_FILE\"; then\n"
+      <> "    printf 'forced failure\\n' >&2\n"
+      <> "    exit 1\n"
+      <> "  fi\n"
+      <> "  if grep -q 'fail-plan-doc-no-marker' \"$PROMPT_FILE\"; then\n"
+      <> "    printf 'planning-doc without markers\\n'\n"
+      <> "    exit 0\n"
+      <> "  fi\n"
+      <> "  if grep -q 'fail-plan-doc-empty' \"$PROMPT_FILE\"; then\n"
+      <> "    printf 'planning-doc\\nNIGHT_SHIFT_RESULT_START\\n\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "    exit 0\n"
+      <> "  fi\n"
+      <> "  if grep -q 'Beta task' \"$PROMPT_FILE\"; then\n"
+      <> "    grep -q 'Alpha task' \"$PROMPT_FILE\" || exit 1\n"
+      <> "    printf 'planning-doc\\nNIGHT_SHIFT_RESULT_START\\n# Night Shift Brief\\n## Objective\\nPrepare the combined work for execution.\\n## Scope\\n- Alpha task\\n- Beta task\\n## Constraints\\n- Keep the brief cumulative.\\n## Deliverables\\n- Alpha implementation plan\\n- Beta implementation plan\\n## Acceptance Criteria\\n- Alpha task documented\\n- Beta task documented\\n## Risks and Open Questions\\n- None.\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "    exit 0\n"
+      <> "  fi\n"
+      <> "  printf 'planning-doc\\nNIGHT_SHIFT_RESULT_START\\n# Night Shift Brief\\n## Objective\\nPrepare the first work item for execution.\\n## Scope\\n- Alpha task\\n## Constraints\\n- Keep the brief cumulative.\\n## Deliverables\\n- Alpha implementation plan\\n## Acceptance Criteria\\n- Alpha task documented\\n## Risks and Open Questions\\n- None.\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "  exit 0\n"
       <> "else\n"
       <> "  echo 'completed by fake harness' > IMPLEMENTED.md\n"
       <> "  printf 'execution\\nNIGHT_SHIFT_RESULT_START\\n{\"status\":\"completed\",\"summary\":\"Implemented demo task\",\"files_touched\":[\"IMPLEMENTED.md\"],\"demo_evidence\":[\"IMPLEMENTED.md created\"],\"pr\":{\"title\":\"[night-shift] Implement demo task\",\"summary\":\"Implemented the fake harness task.\",\"demo\":[\"IMPLEMENTED.md created\"],\"risks\":[]},\"follow_up_tasks\":[]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"

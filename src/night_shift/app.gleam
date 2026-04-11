@@ -1,6 +1,8 @@
+import filepath
 import gleam/int
 import gleam/io
 import gleam/list
+import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import night_shift/cli
@@ -8,10 +10,12 @@ import night_shift/config
 import night_shift/dashboard
 import night_shift/demo
 import night_shift/git
+import night_shift/harness
 import night_shift/journal
 import night_shift/orchestrator
 import night_shift/system
 import night_shift/types
+import simplifile
 
 pub fn run(command: types.Command) -> Nil {
   let config =
@@ -27,52 +31,55 @@ pub fn run(command: types.Command) -> Nil {
         <> "\n"
         <> crate_summary(config),
       )
+    types.Plan(notes_path, doc_path, harness) -> {
+      let resolved_harness = choose_harness(harness, config)
+      io.println(plan(repo_root, notes_path, doc_path, resolved_harness))
+    }
     types.Start(brief_path, harness, max_workers, False) -> {
+      let resolved_brief = resolve_start_brief_path(repo_root, brief_path)
       let resolved_harness = choose_harness(harness, config)
       let resolved_workers = choose_max_workers(max_workers, config)
 
-      io.println(
-        case
-          journal.start_run(
-            repo_root,
-            brief_path,
-            resolved_harness,
-            resolved_workers,
-          )
-        {
-          Ok(run) ->
-            case orchestrator.start(run, config) {
-              Ok(completed_run) -> render_run_summary(completed_run)
-              Error(message) -> message
-            }
-          Error(message) -> message
-        },
-      )
+      io.println(case resolved_brief {
+        Ok(path) ->
+          start(repo_root, path, resolved_harness, resolved_workers, config)
+        Error(message) -> message
+      })
     }
     types.Start(brief_path, harness, max_workers, True) -> {
+      let resolved_brief = resolve_start_brief_path(repo_root, brief_path)
       let resolved_harness = choose_harness(harness, config)
       let resolved_workers = choose_max_workers(max_workers, config)
 
-      case
-        journal.start_run(
-          repo_root,
-          brief_path,
-          resolved_harness,
-          resolved_workers,
-        )
-      {
-        Ok(run) ->
+      case resolved_brief {
+        Ok(path) ->
           case
-            dashboard.start_start_session(repo_root, run.run_id, run, config)
+            journal.start_run(
+              repo_root,
+              path,
+              resolved_harness,
+              resolved_workers,
+            )
           {
-            Ok(session) -> {
-              io.println(render_dashboard_summary(session.url, run.run_id))
-              system.wait_forever()
-            }
-            Error(message) -> {
-              let _ = journal.mark_status(run, types.RunFailed, message)
-              io.println(message)
-            }
+            Ok(run) ->
+              case
+                dashboard.start_start_session(
+                  repo_root,
+                  run.run_id,
+                  run,
+                  config,
+                )
+              {
+                Ok(session) -> {
+                  io.println(render_dashboard_summary(session.url, run.run_id))
+                  system.wait_forever()
+                }
+                Error(message) -> {
+                  let _ = journal.mark_status(run, types.RunFailed, message)
+                  io.println(message)
+                }
+              }
+            Error(message) -> io.println(message)
           }
         Error(message) -> io.println(message)
       }
@@ -90,6 +97,94 @@ pub fn run(command: types.Command) -> Nil {
   }
 }
 
+fn plan(
+  repo_root: String,
+  notes_path: String,
+  doc_path: Option(String),
+  resolved_harness: types.Harness,
+) -> String {
+  let target_doc_path = resolve_doc_path(repo_root, doc_path)
+  case
+    harness.plan_document(
+      resolved_harness,
+      repo_root,
+      notes_path,
+      target_doc_path,
+    )
+  {
+    Ok(#(document, artifact_path)) ->
+      case write_string(target_doc_path, document) {
+        Ok(_) ->
+          "Updated planning brief: "
+          <> target_doc_path
+          <> "\n"
+          <> "Artifacts: "
+          <> artifact_path
+        Error(message) -> message
+      }
+    Error(message) -> message
+  }
+}
+
+fn start(
+  repo_root: String,
+  brief_path: String,
+  harness: types.Harness,
+  max_workers: Int,
+  config: types.Config,
+) -> String {
+  case journal.start_run(repo_root, brief_path, harness, max_workers) {
+    Ok(run) ->
+      case orchestrator.start(run, config) {
+        Ok(completed_run) -> render_run_summary(completed_run)
+        Error(message) -> message
+      }
+    Error(message) -> message
+  }
+}
+
+fn resolve_start_brief_path(
+  repo_root: String,
+  brief_path: Option(String),
+) -> Result(String, String) {
+  case brief_path {
+    Some(path) -> Ok(path)
+    None -> {
+      let path = default_brief_path(repo_root)
+      case simplifile.read(path) {
+        Ok(_) -> Ok(path)
+        Error(_) ->
+          Error(
+            "No default brief was found at "
+            <> path
+            <> ". Run `night-shift plan --notes <path>` to create it or pass `--brief <path>`.",
+          )
+      }
+    }
+  }
+}
+
+fn resolve_doc_path(repo_root: String, doc_path: Option(String)) -> String {
+  case doc_path {
+    Some(path) -> path
+    None -> default_brief_path(repo_root)
+  }
+}
+
+fn default_brief_path(repo_root: String) -> String {
+  filepath.join(repo_root, types.default_brief_filename)
+}
+
+fn write_string(path: String, contents: String) -> Result(Nil, String) {
+  case simplifile.write(contents, to: path) {
+    Ok(Nil) -> Ok(Nil)
+    Error(error) ->
+      Error(
+        "Unable to write " <> path <> ": " <> simplifile.describe_error(error),
+      )
+  }
+}
+
 fn crate_summary(config: types.Config) -> String {
   "Default harness: "
   <> types.harness_to_string(config.default_harness)
@@ -99,6 +194,9 @@ fn crate_summary(config: types.Config) -> String {
   <> "\n"
   <> "Notifiers: "
   <> stringify_notifiers(config.notifiers)
+  <> "\n"
+  <> "Default brief: "
+  <> types.default_brief_filename
 }
 
 fn status(repo_root: String, run: types.RunSelector) -> String {

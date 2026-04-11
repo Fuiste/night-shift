@@ -58,7 +58,7 @@ fn parse_line(line: String, state: ParseState) -> Result(ParseState, String) {
 
 fn strip_comments(line: String) -> String {
   case string.split(line, "#") {
-    [first, .._] -> first
+    [first, ..] -> first
     [] -> line
   }
 }
@@ -68,11 +68,8 @@ fn parse_assignment(
   state: ParseState,
 ) -> Result(ParseState, String) {
   case string.split_once(assignment, "=") {
-    Ok(#(key, value)) -> apply_value(
-      string.trim(key),
-      string.trim(value),
-      state,
-    )
+    Ok(#(key, value)) ->
+      apply_value(string.trim(key), string.trim(value), state)
     Error(Nil) -> Error("Invalid config line: " <> assignment)
   }
 }
@@ -94,7 +91,7 @@ fn apply_value(
     RootSection, "default_harness" -> {
       use harness <- result.try(
         parse_string(raw_value)
-        |> types.harness_from_string
+        |> types.harness_from_string,
       )
 
       Ok(ParseState(
@@ -125,15 +122,15 @@ fn apply_value(
 
     RootSection, "notifiers" -> {
       use notifiers <- result.try(parse_notifiers(raw_value))
-      Ok(ParseState(
-        types.Config(..config, notifiers: notifiers),
-        state.section,
-      ))
+      Ok(ParseState(types.Config(..config, notifiers: notifiers), state.section))
     }
 
     VerificationSection, "commands" ->
       Ok(ParseState(
-        types.Config(..config, verification_commands: parse_string_list(raw_value)),
+        types.Config(
+          ..config,
+          verification_commands: parse_string_list(raw_value),
+        ),
         state.section,
       ))
 
@@ -141,7 +138,9 @@ fn apply_value(
   }
 }
 
-fn parse_notifiers(raw_value: String) -> Result(List(types.NotifierName), String) {
+fn parse_notifiers(
+  raw_value: String,
+) -> Result(List(types.NotifierName), String) {
   raw_value
   |> parse_string_list
   |> parse_notifier_values([])
@@ -169,11 +168,10 @@ fn parse_int(raw_value: String) -> Result(Int, String) {
 
 fn parse_string(raw_value: String) -> String {
   let trimmed = raw_value |> string.trim
-  let without_prefix =
-    case string.starts_with(trimmed, "\"") {
-      True -> string.drop_start(trimmed, 1)
-      False -> trimmed
-    }
+  let without_prefix = case string.starts_with(trimmed, "\"") {
+    True -> string.drop_start(trimmed, 1)
+    False -> trimmed
+  }
 
   case string.ends_with(without_prefix, "\"") {
     True -> string.drop_end(without_prefix, 1)
@@ -183,11 +181,10 @@ fn parse_string(raw_value: String) -> String {
 
 fn parse_string_list(raw_value: String) -> List(String) {
   let trimmed = raw_value |> string.trim
-  let without_prefix =
-    case string.starts_with(trimmed, "[") {
-      True -> string.drop_start(trimmed, 1)
-      False -> trimmed
-    }
+  let without_prefix = case string.starts_with(trimmed, "[") {
+    True -> string.drop_start(trimmed, 1)
+    False -> trimmed
+  }
 
   let inner =
     case string.ends_with(without_prefix, "]") {

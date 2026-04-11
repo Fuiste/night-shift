@@ -5,7 +5,8 @@ import night_shift/shell
 import night_shift/system
 
 pub fn repo_root(cwd: String) -> String {
-  let log_path = filepath.join(system.state_directory(), "night-shift/git-root.log")
+  let log_path =
+    filepath.join(system.state_directory(), "night-shift/git-root.log")
   let result = shell.run("git rev-parse --show-toplevel", cwd, log_path)
   case shell.succeeded(result) {
     True -> string.trim(result.output)
@@ -22,11 +23,11 @@ pub fn create_worktree(
 ) -> Result(Nil, String) {
   run_git(
     "git worktree add -b "
-    <> shell.quote(branch_name)
-    <> " "
-    <> shell.quote(worktree_path)
-    <> " "
-    <> shell.quote(base_ref),
+      <> shell.quote(branch_name)
+      <> " "
+      <> shell.quote(worktree_path)
+      <> " "
+      <> shell.quote(base_ref),
     repo_root,
     log_path,
   )
@@ -40,15 +41,15 @@ pub fn attach_worktree(
 ) -> Result(Nil, String) {
   run_git(
     "git show-ref --verify --quiet refs/heads/"
-    <> shell.quote(branch_name)
-    <> " || git fetch origin "
-    <> shell.quote(branch_name)
-    <> ":"
-    <> shell.quote(branch_name)
-    <> " && git worktree add "
-    <> shell.quote(worktree_path)
-    <> " "
-    <> shell.quote(branch_name),
+      <> shell.quote(branch_name)
+      <> " || git fetch origin "
+      <> shell.quote(branch_name)
+      <> ":"
+      <> shell.quote(branch_name)
+      <> " && git worktree add "
+      <> shell.quote(worktree_path)
+      <> " "
+      <> shell.quote(branch_name),
     repo_root,
     log_path,
   )
@@ -71,11 +72,10 @@ pub fn changed_files(cwd: String, log_path: String) -> List(String) {
         case trimmed {
           "" -> Error(Nil)
           _ -> {
-            let file =
-              case string.length(trimmed) > 3 {
-                True -> string.drop_start(trimmed, 3)
-                False -> trimmed
-              }
+            let file = case string.length(trimmed) > 3 {
+              True -> string.drop_start(trimmed, 3)
+              False -> trimmed
+            }
             Ok(file)
           }
         }
@@ -84,15 +84,19 @@ pub fn changed_files(cwd: String, log_path: String) -> List(String) {
   }
 }
 
-pub fn commit_all(cwd: String, message: String, log_path: String) -> Result(Nil, String) {
-  run_git(
-    "git add -A && git commit -m " <> shell.quote(message),
-    cwd,
-    log_path,
-  )
+pub fn commit_all(
+  cwd: String,
+  message: String,
+  log_path: String,
+) -> Result(Nil, String) {
+  run_git("git add -A && git commit -m " <> shell.quote(message), cwd, log_path)
 }
 
-pub fn push_branch(cwd: String, branch_name: String, log_path: String) -> Result(Nil, String) {
+pub fn push_branch(
+  cwd: String,
+  branch_name: String,
+  log_path: String,
+) -> Result(Nil, String) {
   run_git(
     "git push --set-upstream origin " <> shell.quote(branch_name),
     cwd,
@@ -100,7 +104,11 @@ pub fn push_branch(cwd: String, branch_name: String, log_path: String) -> Result
   )
 }
 
-fn run_git(command: String, cwd: String, log_path: String) -> Result(Nil, String) {
+fn run_git(
+  command: String,
+  cwd: String,
+  log_path: String,
+) -> Result(Nil, String) {
   let result = shell.run(command, cwd, log_path)
   case shell.succeeded(result) {
     True -> Ok(Nil)
