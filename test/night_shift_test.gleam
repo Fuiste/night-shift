@@ -8,6 +8,7 @@ import night_shift/cli
 import night_shift/config
 import night_shift/dashboard
 import night_shift/demo
+import night_shift/github
 import night_shift/journal
 import night_shift/orchestrator
 import night_shift/provider
@@ -1458,7 +1459,7 @@ pub fn stale_blocked_run_status_and_start_guidance_test() {
   assert string.contains(does: report_contents, contain: "- Blocked tasks: 1")
   assert string.contains(
     does: report_contents,
-    contain: "- Manual-attention tasks: 0",
+    contain: "- Manual-attention tasks: 1",
   )
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
@@ -1904,6 +1905,55 @@ pub fn repo_state_path_is_stable_test() {
     == journal.repo_state_path_for(repo_root)
 }
 
+pub fn github_open_or_update_pr_uses_create_output_when_listing_lags_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-gh-create-output-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let run_path = filepath.join(base_dir, "run")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let fake_gh = filepath.join(bin_dir, "gh")
+  let old_path = system.get_env("PATH")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) = simplifile.create_directory_all(filepath.join(run_path, "logs"))
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = write_delayed_listing_fake_gh(fake_gh)
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_gh),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+
+  let result =
+    github.open_or_update_pr(
+      repo_root,
+      "night-shift/demo-branch",
+      "main",
+      "Demo PR",
+      "Body",
+      run_path,
+      filepath.join(run_path, "logs/gh.log"),
+    )
+
+  system.set_env("PATH", old_path)
+
+  let assert Ok(pr) = result
+  assert pr.number == 42
+  assert pr.url == "https://example.test/pr/42"
+  assert pr.head_ref_name == "night-shift/demo-branch"
+  assert pr.title == "Demo PR"
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
 pub fn orchestrator_start_runs_fake_provider_test() {
   let unique = system.unique_id()
   let base_dir =
@@ -2022,6 +2072,135 @@ pub fn orchestrator_start_runs_fake_provider_test() {
   assert completed_run.status == types.RunCompleted
   assert completed_task.pr_number == "1"
   assert string.contains(does: completed_task.summary, contain: "Implemented")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn orchestrator_start_preserves_partial_success_after_delivery_failure_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-partial-delivery-failure-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let remote_root = filepath.join(base_dir, "remote.git")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let brief_path = filepath.join(base_dir, "brief.md")
+  let fake_provider = filepath.join(bin_dir, "fake-provider")
+  let fake_gh = filepath.join(bin_dir, "gh")
+  let state_home = filepath.join(base_dir, "state")
+  let old_path = system.get_env("PATH")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
+  let old_state_home = system.get_env("XDG_STATE_HOME")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
+  let assert Ok(_) = write_partial_delivery_fake_provider(fake_provider)
+  let assert Ok(_) = write_branch_sensitive_fake_gh(fake_gh)
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_provider) <> " " <> shell.quote(fake_gh),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+  let _ =
+    shell.run(
+      "git init --bare " <> shell.quote(remote_root),
+      base_dir,
+      filepath.join(base_dir, "remote.log"),
+    )
+  seed_git_repo(repo_root, base_dir)
+  let _ =
+    shell.run(
+      "git remote add origin " <> shell.quote(remote_root),
+      repo_root,
+      filepath.join(base_dir, "remote-add.log"),
+    )
+  let _ =
+    shell.run(
+      "git push -u origin main",
+      repo_root,
+      filepath.join(base_dir, "push-main.log"),
+    )
+
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("XDG_STATE_HOME", state_home)
+
+  let config =
+    types.Config(
+      ..types.default_config(),
+      verification_commands: [],
+      max_workers: 2,
+    )
+
+  let assert Ok(run) = planned_run(repo_root, brief_path, types.Codex, 2)
+  let assert Ok(failed_run) = orchestrator.start(run, config)
+
+  system.set_env("PATH", old_path)
+  restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
+  restore_env("XDG_STATE_HOME", old_state_home)
+
+  let alpha_task =
+    failed_run.tasks
+    |> list.find(fn(task) { task.id == "alpha-task" })
+    |> result.unwrap(or: types.Task(
+      id: "",
+      title: "",
+      description: "",
+      dependencies: [],
+      acceptance: [],
+      demo_plan: [],
+      decision_requests: [],
+      kind: types.ImplementationTask,
+      execution_mode: types.Serial,
+      state: types.Queued,
+      worktree_path: "",
+      branch_name: "",
+      pr_number: "",
+      summary: "",
+    ))
+  let beta_task =
+    failed_run.tasks
+    |> list.find(fn(task) { task.id == "beta-task" })
+    |> result.unwrap(or: types.Task(
+      id: "",
+      title: "",
+      description: "",
+      dependencies: [],
+      acceptance: [],
+      demo_plan: [],
+      decision_requests: [],
+      kind: types.ImplementationTask,
+      execution_mode: types.Serial,
+      state: types.Queued,
+      worktree_path: "",
+      branch_name: "",
+      pr_number: "",
+      summary: "",
+    ))
+  let assert Ok(report_contents) = simplifile.read(failed_run.report_path)
+  let assert Ok(events) = simplifile.read(failed_run.events_path)
+
+  assert failed_run.status == types.RunFailed
+  assert alpha_task.state == types.Completed
+  assert alpha_task.pr_number == "1"
+  assert beta_task.state == types.Failed
+  assert string.contains(
+    does: beta_task.summary,
+    contain: "Primary blocker: GitHub PR delivery failed.",
+  )
+  assert string.contains(does: report_contents, contain: "- Completed tasks: 1")
+  assert string.contains(does: report_contents, contain: "- Opened PRs: 1")
+  assert string.contains(does: report_contents, contain: "- Failed tasks: 1")
+  assert string.contains(does: report_contents, contain: "- Type: partial success")
+  assert string.contains(does: events, contain: "\"kind\":\"pr_opened\"")
+  let assert Error(_) = simplifile.read(project.active_lock_path(repo_root))
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
@@ -3501,6 +3680,28 @@ fn write_batch_decode_fake_provider(
   )
 }
 
+fn write_partial_delivery_fake_provider(
+  path: String,
+) -> Result(Nil, simplifile.FileError) {
+  simplifile.write(
+    "#!/bin/sh\n"
+      <> "MODE=$1\n"
+      <> "PROMPT_FILE=$2\n"
+      <> "if [ \"$MODE\" = \"plan\" ]; then\n"
+      <> "  printf 'planning\\nNIGHT_SHIFT_RESULT_START\\n{\"tasks\":[{\"id\":\"alpha-task\",\"title\":\"Alpha task\",\"description\":\"Deliver alpha docs.\",\"dependencies\":[],\"acceptance\":[\"Create ALPHA.md\"],\"demo_plan\":[\"Show ALPHA.md.\"],\"execution_mode\":\"parallel\"},{\"id\":\"beta-task\",\"title\":\"Beta task\",\"description\":\"Deliver beta docs.\",\"dependencies\":[],\"acceptance\":[\"Create BETA.md\"],\"demo_plan\":[\"Show BETA.md.\"],\"execution_mode\":\"parallel\"}]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "elif [ \"$MODE\" = \"plan-doc\" ]; then\n"
+      <> "  printf 'planning-doc\\nNIGHT_SHIFT_RESULT_START\\n# Brief\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "elif grep -q 'ID: alpha-task' \"$PROMPT_FILE\"; then\n"
+      <> "  printf 'alpha\\n' > ALPHA.md\n"
+      <> "  printf 'execution\\nNIGHT_SHIFT_RESULT_START\\n{\"status\":\"completed\",\"summary\":\"Alpha delivered\",\"files_touched\":[\"ALPHA.md\"],\"demo_evidence\":[\"ALPHA.md created\"],\"pr\":{\"title\":\"alpha\",\"summary\":\"alpha\",\"demo\":[\"ALPHA.md created\"],\"risks\":[]},\"follow_up_tasks\":[]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "else\n"
+      <> "  printf 'beta\\n' > BETA.md\n"
+      <> "  printf 'execution\\nNIGHT_SHIFT_RESULT_START\\n{\"status\":\"completed\",\"summary\":\"Beta delivered\",\"files_touched\":[\"BETA.md\"],\"demo_evidence\":[\"BETA.md created\"],\"pr\":{\"title\":\"beta\",\"summary\":\"beta\",\"demo\":[\"BETA.md created\"],\"risks\":[]},\"follow_up_tasks\":[]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "fi\n",
+    to: path,
+  )
+}
+
 fn write_committing_fake_provider(
   path: String,
 ) -> Result(Nil, simplifile.FileError) {
@@ -3895,6 +4096,68 @@ fn write_fake_gh(path: String) -> Result(Nil, simplifile.FileError) {
       <> "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"view\" ]; then\n"
       <> "  printf '{\"number\":1,\"title\":\"Night Shift PR\",\"body\":\"Review body\",\"headRefName\":\"night-shift/demo\",\"baseRefName\":\"main\",\"url\":\"https://example.test/pr/1\",\"reviewDecision\":\"REVIEW_REQUIRED\",\"statusCheckRollup\":[],\"reviews\":[],\"comments\":[]}'\n"
       <> "  exit 0\n"
+      <> "fi\n"
+      <> "printf 'unsupported gh invocation: %s %s\\n' \"$1\" \"$2\" >&2\n"
+      <> "exit 1\n",
+    to: path,
+  )
+}
+
+fn write_delayed_listing_fake_gh(
+  path: String,
+) -> Result(Nil, simplifile.FileError) {
+  simplifile.write(
+    "#!/bin/sh\n"
+      <> "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"list\" ]; then\n"
+      <> "  printf '[]\\n'\n"
+      <> "  exit 0\n"
+      <> "fi\n"
+      <> "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"create\" ]; then\n"
+      <> "  printf 'https://example.test/pr/42\\n'\n"
+      <> "  exit 0\n"
+      <> "fi\n"
+      <> "printf 'unsupported gh invocation: %s %s\\n' \"$1\" \"$2\" >&2\n"
+      <> "exit 1\n",
+    to: path,
+  )
+}
+
+fn write_branch_sensitive_fake_gh(
+  path: String,
+) -> Result(Nil, simplifile.FileError) {
+  simplifile.write(
+    "#!/bin/sh\n"
+      <> "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"list\" ]; then\n"
+      <> "  printf '[]\\n'\n"
+      <> "  exit 0\n"
+      <> "fi\n"
+      <> "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"edit\" ]; then\n"
+      <> "  exit 0\n"
+      <> "fi\n"
+      <> "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"create\" ]; then\n"
+      <> "  BRANCH=''\n"
+      <> "  shift 2\n"
+      <> "  while [ $# -gt 0 ]; do\n"
+      <> "    case \"$1\" in\n"
+      <> "      --head)\n"
+      <> "        BRANCH=$2\n"
+      <> "        shift 2\n"
+      <> "        ;;\n"
+      <> "      *)\n"
+      <> "        shift\n"
+      <> "        ;;\n"
+      <> "    esac\n"
+      <> "  done\n"
+      <> "  case \"$BRANCH\" in\n"
+      <> "    *alpha-task)\n"
+      <> "      printf 'https://example.test/pr/1\\n'\n"
+      <> "      exit 0\n"
+      <> "      ;;\n"
+      <> "    *beta-task)\n"
+      <> "      printf 'simulated PR delivery failure for %s\\n' \"$BRANCH\" >&2\n"
+      <> "      exit 1\n"
+      <> "      ;;\n"
+      <> "  esac\n"
       <> "fi\n"
       <> "printf 'unsupported gh invocation: %s %s\\n' \"$1\" \"$2\" >&2\n"
       <> "exit 1\n",

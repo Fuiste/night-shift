@@ -821,7 +821,7 @@ fn render_active_run_outcome(
     Ok(updated_run) ->
       prefix_warning(warning, render_run_summary(updated_run))
     Error(message) ->
-      case journal.mark_status(active_run, types.RunFailed, message) {
+      case mark_latest_persisted_run_failed(active_run, message) {
         Ok(failed_run) ->
           prefix_warning(
             warning,
@@ -829,6 +829,54 @@ fn render_active_run_outcome(
           )
         Error(_) -> prefix_warning(warning, message)
       }
+  }
+}
+
+fn mark_latest_persisted_run_failed(
+  active_run: types.RunRecord,
+  message: String,
+) -> Result(types.RunRecord, String) {
+  let latest_run = case journal.load(
+    active_run.repo_root,
+    types.RunId(active_run.run_id),
+  ) {
+    Ok(#(run, _)) -> recover_in_flight_tasks(run)
+    Error(_) -> recover_in_flight_tasks(active_run)
+  }
+  journal.mark_status(latest_run, types.RunFailed, message)
+}
+
+fn recover_in_flight_tasks(run: types.RunRecord) -> types.RunRecord {
+  let recovered_tasks =
+    run.tasks
+    |> list.map(recover_in_flight_task(run.run_path, _))
+  types.RunRecord(..run, tasks: recovered_tasks)
+}
+
+fn recover_in_flight_task(run_path: String, task: types.Task) -> types.Task {
+  case task.state {
+    types.Running -> {
+      let recovery_log = filepath.join(run_path, "logs/" <> task.id <> ".recovery.log")
+      let has_worktree_changes =
+        case task.worktree_path {
+          "" -> False
+          worktree_path -> git.has_changes(worktree_path, recovery_log)
+        }
+      let recovered_state = case has_worktree_changes {
+        True -> types.ManualAttention
+        False -> types.Failed
+      }
+      let recovered_summary =
+        case string.trim(task.summary) {
+          "" ->
+            "Primary blocker: Night Shift stopped before this started task could be finalized.\n\nEnvironment notes: inspect the task log and worktree before retrying."
+          existing ->
+            existing
+            <> "\n\nRecovery notes: Night Shift stopped before this started task could be finalized."
+        }
+      types.Task(..task, state: recovered_state, summary: recovered_summary)
+    }
+    _ -> task
   }
 }
 
@@ -1053,36 +1101,77 @@ fn status_summary(
       <> "\n"
       <> "Next action: fix the worktree environment, then rerun `night-shift start` or `night-shift reset`"
     None ->
-      case run.status == types.RunBlocked || run.planning_dirty {
-    True ->
-      "Blocked tasks: "
-      <> int.to_string(blocked_task_count(run))
-      <> "\n"
-      <> "Outstanding decisions: "
-      <> int.to_string(outstanding_decision_count(run))
-      <> "\n"
-      <> "Planning sync pending: "
-      <> bool_label(run.planning_dirty)
-      <> "\n"
-      <> "Ready implementation tasks: "
-      <> int.to_string(ready_implementation_task_count(run.tasks))
-      <> "\n"
-      <> "Queued tasks: "
-      <> int.to_string(queued_task_count(run.tasks))
-      <> "\n"
-      <> "Next action: "
-      <> next_action_label(run)
-    False ->
-      "Outstanding decisions: "
-      <> int.to_string(outstanding_decision_count(run))
-      <> "\n"
-      <> "Ready tasks: "
-      <> int.to_string(ready_task_count(run.tasks))
-      <> "\n"
-      <> "Queued tasks: "
-      <> int.to_string(queued_task_count(run.tasks))
+      case run.status {
+        types.RunFailed ->
+          "Completed tasks: "
+          <> int.to_string(completed_task_count(run.tasks))
+          <> "\n"
+          <> "Opened PRs: "
+          <> int.to_string(opened_pr_count(run.tasks))
+          <> "\n"
+          <> "Failed tasks: "
+          <> int.to_string(failed_task_count(run.tasks))
+          <> "\n"
+          <> "Outstanding decisions: "
+          <> int.to_string(outstanding_decision_count(run))
+          <> "\n"
+          <> "Queued tasks: "
+          <> int.to_string(queued_task_count(run.tasks))
+          <> "\n"
+          <> "Failure: "
+          <> latest_run_failed_message(events)
+          <> "\n"
+          <> "Next action: inspect the report, then rerun `night-shift plan --notes ...` when you're ready for the next pass."
+        _ ->
+          case run.status == types.RunBlocked || run.planning_dirty {
+            True ->
+              "Blocked tasks: "
+              <> int.to_string(blocked_task_count(run))
+              <> "\n"
+              <> "Outstanding decisions: "
+              <> int.to_string(outstanding_decision_count(run))
+              <> "\n"
+              <> "Planning sync pending: "
+              <> bool_label(run.planning_dirty)
+              <> "\n"
+              <> "Ready implementation tasks: "
+              <> int.to_string(ready_implementation_task_count(run.tasks))
+              <> "\n"
+              <> "Queued tasks: "
+              <> int.to_string(queued_task_count(run.tasks))
+              <> "\n"
+              <> "Next action: "
+              <> next_action_label(run)
+            False ->
+              "Outstanding decisions: "
+              <> int.to_string(outstanding_decision_count(run))
+              <> "\n"
+              <> "Ready tasks: "
+              <> int.to_string(ready_task_count(run.tasks))
+              <> "\n"
+              <> "Queued tasks: "
+              <> int.to_string(queued_task_count(run.tasks))
+          }
       }
   }
+}
+
+fn completed_task_count(tasks: List(types.Task)) -> Int {
+  tasks
+  |> list.filter(fn(task) { task.state == types.Completed })
+  |> list.length
+}
+
+fn opened_pr_count(tasks: List(types.Task)) -> Int {
+  tasks
+  |> list.filter(fn(task) { task.pr_number != "" })
+  |> list.length
+}
+
+fn failed_task_count(tasks: List(types.Task)) -> Int {
+  tasks
+  |> list.filter(fn(task) { task.state == types.Failed })
+  |> list.length
 }
 
 fn outstanding_decision_count(run: types.RunRecord) -> Int {
@@ -1113,7 +1202,10 @@ fn blocked_task_count(run: types.RunRecord) -> Int {
   let implementation_blockers =
     run.tasks
     |> list.filter(fn(task) {
-      task.kind == types.ImplementationTask && task.state == types.Blocked
+      task.kind == types.ImplementationTask
+      && {
+        task.state == types.Blocked || task.state == types.ManualAttention
+      }
     })
     |> list.length
   case run.planning_dirty && unresolved_blockers == 0 && implementation_blockers == 0 {
@@ -1553,6 +1645,24 @@ fn latest_environment_preflight_failure_loop(
       case event.kind == "environment_preflight_failed" {
         True -> Some(event.message)
         False -> latest_environment_preflight_failure_loop(rest)
+      }
+  }
+}
+
+fn latest_run_failed_message(events: List(types.RunEvent)) -> String {
+  case latest_run_failed_message_loop(list.reverse(events)) {
+    Some(message) -> message
+    None -> "Night Shift stopped after an execution failure."
+  }
+}
+
+fn latest_run_failed_message_loop(events: List(types.RunEvent)) -> Option(String) {
+  case events {
+    [] -> None
+    [event, ..rest] ->
+      case event.kind == "run_failed" {
+        True -> Some(event.message)
+        False -> latest_run_failed_message_loop(rest)
       }
   }
 }

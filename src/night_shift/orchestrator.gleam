@@ -415,12 +415,22 @@ fn await_batch(
     [task_run, ..rest] -> {
       let next_run_result = case provider.await_task(task_run) {
         Ok(execution_result) ->
-          complete_task(
+          case complete_task(
             config,
             run,
             task_run,
             execution_result,
-          )
+          ) {
+            Ok(updated_run) -> Ok(updated_run)
+            Error(message) ->
+              mark_task_with_event(
+                run,
+                task_run.task,
+                types.Failed,
+                completion_failure_summary(message),
+                "task_failed",
+              )
+          }
         Error(message) ->
           mark_task_with_event(
             run,
@@ -537,104 +547,124 @@ fn finalize_success(
         False -> Ok(Nil)
       }
 
-      use _ <- result.try(delivery_result)
-      use delivered_head <- result.try(git.head_commit(
-        task_run.worktree_path,
-        git_log,
-      ))
-      let delivered_files =
-        git.changed_files_between(
-          task_run.worktree_path,
-          task_run.start_head,
-          "HEAD",
-          git_log,
-        )
+      case delivery_result {
+        Error(message) ->
+          Error(task_failure_summary("git delivery failed.", message))
+        Ok(_) ->
+          case git.head_commit(task_run.worktree_path, git_log) {
+            Error(message) ->
+              Error(task_failure_summary("git delivery failed.", message))
+            Ok(delivered_head) -> {
+              let delivered_files =
+                git.changed_files_between(
+                  task_run.worktree_path,
+                  task_run.start_head,
+                  "HEAD",
+                  git_log,
+                )
 
-      case delivered_head == task_run.start_head {
-        True -> {
-          mark_task_with_event(
-            run,
-            task_run.task,
-            types.ManualAttention,
-            "Primary blocker: provider reported completion but the task worktree produced no committed or uncommitted changes.\n\nEnvironment notes: verification completed, but there was nothing new to deliver.",
-            "task_manual_attention",
-          )
-        }
-        False -> {
-          use _ <- result.try(git.push_branch(
-            task_run.worktree_path,
-            task_run.branch_name,
-            git_log,
-          ))
-          let pr_body =
-            build_pr_body(
-              run,
-              task_run.task,
-              final_execution,
-              verification_output,
-            )
-          use pull_request <- result.try(github.open_or_update_pr(
-            task_run.worktree_path,
-            task_run.branch_name,
-            task_run.base_ref,
-            final_execution.pr.title,
-            pr_body,
-            run.run_path,
-            git_log,
-          ))
+              case delivered_head == task_run.start_head {
+                True -> {
+                  mark_task_with_event(
+                    run,
+                    task_run.task,
+                    types.ManualAttention,
+                    "Primary blocker: provider reported completion but the task worktree produced no committed or uncommitted changes.\n\nEnvironment notes: verification completed, but there was nothing new to deliver.",
+                    "task_manual_attention",
+                  )
+                }
+                False ->
+                  case git.push_branch(
+                    task_run.worktree_path,
+                    task_run.branch_name,
+                    git_log,
+                  ) {
+                    Error(message) ->
+                      Error(task_failure_summary("git delivery failed.", message))
+                    Ok(_) -> {
+                      let pr_body =
+                        build_pr_body(
+                          run,
+                          task_run.task,
+                          final_execution,
+                          verification_output,
+                        )
+                      case github.open_or_update_pr(
+                        task_run.worktree_path,
+                        task_run.branch_name,
+                        task_run.base_ref,
+                        final_execution.pr.title,
+                        pr_body,
+                        run.run_path,
+                        git_log,
+                      ) {
+                        Error(message) ->
+                          Error(task_failure_summary(
+                            "GitHub PR delivery failed.",
+                            message,
+                          ))
+                        Ok(pull_request) -> {
+                          let completed_task =
+                            types.Task(
+                              ..task_run.task,
+                              state: types.Completed,
+                              worktree_path: task_run.worktree_path,
+                              branch_name: task_run.branch_name,
+                              pr_number: int.to_string(pull_request.number),
+                              summary: final_execution.summary,
+                            )
 
-          let completed_task =
-            types.Task(
-              ..task_run.task,
-              state: types.Completed,
-              worktree_path: task_run.worktree_path,
-              branch_name: task_run.branch_name,
-              pr_number: int.to_string(pull_request.number),
-              summary: final_execution.summary,
-            )
-
-          let merged_tasks =
-            apply_decision_states(
-              merge_follow_up_tasks(
-                replace_task(run.tasks, completed_task),
-                final_execution.follow_up_tasks,
-              ),
-              run.decisions,
-            )
-            |> refresh_ready_states
-          let updated_run = types.RunRecord(..run, tasks: merged_tasks)
-          let verified_event =
-            types.RunEvent(
-              kind: "task_verified",
-              at: system.timestamp(),
-              message: "Verification passed for " <> task_run.task.title,
-              task_id: Some(task_run.task.id),
-            )
-          use verified_run <- result.try(journal.append_event(
-            updated_run,
-            verified_event,
-          ))
-          journal.append_event(
-            types.RunRecord(
-              ..verified_run,
-              tasks: replace_task(
-                verified_run.tasks,
-                types.Task(
-                  ..completed_task,
-                  summary: final_execution.summary
-                    <> " Changed files: "
-                    <> string.join(delivered_files, ", "),
-                ),
-              ),
-            ),
-            types.RunEvent(
-              kind: "pr_opened",
-              at: system.timestamp(),
-              message: pull_request.url,
-              task_id: Some(task_run.task.id),
-            ),
-          )
-        }
+                          let merged_tasks =
+                            apply_decision_states(
+                              merge_follow_up_tasks(
+                                replace_task(run.tasks, completed_task),
+                                final_execution.follow_up_tasks,
+                              ),
+                              run.decisions,
+                            )
+                            |> refresh_ready_states
+                          let updated_run = types.RunRecord(
+                            ..run,
+                            tasks: merged_tasks,
+                          )
+                          let verified_event =
+                            types.RunEvent(
+                              kind: "task_verified",
+                              at: system.timestamp(),
+                              message: "Verification passed for " <> task_run.task.title,
+                              task_id: Some(task_run.task.id),
+                            )
+                          use verified_run <- result.try(journal.append_event(
+                            updated_run,
+                            verified_event,
+                          ))
+                          journal.append_event(
+                            types.RunRecord(
+                              ..verified_run,
+                              tasks: replace_task(
+                                verified_run.tasks,
+                                types.Task(
+                                  ..completed_task,
+                                  summary: final_execution.summary
+                                    <> " Changed files: "
+                                    <> string.join(delivered_files, ", "),
+                                ),
+                              ),
+                            ),
+                            types.RunEvent(
+                              kind: "pr_opened",
+                              at: system.timestamp(),
+                              message: pull_request.url,
+                              task_id: Some(task_run.task.id),
+                            ),
+                          )
+                        }
+                      }
+                    }
+                  }
+              }
+            }
+          }
       }
     }
     Error(output) -> {
@@ -647,6 +677,20 @@ fn finalize_success(
         "task_failed",
       )
     }
+  }
+}
+
+fn task_failure_summary(headline: String, details: String) -> String {
+  "Primary blocker: "
+  <> headline
+  <> "\n\nEnvironment notes:\n"
+  <> details
+}
+
+fn completion_failure_summary(message: String) -> String {
+  case string.starts_with(message, "Primary blocker:") {
+    True -> message
+    False -> task_failure_summary("task completion failed unexpectedly.", message)
   }
 }
 

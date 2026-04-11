@@ -6,6 +6,7 @@ import gleam/list
 import gleam/result
 import gleam/string
 import night_shift/shell
+import night_shift/system
 import simplifile
 
 pub type PullRequest {
@@ -52,10 +53,10 @@ pub fn open_or_update_pr(
         body_path,
         log_path,
       ))
-      find_pull_request(cwd, branch_name, log_path)
+      Ok(PullRequest(..pull_request, title: title))
     }
     Error(_) -> {
-      use _ <- result.try(create_pull_request(
+      use create_output <- result.try(create_pull_request(
         cwd,
         branch_name,
         base_ref,
@@ -63,7 +64,16 @@ pub fn open_or_update_pr(
         body_path,
         log_path,
       ))
-      find_pull_request(cwd, branch_name, log_path)
+      case pull_request_from_create_output(create_output, branch_name, title) {
+        Ok(pull_request) -> Ok(pull_request)
+        Error(_) -> find_pull_request_after_create(
+          cwd,
+          branch_name,
+          title,
+          log_path,
+          5,
+        )
+      }
     }
   }
 }
@@ -73,7 +83,7 @@ pub fn list_night_shift_prs(
   branch_prefix: String,
   log_path: String,
 ) -> Result(List(PullRequest), String) {
-  use prs <- result.try(list_pull_requests(cwd, log_path))
+  use prs <- result.try(list_pull_requests(cwd, "", log_path))
   Ok(
     prs
     |> list.filter(fn(pr) {
@@ -103,11 +113,18 @@ pub fn review_item(
 
 fn list_pull_requests(
   cwd: String,
+  branch_name: String,
   log_path: String,
 ) -> Result(List(PullRequest), String) {
+  let head_fragment = case branch_name {
+    "" -> ""
+    value -> " --head " <> shell.quote(value)
+  }
   let result =
     shell.run(
-      "gh pr list --state open --limit 100 --json number,url,headRefName,title",
+      "gh pr list --state open --limit 100"
+      <> head_fragment
+      <> " --json number,url,headRefName,title",
       cwd,
       log_path,
     )
@@ -125,7 +142,7 @@ fn find_pull_request(
   branch_name: String,
   log_path: String,
 ) -> Result(PullRequest, String) {
-  use prs <- result.try(list_pull_requests(cwd, log_path))
+  use prs <- result.try(list_pull_requests(cwd, branch_name, log_path))
   prs
   |> list.find(fn(pr) { pr.head_ref_name == branch_name })
   |> result.map_error(fn(_) {
@@ -140,7 +157,7 @@ fn create_pull_request(
   title: String,
   body_path: String,
   log_path: String,
-) -> Result(Nil, String) {
+) -> Result(String, String) {
   let command =
     "gh pr create --title "
     <> shell.quote(title)
@@ -151,7 +168,11 @@ fn create_pull_request(
     <> " --head "
     <> shell.quote(branch_name)
 
-  run_gh(command, cwd, log_path)
+  let result = shell.run(command, cwd, log_path)
+  case shell.succeeded(result) {
+    True -> Ok(string.trim(result.output))
+    False -> Error(string.trim(result.output))
+  }
 }
 
 fn edit_pull_request(
@@ -177,6 +198,88 @@ fn run_gh(command: String, cwd: String, log_path: String) -> Result(Nil, String)
   case shell.succeeded(result) {
     True -> Ok(Nil)
     False -> Error(string.trim(result.output))
+  }
+}
+
+fn find_pull_request_after_create(
+  cwd: String,
+  branch_name: String,
+  title: String,
+  log_path: String,
+  attempts_remaining: Int,
+) -> Result(PullRequest, String) {
+  case find_pull_request(cwd, branch_name, log_path) {
+    Ok(pull_request) -> Ok(PullRequest(..pull_request, title: title))
+    Error(message) ->
+      case attempts_remaining <= 1 {
+        True -> Error(message)
+        False -> {
+          system.sleep(200)
+          find_pull_request_after_create(
+            cwd,
+            branch_name,
+            title,
+            log_path,
+            attempts_remaining - 1,
+          )
+        }
+      }
+  }
+}
+
+fn pull_request_from_create_output(
+  output: String,
+  branch_name: String,
+  title: String,
+) -> Result(PullRequest, String) {
+  use url <- result.try(first_pull_request_url(output))
+  use number <- result.try(parse_pull_request_number(url))
+  Ok(PullRequest(
+    number: number,
+    url: url,
+    head_ref_name: branch_name,
+    title: title,
+  ))
+}
+
+fn first_pull_request_url(output: String) -> Result(String, String) {
+  output
+  |> string.split("\n")
+  |> list.map(string.trim)
+  |> list.filter(fn(line) {
+    string.starts_with(line, "https://") || string.starts_with(line, "http://")
+  })
+  |> list.first
+  |> result.map_error(fn(_) { "No pull request URL was returned by gh pr create." })
+}
+
+fn parse_pull_request_number(url: String) -> Result(Int, String) {
+  let sanitized =
+    url
+    |> trim_url_suffix("?")
+    |> trim_url_suffix("#")
+
+  case
+    sanitized
+    |> string.split("/")
+    |> list.filter(fn(segment) { segment != "" })
+    |> list.reverse
+    |> list.first
+  {
+    Ok(segment) ->
+      case int.parse(segment) {
+        Ok(number) -> Ok(number)
+        Error(Nil) ->
+          Error("Unable to determine a pull request number from " <> url)
+      }
+    Error(_) -> Error("Unable to determine a pull request number from " <> url)
+  }
+}
+
+fn trim_url_suffix(url: String, delimiter: String) -> String {
+  case string.split(url, delimiter) {
+    [] -> url
+    [head, ..] -> head
   }
 }
 

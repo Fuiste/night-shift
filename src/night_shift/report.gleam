@@ -24,7 +24,7 @@ pub fn render(run: types.RunRecord, events: List(types.RunEvent)) -> String {
     "",
     "## Summary",
     render_summary(run.decisions, run.planning_dirty, run.tasks, events),
-    render_failure_summary(events),
+    render_failure_summary(run, events),
     "",
     "## Tasks",
     render_tasks(run.decisions, run.planning_dirty, run.tasks),
@@ -51,7 +51,7 @@ fn render_summary(
     |> list.length
   let manual_attention_count =
     tasks
-    |> list.filter(fn(task) { types.task_requires_manual_attention(decisions, task) })
+    |> list.filter(fn(task) { task_requires_manual_attention(decisions, task) })
     |> list.length
   let blocked_count =
     tasks
@@ -199,9 +199,13 @@ fn render_task_state(
   case types.task_requires_manual_attention(decisions, task) {
     True -> types.ManualAttention
     False ->
-      case task.kind == types.ManualAttentionTask && planning_dirty {
-        True -> types.Blocked
-        False -> task.state
+      case task.state == types.ManualAttention {
+        True -> types.ManualAttention
+        False ->
+          case task.kind == types.ManualAttentionTask && planning_dirty {
+            True -> types.Blocked
+            False -> task.state
+          }
       }
   }
 }
@@ -220,12 +224,31 @@ fn render_bool(value: Bool) -> String {
   }
 }
 
-fn render_failure_summary(events: List(types.RunEvent)) -> String {
+fn render_failure_summary(
+  run: types.RunRecord,
+  events: List(types.RunEvent),
+) -> String {
   case latest_environment_preflight_failure(events) {
     Some(message) ->
       "\n## Failure\n- Type: environment bootstrap\n- Details: " <> message
-    None -> ""
+    None ->
+      case run.status, latest_run_failed_message(events) {
+        types.RunFailed, Some(message) ->
+          "\n## Failure\n- Type: "
+          <> run_failure_type(run.tasks)
+          <> "\n- Details: "
+          <> message
+        _, _ -> ""
+      }
   }
+}
+
+fn task_requires_manual_attention(
+  decisions: List(types.RecordedDecision),
+  task: types.Task,
+) -> Bool {
+  task.state == types.ManualAttention
+  || types.task_requires_manual_attention(decisions, task)
 }
 
 fn latest_environment_preflight_failure(
@@ -244,5 +267,31 @@ fn latest_environment_preflight_failure_loop(
         True -> Some(event.message)
         False -> latest_environment_preflight_failure_loop(rest)
       }
+  }
+}
+
+fn latest_run_failed_message(events: List(types.RunEvent)) -> Option(String) {
+  latest_run_failed_message_loop(list.reverse(events))
+}
+
+fn latest_run_failed_message_loop(events: List(types.RunEvent)) -> Option(String) {
+  case events {
+    [] -> None
+    [event, ..rest] ->
+      case event.kind == "run_failed" {
+        True -> Some(event.message)
+        False -> latest_run_failed_message_loop(rest)
+      }
+  }
+}
+
+fn run_failure_type(tasks: List(types.Task)) -> String {
+  let completed_count =
+    tasks
+    |> list.filter(fn(task) { task.state == types.Completed || task.pr_number != "" })
+    |> list.length
+  case completed_count > 0 {
+    True -> "partial success"
+    False -> "execution"
   }
 }
