@@ -87,7 +87,7 @@ run_internal(Command, Cwd, LogPath, StreamMeta) ->
                 eof,
                 {line, 16384},
                 {cd, binary_to_list(Cwd)},
-                {args, ["-lc", binary_to_list(Command)]}
+                {args, ["-c", binary_to_list(Command)]}
             ]
         ),
     collect(

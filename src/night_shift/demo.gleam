@@ -458,12 +458,33 @@ fn reset_demo_root(
   host_state_dir: String,
   demo_root: String,
 ) -> Result(Nil, String) {
-  run_checked(
-    "rm -rf " <> shell.quote(demo_root),
-    host_state_dir,
-    filepath.join(host_state_dir, "night-shift-demo-reset.log"),
-    "Unable to reset the demo workspace.",
-  )
+  let log_path = filepath.join(host_state_dir, "night-shift-demo-reset.log")
+  case reset_demo_root_attempts(demo_root, 5) {
+    Ok(Nil) -> Ok(Nil)
+    Error(message) -> {
+      let _ = write_file(log_path, message <> "\n")
+      Error("Unable to reset the demo workspace. See " <> log_path <> ".")
+    }
+  }
+}
+
+fn reset_demo_root_attempts(
+  demo_root: String,
+  attempts: Int,
+) -> Result(Nil, String) {
+  let _ = simplifile.delete(file_or_dir_at: demo_root)
+
+  case simplifile.read_directory(at: demo_root) {
+    Error(_) -> Ok(Nil)
+    Ok(_) ->
+      case attempts <= 0 {
+        True -> Error("Demo workspace still exists after cleanup: " <> demo_root)
+        False -> {
+          system.sleep(150)
+          reset_demo_root_attempts(demo_root, attempts - 1)
+        }
+      }
+  }
 }
 
 fn write_fake_provider(path: String) -> Result(Nil, String) {
