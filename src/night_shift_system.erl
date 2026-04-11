@@ -72,9 +72,42 @@ stdin_is_tty() ->
     end.
 
 read_line() ->
-    case io:get_line("") of
-        eof -> <<>>;
-        Value -> to_binary(string:trim(Value))
+    case os:getenv("NIGHT_SHIFT_SCRIPTED_INPUT_FILE") of
+        false ->
+            case io:get_line("") of
+                eof -> <<>>;
+                Value -> to_binary(string:trim(Value))
+            end;
+        Path ->
+            scripted_read_line(Path)
+    end.
+
+scripted_read_line(Path) ->
+    case file:read_file(Path) of
+        {ok, <<>>} ->
+            <<>>;
+        {ok, Contents} ->
+            case split_scripted_line(Contents) of
+                {Line, Remainder} ->
+                    _ = file:write_file(Path, Remainder),
+                    to_binary(string:trim(Line));
+                eof ->
+                    <<>>
+            end;
+        _ ->
+            <<>>
+    end.
+
+split_scripted_line(Contents) ->
+    case binary:match(Contents, <<"\n">>) of
+        {Index, 1} ->
+            <<Line:Index/binary, _/binary>> = Contents,
+            RemainderStart = Index + 1,
+            RemainderSize = byte_size(Contents) - RemainderStart,
+            <<_:RemainderStart/binary, Remainder:RemainderSize/binary>> = Contents,
+            {Line, Remainder};
+        nomatch ->
+            {Contents, <<>>}
     end.
 
 select_option(Prompt, Options, DefaultIndex) ->

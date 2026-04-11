@@ -387,7 +387,10 @@ fn select_from_labels(
 }
 
 fn can_prompt_interactively() -> Bool {
-  system.stdin_is_tty() && system.stdout_is_tty()
+  case system.get_env("NIGHT_SHIFT_ASSUME_TTY") {
+    "1" -> True
+    _ -> system.stdin_is_tty() && system.stdout_is_tty()
+  }
 }
 
 fn file_exists(path: String) -> Bool {

@@ -3406,10 +3406,15 @@ fn run_local_cli_tty_command_with_input(
   cwd: String,
   log_path: String,
 ) -> Result(String, String) {
+  let input_path = log_path <> ".stdin"
   let command =
     "cd "
     <> shell.quote(cwd)
     <> " && "
+    <> "NIGHT_SHIFT_ASSUME_TTY=1 "
+    <> "NIGHT_SHIFT_SCRIPTED_INPUT_FILE="
+    <> shell.quote(input_path)
+    <> " "
     <> "NIGHT_SHIFT_REPO_ROOT="
     <> shell.quote(cwd)
     <> " "
@@ -3420,12 +3425,10 @@ fn run_local_cli_tty_command_with_input(
       |> list.map(shell.quote)
       |> string.join(with: " ")
     }
+  let _ = simplifile.write(input, to: input_path)
   let result =
     shell.run(
-      "printf %s "
-        <> shell.quote(input)
-        <> " | "
-        <> script_capture_command(command),
+      command,
       cwd,
       log_path,
     )
