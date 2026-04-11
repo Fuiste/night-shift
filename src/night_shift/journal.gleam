@@ -293,10 +293,27 @@ fn list_run_ids(repo_path: String) -> Result(List(String), String) {
       Ok(
         entries
         |> list.filter(fn(entry) { entry != "active.lock" })
-        |> list.sort(string.compare)
+        |> list.sort(fn(left, right) {
+          string.compare(sortable_run_id(left), sortable_run_id(right))
+        })
         |> list.reverse,
       )
     Error(_) -> Error("No Night Shift runs were found for this repository.")
+  }
+}
+
+fn sortable_run_id(run_id: String) -> String {
+  case list.reverse(string.split(run_id, "-")) {
+    [suffix, ..rest] ->
+      string.join(list.reverse(rest), "-") <> "-" <> left_pad_suffix(suffix, 8)
+    [] -> run_id
+  }
+}
+
+fn left_pad_suffix(value: String, width: Int) -> String {
+  case string.length(value) >= width {
+    True -> value
+    False -> left_pad_suffix("0" <> value, width)
   }
 }
 
@@ -400,6 +417,7 @@ fn encode_task(task: types.Task) -> json.Json {
     #("dependencies", json.array(task.dependencies, json.string)),
     #("acceptance", json.array(task.acceptance, json.string)),
     #("demo_plan", json.array(task.demo_plan, json.string)),
+    #("task_kind", json.string(types.task_kind_to_string(task.kind))),
     #("execution_mode", json.string(types.execution_mode_to_string(task.execution_mode))),
     #("state", json.string(types.task_state_to_string(task.state))),
     #("worktree_path", json.string(task.worktree_path)),
@@ -559,6 +577,7 @@ fn task_decoder() -> decode.Decoder(types.Task) {
   use dependencies <- decode.field("dependencies", decode.list(decode.string))
   use acceptance <- decode.field("acceptance", decode.list(decode.string))
   use demo_plan <- decode.field("demo_plan", decode.list(decode.string))
+  use kind <- decode.then(task_kind_decoder())
   use execution_mode <- decode.then(task_execution_mode_decoder())
   use state <- decode.field("state", task_state_decoder())
   use worktree_path <- decode.field("worktree_path", decode.string)
@@ -572,6 +591,7 @@ fn task_decoder() -> decode.Decoder(types.Task) {
     dependencies: dependencies,
     acceptance: acceptance,
     demo_plan: demo_plan,
+    kind: kind,
     execution_mode: execution_mode,
     state: state,
     worktree_path: worktree_path,
@@ -583,6 +603,22 @@ fn task_decoder() -> decode.Decoder(types.Task) {
 
 fn task_execution_mode_decoder() -> decode.Decoder(types.ExecutionMode) {
   decode.one_of(task_mode_field_decoder(), or: [task_parallel_safe_decoder()])
+}
+
+fn task_kind_decoder() -> decode.Decoder(types.TaskKind) {
+  decode.one_of(task_kind_field_decoder(), or: [legacy_task_kind_decoder()])
+}
+
+fn task_kind_field_decoder() -> decode.Decoder(types.TaskKind) {
+  use raw <- decode.field("task_kind", decode.string)
+  case types.task_kind_from_string(raw) {
+    Ok(kind) -> decode.success(kind)
+    Error(_) -> decode.failure(types.ImplementationTask, "TaskKind")
+  }
+}
+
+fn legacy_task_kind_decoder() -> decode.Decoder(types.TaskKind) {
+  decode.success(types.ImplementationTask)
 }
 
 fn task_mode_field_decoder() -> decode.Decoder(types.ExecutionMode) {

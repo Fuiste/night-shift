@@ -58,10 +58,32 @@ The easiest way to scaffold this is:
 night-shift init
 ```
 
-That command creates `./.night-shift/`, writes a starter `config.toml`,
+On a fresh repo, `init` now walks through three questions:
+
+1. which provider should Night Shift use by default
+2. which model from that provider's actual local CLI should become the default
+3. whether Night Shift should draft an initial `worktree-setup.toml`
+
+That command then creates `./.night-shift/`, writes a starter `config.toml`,
 creates `worktree-setup.toml`, and installs a local `.gitignore` inside
 `.night-shift/` so runtime artifacts stay untracked while the TOML files stay
 shareable.
+
+If you want to skip the interactive questions, pass the answers explicitly:
+
+```sh
+night-shift init --provider codex --model gpt-5.4 --generate-setup
+```
+
+For fully non-interactive bootstrap without setup drafting, use:
+
+```sh
+night-shift init --provider codex --model gpt-5.4 --yes
+```
+
+`init` is the required first step for a repository. All Night Shift commands
+other than `help`, `--demo`, and `init` expect `./.night-shift/config.toml` to
+exist already.
 
 Repository defaults live in `./.night-shift/config.toml`.
 
@@ -174,6 +196,14 @@ The CLI surface is:
 - `night-shift resume [--run <id>|latest] [--ui]`
 - `night-shift review [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>] [--environment <name>]`
 
+Canonical setup flow:
+
+```sh
+night-shift init
+night-shift plan --notes notes/morning.md
+night-shift start
+```
+
 ## Worktree Environments
 
 `./.night-shift/worktree-setup.toml` lets the repo define deterministic
@@ -224,9 +254,9 @@ night-shift plan --notes notes/morning.md
 night-shift plan --notes notes/afternoon.md
 ```
 
-By default this updates repo-root `night-shift.md`. Each run reads the existing
-brief if present, combines it with the new notes, and asks the resolved
-planning provider to rewrite the full document in place.
+By default this updates `./.night-shift/execution-brief.md`. Each run reads the
+existing brief if present, combines it with the new notes, and asks the
+resolved planning provider to rewrite the full document in place.
 
 The brief is whole-file managed by Night Shift and always targets this outline:
 
@@ -239,13 +269,14 @@ The brief is whole-file managed by Night Shift and always targets this outline:
 - `## Risks and Open Questions`
 
 You can override the destination file with `--doc <path>`, but the default
-`night-shift.md` is also the happy-path execution input.
+`./.night-shift/execution-brief.md` is the happy-path execution input.
 
 ## Starting Work
 
-If `night-shift.md` exists at the repo root, the simplest kickoff flow is:
+After `night-shift init`, the simplest kickoff flow is:
 
 ```sh
+night-shift plan --notes notes/today.md
 night-shift start
 ```
 

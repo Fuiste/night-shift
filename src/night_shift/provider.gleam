@@ -108,6 +108,7 @@ pub fn generate_worktree_setup(
     True -> {
       use document <- result.try(extract_payload(command_result.output))
       let trimmed_document = string.trim(document)
+      use _ <- result.try(write_file(generated_path, trimmed_document))
       use _ <- result.try(case trimmed_document {
         "" ->
           Error(
@@ -118,10 +119,14 @@ pub fn generate_worktree_setup(
       use _ <- result.try(
         worktree_setup.parse(trimmed_document)
         |> result.map_error(fn(message) {
-          "Generated worktree setup was invalid: " <> message <> ". See " <> log_path
+          "Generated worktree setup was invalid: "
+          <> message
+          <> ". See "
+          <> log_path
+          <> " and "
+          <> generated_path
         }),
       )
-      use _ <- result.try(write_file(generated_path, trimmed_document))
       Ok(#(trimmed_document, artifact_path))
     }
     False -> Error("Worktree setup generation failed. See " <> log_path)
@@ -545,7 +550,9 @@ fn planner_prompt(brief_contents: String) -> String {
   <> "Stay strictly within the brief. Do not create adjacent scope.\n"
   <> "If ambiguity would change public behavior, create a single task whose description asks for manual attention.\n"
   <> "Return only one JSON object between the exact sentinel markers below.\n"
-  <> "Each task must include: id, title, description, dependencies, acceptance, demo_plan, execution_mode.\n"
+  <> "Each task must include: id, title, description, dependencies, acceptance, demo_plan, task_kind, execution_mode.\n"
+  <> "Use task_kind = manual_attention only when the next step is a human decision or missing product direction. Manual-attention tasks will pause execution before any worktree bootstrap or coding work begins.\n"
+  <> "Use task_kind = implementation for normal coding or research work.\n"
   <> "Use execution_mode = parallel for independent low-conflict work, serial for normal implementation work that may share context, and exclusive only when the task must run alone.\n"
   <> "Use lowercase kebab-case ids.\n"
   <> "\n"
@@ -616,7 +623,7 @@ fn execution_prompt(task: types.Task) -> String {
   <> "The JSON shape is:\n"
   <> start_marker
   <> "\n"
-  <> "{\"status\":\"completed\",\"summary\":\"...\",\"files_touched\":[\"...\"],\"demo_evidence\":[\"...\"],\"pr\":{\"title\":\"...\",\"summary\":\"...\",\"demo\":[\"...\"],\"risks\":[\"...\"]},\"follow_up_tasks\":[{\"id\":\"...\",\"title\":\"...\",\"description\":\"...\",\"dependencies\":[\"...\"],\"acceptance\":[\"...\"],\"demo_plan\":[\"...\"],\"execution_mode\":\"serial\"}]}\n"
+  <> "{\"status\":\"completed\",\"summary\":\"...\",\"files_touched\":[\"...\"],\"demo_evidence\":[\"...\"],\"pr\":{\"title\":\"...\",\"summary\":\"...\",\"demo\":[\"...\"],\"risks\":[\"...\"]},\"follow_up_tasks\":[{\"id\":\"...\",\"title\":\"...\",\"description\":\"...\",\"dependencies\":[\"...\"],\"acceptance\":[\"...\"],\"demo_plan\":[\"...\"],\"task_kind\":\"implementation\",\"execution_mode\":\"serial\"}]}\n"
   <> end_marker
   <> "\n"
   <> "\n"
@@ -787,6 +794,7 @@ fn planned_task_decoder() -> decode.Decoder(types.Task) {
   use dependencies <- decode.field("dependencies", decode.list(decode.string))
   use acceptance <- decode.field("acceptance", decode.list(decode.string))
   use demo_plan <- decode.field("demo_plan", decode.list(decode.string))
+  use kind <- decode.then(task_kind_decoder())
   use execution_mode <- decode.then(execution_mode_decoder())
   decode.success(types.Task(
     id: id,
@@ -795,6 +803,7 @@ fn planned_task_decoder() -> decode.Decoder(types.Task) {
     dependencies: dependencies,
     acceptance: acceptance,
     demo_plan: demo_plan,
+    kind: kind,
     execution_mode: execution_mode,
     state: types.Queued,
     worktree_path: "",
@@ -844,6 +853,7 @@ fn follow_up_task_decoder() -> decode.Decoder(types.FollowUpTask) {
   use dependencies <- decode.field("dependencies", decode.list(decode.string))
   use acceptance <- decode.field("acceptance", decode.list(decode.string))
   use demo_plan <- decode.field("demo_plan", decode.list(decode.string))
+  use kind <- decode.then(task_kind_decoder())
   use execution_mode <- decode.then(execution_mode_decoder())
   decode.success(types.FollowUpTask(
     id: id,
@@ -852,6 +862,7 @@ fn follow_up_task_decoder() -> decode.Decoder(types.FollowUpTask) {
     dependencies: dependencies,
     acceptance: acceptance,
     demo_plan: demo_plan,
+    kind: kind,
     execution_mode: execution_mode,
   ))
 }
@@ -869,6 +880,22 @@ fn execution_status_decoder() -> decode.Decoder(types.TaskState) {
 
 fn execution_mode_decoder() -> decode.Decoder(types.ExecutionMode) {
   decode.one_of(field_execution_mode_decoder(), or: [legacy_parallel_safe_decoder()])
+}
+
+fn task_kind_decoder() -> decode.Decoder(types.TaskKind) {
+  decode.one_of(field_task_kind_decoder(), or: [legacy_task_kind_decoder()])
+}
+
+fn field_task_kind_decoder() -> decode.Decoder(types.TaskKind) {
+  use raw <- decode.field("task_kind", decode.string)
+  case types.task_kind_from_string(raw) {
+    Ok(kind) -> decode.success(kind)
+    Error(_) -> decode.failure(types.ImplementationTask, "TaskKind")
+  }
+}
+
+fn legacy_task_kind_decoder() -> decode.Decoder(types.TaskKind) {
+  decode.success(types.ImplementationTask)
 }
 
 fn field_execution_mode_decoder() -> decode.Decoder(types.ExecutionMode) {

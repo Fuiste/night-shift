@@ -83,6 +83,7 @@ pub fn parse(contents: String) -> Result(WorktreeSetupConfig, String) {
 
       contents
       |> string.split("\n")
+      |> collapse_multiline_values([], None)
       |> parse_lines(initial)
       |> result.map(fn(state) { state.config })
     }
@@ -228,8 +229,118 @@ pub fn prepare_worktree(
   }
 }
 
+pub fn preflight_environment(
+  repo_root: String,
+  environment_name: String,
+  setup_path: String,
+  log_path: String,
+) -> Result(Nil, String) {
+  use selected <- result.try(load_selected_environment(
+    repo_root,
+    environment_name,
+    setup_path,
+  ))
+
+  case selected {
+    None -> {
+      use _ <- result.try(write_log(
+        log_path,
+        "[environment-preflight]\nenvironment=(none)\nstatus=skipped\n",
+      ))
+      Ok(Nil)
+    }
+    Some(environment) -> {
+      let setup_commands = commands_for_phase(environment, SetupPhase)
+      let maintenance_commands = commands_for_phase(environment, MaintenancePhase)
+      use _ <- result.try(write_log(
+        log_path,
+        string.join([
+          "[environment-preflight]",
+          "repo_root=" <> repo_root,
+          "environment=" <> environment.name,
+          "env_vars=" <> redacted_env_names(Some(environment)),
+          "path=" <> system.get_env("PATH"),
+          "",
+        ], with: "\n"),
+      ))
+      use missing <- result.try(preflight_phase_commands(
+        setup_commands,
+        "setup",
+        environment.env_vars,
+        repo_root,
+        log_path,
+        [],
+      ))
+      use all_missing <- result.try(preflight_phase_commands(
+        maintenance_commands,
+        "maintenance",
+        environment.env_vars,
+        repo_root,
+        log_path,
+        missing,
+      ))
+      case all_missing {
+        [] -> Ok(Nil)
+        _ ->
+          Error(
+            "Environment preflight failed for "
+            <> environment.name
+            <> ". Missing required executable"
+            <> plural_suffix(list.length(all_missing))
+            <> ": "
+            <> string.join(list.reverse(all_missing), with: ", ")
+            <> ". See "
+            <> log_path
+            <> ".",
+          )
+      }
+    }
+  }
+}
+
 pub fn empty_command_set() -> CommandSet {
   CommandSet(default: [], macos: [], linux: [], windows: [])
+}
+
+fn collapse_multiline_values(
+  lines: List(String),
+  acc: List(String),
+  pending: Option(String),
+) -> List(String) {
+  case lines, pending {
+    [], None -> list.reverse(acc)
+    [], Some(current) -> list.reverse([current, ..acc])
+    [line, ..rest], None -> {
+      let cleaned = strip_comments(line) |> string.trim
+      case begins_multiline_list(cleaned) {
+        True -> collapse_multiline_values(rest, acc, Some(cleaned))
+        False -> collapse_multiline_values(rest, [cleaned, ..acc], None)
+      }
+    }
+    [line, ..rest], Some(current) -> {
+      let cleaned = strip_comments(line) |> string.trim
+      let next =
+        case cleaned {
+          "" -> current
+          _ -> current <> " " <> cleaned
+        }
+      case string.ends_with(cleaned, "]") {
+        True -> collapse_multiline_values(rest, [next, ..acc], None)
+        False -> collapse_multiline_values(rest, acc, Some(next))
+      }
+    }
+  }
+}
+
+fn begins_multiline_list(line: String) -> Bool {
+  case string.split_once(line, "=") {
+    Ok(#(_, value)) -> {
+      let trimmed_value = string.trim(value)
+      string.starts_with(trimmed_value, "[")
+      && !string.ends_with(trimmed_value, "]")
+    }
+    Error(Nil) -> False
+  }
 }
 
 fn parse_lines(
@@ -612,6 +723,121 @@ fn run_environment_commands(
           Error("Worktree environment command failed. See " <> log_path <> ".")
       }
     }
+  }
+}
+
+fn preflight_phase_commands(
+  commands: List(String),
+  phase_name: String,
+  env_vars: List(#(String, String)),
+  cwd: String,
+  log_path: String,
+  missing: List(String),
+) -> Result(List(String), String) {
+  case commands {
+    [] -> {
+      use _ <- result.try(append_log(
+        log_path,
+        "[" <> phase_name <> "] no commands configured\n",
+      ))
+      Ok(missing)
+    }
+    [command, ..rest] -> {
+      let next_missing =
+        case extract_executable(command) {
+          Some(executable) ->
+            case list.contains(missing, executable) {
+              True -> missing
+              False ->
+                case executable_exists(executable, env_vars, cwd, log_path) {
+                  True -> missing
+                  False -> [executable, ..missing]
+                }
+            }
+          None -> missing
+        }
+
+      use _ <- result.try(append_log(
+        log_path,
+        "["
+          <> phase_name
+          <> "] command="
+          <> command
+          <> " executable="
+          <> executable_label(command)
+          <> "\n",
+      ))
+      preflight_phase_commands(
+        rest,
+        phase_name,
+        env_vars,
+        cwd,
+        log_path,
+        next_missing,
+      )
+    }
+  }
+}
+
+fn executable_exists(
+  executable: String,
+  env_vars: List(#(String, String)),
+  cwd: String,
+  log_path: String,
+) -> Bool {
+  let result =
+    shell.run(
+      shell.with_env("command -v " <> shell.quote(executable), env_vars),
+      cwd,
+      log_path <> ".preflight-" <> executable <> ".log",
+    )
+  shell.succeeded(result)
+}
+
+fn executable_label(command: String) -> String {
+  case extract_executable(command) {
+    Some(executable) -> executable
+    None -> "(skipped detection)"
+  }
+}
+
+fn extract_executable(command: String) -> Option(String) {
+  command
+  |> string.trim
+  |> string.split(" ")
+  |> skip_env_assignments
+}
+
+fn skip_env_assignments(tokens: List(String)) -> Option(String) {
+  case tokens {
+    [] -> None
+    [token, ..rest] ->
+      case string.trim(token) {
+        "" -> skip_env_assignments(rest)
+        value ->
+          case looks_like_env_assignment(value) || starts_with_shell_meta(value) {
+            True -> skip_env_assignments(rest)
+            False -> Some(value)
+          }
+      }
+  }
+}
+
+fn looks_like_env_assignment(token: String) -> Bool {
+  string.contains(does: token, contain: "=")
+}
+
+fn starts_with_shell_meta(token: String) -> Bool {
+  string.starts_with(token, "\"")
+  || string.starts_with(token, "'")
+  || string.starts_with(token, "(")
+  || string.starts_with(token, "{")
+}
+
+fn plural_suffix(count: Int) -> String {
+  case count == 1 {
+    True -> ""
+    False -> "s"
   }
 }
 

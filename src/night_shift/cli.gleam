@@ -9,6 +9,7 @@ pub fn usage() -> String {
   <> "Commands:\n"
   <> "  --demo [--ui]\n"
   <> "  init [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>] [--yes] [--generate-setup]\n"
+  <> "    Prompts interactively for provider, model, and initial worktree setup when those answers are not supplied.\n"
   <> "  plan --notes <path> [--doc <path>] [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>]\n"
   <> "  start [--brief <path>] [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>] [--environment <name>] [--max-workers <n>] [--ui]\n"
   <> "  status [--run <id>|latest]\n"

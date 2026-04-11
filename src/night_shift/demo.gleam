@@ -6,7 +6,6 @@ import night_shift/project
 import night_shift/dashboard
 import night_shift/shell
 import night_shift/system
-import night_shift/types
 import simplifile
 
 pub fn run(ui_enabled: Bool) -> Result(String, String) {
@@ -15,7 +14,7 @@ pub fn run(ui_enabled: Bool) -> Result(String, String) {
   let repo_root = filepath.join(demo_root, "repo")
   let remote_root = filepath.join(demo_root, "remote.git")
   let bin_dir = filepath.join(demo_root, "bin")
-  let brief_path = filepath.join(repo_root, types.default_brief_filename)
+  let brief_path = project.default_brief_path(repo_root)
   let fake_provider = filepath.join(bin_dir, "fake-provider")
   let fake_gh = filepath.join(bin_dir, "gh")
   let demo_state_home = filepath.join(demo_root, "state")
@@ -226,8 +225,8 @@ fn setup_demo_environment(
     filepath.join(demo_root, "git-email.log"),
     "Unable to configure the demo git email.",
   ))
-  use _ <- result.try(write_file(brief_path, "# Demo\n"))
   use _ <- result.try(create_directory(project.home(repo_root)))
+  use _ <- result.try(write_file(brief_path, "# Demo\n"))
   use _ <- result.try(write_file(
     project.config_path(repo_root),
     "",
@@ -241,9 +240,7 @@ fn setup_demo_environment(
     "# Demo\n",
   ))
   use _ <- result.try(run_checked(
-    "git add README.md .night-shift "
-      <> shell.quote(types.default_brief_filename)
-      <> " && git commit -m 'chore: seed demo repo'",
+    "git add README.md .night-shift && git commit -m 'chore: seed demo repo'",
     repo_root,
     filepath.join(demo_root, "seed.log"),
     "Unable to create the demo seed commit.",

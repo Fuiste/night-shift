@@ -13,6 +13,10 @@ pub fn worktree_setup_path(repo_root: String) -> String {
   filepath.join(home(repo_root), "worktree-setup.toml")
 }
 
+pub fn default_brief_path(repo_root: String) -> String {
+  filepath.join(home(repo_root), "execution-brief.md")
+}
+
 pub fn runs_root(repo_root: String) -> String {
   filepath.join(home(repo_root), "runs")
 }

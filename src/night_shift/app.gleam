@@ -15,145 +15,49 @@ import night_shift/journal
 import night_shift/orchestrator
 import night_shift/project
 import night_shift/provider
+import night_shift/provider_models
 import night_shift/system
 import night_shift/types
 import night_shift/worktree_setup
 import simplifile
 
 pub fn run(command: types.Command) -> Nil {
-  let repo_root = git.repo_root(system.cwd())
+  let repo_root = current_repo_root()
 
-  case load_repo_config(repo_root) {
-    Error(message) -> io.println(message)
-    Ok(config) -> {
-
-      case command {
-        types.Help ->
-          io.println(
-            "Night Shift is ready.\n\n"
-            <> cli.usage()
-            <> "\n"
-            <> crate_summary(config),
-          )
-        types.Init(agent_overrides, generate_setup, assume_yes) ->
-          io.println(init(repo_root, config, agent_overrides, generate_setup, assume_yes))
-        types.Plan(notes_path, doc_path, agent_overrides) ->
-          io.println(
-            case agent_config.resolve_plan_agent(config, agent_overrides) {
-              Ok(planning_agent) ->
-                plan(repo_root, notes_path, doc_path, planning_agent)
-              Error(message) -> message
-            },
-          )
-        types.Start(
-          brief_path,
-          agent_overrides,
-          environment_name,
-          max_workers,
-          False,
-        ) -> {
-          let resolved_brief = resolve_start_brief_path(repo_root, brief_path)
-          let resolved_workers = choose_max_workers(max_workers, config)
-
-          io.println(
-            case
-              resolved_brief,
-              ensure_clean_repo_for_start(repo_root),
-              resolve_environment_name(repo_root, environment_name),
-              agent_config.resolve_start_agents(config, agent_overrides)
-            {
-              Ok(path), Ok(Nil), Ok(selected_environment), Ok(#(
-                planning_agent,
-                execution_agent,
-              )) ->
-                start(
-                  repo_root,
-                  path,
-                  planning_agent,
-                  execution_agent,
-                  selected_environment,
-                  resolved_workers,
-                  config,
-                )
-              Error(message), _, _, _ -> message
-              _, Error(message), _, _ -> message
-              _, _, Error(message), _ -> message
-              _, _, _, Error(message) -> message
-            },
-          )
-        }
-        types.Start(
-          brief_path,
-          agent_overrides,
-          environment_name,
-          max_workers,
-          True,
-        ) -> {
-          let resolved_brief = resolve_start_brief_path(repo_root, brief_path)
-          let resolved_workers = choose_max_workers(max_workers, config)
-
-          case
-            resolved_brief,
-            ensure_clean_repo_for_start(repo_root),
-            resolve_environment_name(repo_root, environment_name),
-            agent_config.resolve_start_agents(config, agent_overrides)
-          {
-            Ok(path), Ok(Nil), Ok(selected_environment), Ok(#(
-              planning_agent,
-              execution_agent,
-            )) ->
-              case
-                journal.start_run(
-                  repo_root,
-                  path,
-                  planning_agent,
-                  execution_agent,
-                  selected_environment,
-                  resolved_workers,
-                )
-              {
-                Ok(run) ->
-                  case
-                    dashboard.start_start_session(
-                      repo_root,
-                      run.run_id,
-                      run,
-                      config,
-                    )
-                  {
-                    Ok(session) -> {
-                      io.println(render_dashboard_summary(
-                        session.url,
-                        run.run_id,
-                      ))
-                      system.wait_forever()
-                    }
-                    Error(message) -> {
-                      let _ = journal.mark_status(run, types.RunFailed, message)
-                      io.println(message)
-                    }
-                  }
-                Error(message) -> io.println(message)
-              }
-            Error(message), _, _, _ -> io.println(message)
-            _, Error(message), _, _ -> io.println(message)
-            _, _, Error(message), _ -> io.println(message)
-            _, _, _, Error(message) -> io.println(message)
-          }
-        }
-        types.Status(run) -> io.println(status(repo_root, run))
-        types.Report(run) -> io.println(report(repo_root, run))
-        types.Resume(run, False) -> io.println(resume(repo_root, run, config))
-        types.Resume(run, True) -> resume_with_ui(repo_root, run, config)
-        types.Review(agent_overrides, environment_name) ->
-          io.println(review(repo_root, agent_overrides, environment_name, config))
-        types.Demo(ui) ->
-          case demo.run(ui) {
-            Ok(summary) -> io.println(summary)
-            Error(message) -> io.println(message)
-          }
+  case command {
+    types.Help ->
+      io.println(
+        "Night Shift is ready.\n\n"
+        <> cli.usage()
+        <> "\n"
+        <> crate_summary(types.default_config()),
+      )
+    types.Demo(ui) ->
+      case demo.run(ui) {
+        Ok(summary) -> io.println(summary)
+        Error(message) -> io.println(message)
       }
-    }
+    types.Init(agent_overrides, generate_setup, assume_yes) ->
+      case load_repo_config(repo_root) {
+        Error(message) -> io.println(message)
+        Ok(config) ->
+          io.println(
+            init(repo_root, config, agent_overrides, generate_setup, assume_yes),
+          )
+      }
+    _ ->
+      case load_initialized_repo_config(repo_root) {
+        Error(message) -> io.println(message)
+        Ok(config) ->
+          run_initialized_command(repo_root, config, command)
+      }
+  }
+}
+
+fn current_repo_root() -> String {
+  case system.get_env("NIGHT_SHIFT_REPO_ROOT") {
+    "" -> git.repo_root(system.cwd())
+    repo_root -> repo_root
   }
 }
 
@@ -162,6 +66,139 @@ fn load_repo_config(repo_root: String) -> Result(types.Config, String) {
   case config.load(config_path) {
     Ok(parsed) -> Ok(parsed)
     Error(message) -> Error("Invalid " <> config_path <> ": " <> message)
+  }
+}
+
+fn load_initialized_repo_config(repo_root: String) -> Result(types.Config, String) {
+  let config_path = project.config_path(repo_root)
+  case simplifile.read(config_path) {
+    Ok(contents) ->
+      config.parse(contents)
+      |> result.map_error(fn(message) {
+        "Invalid " <> config_path <> ": " <> message
+      })
+    Error(_) ->
+      Error(
+        "Night Shift is not initialized for this repository. Run `night-shift init` from "
+        <> repo_root
+        <> " first.",
+      )
+  }
+}
+
+fn run_initialized_command(
+  repo_root: String,
+  config: types.Config,
+  command: types.Command,
+) -> Nil {
+  case command {
+    types.Plan(notes_path, doc_path, agent_overrides) ->
+      io.println(
+        case agent_config.resolve_plan_agent(config, agent_overrides) {
+          Ok(planning_agent) -> plan(repo_root, notes_path, doc_path, planning_agent)
+          Error(message) -> message
+        },
+      )
+    types.Start(
+      brief_path,
+      agent_overrides,
+      environment_name,
+      max_workers,
+      False,
+    ) -> {
+      let resolved_brief = resolve_start_brief_path(repo_root, brief_path)
+      let resolved_workers = choose_max_workers(max_workers, config)
+
+      io.println(
+        case
+          resolved_brief,
+          ensure_clean_repo_for_start(repo_root),
+          resolve_environment_name(repo_root, environment_name),
+          agent_config.resolve_start_agents(config, agent_overrides)
+        {
+          Ok(path), Ok(Nil), Ok(selected_environment), Ok(#(
+            planning_agent,
+            execution_agent,
+          )) ->
+            start(
+              repo_root,
+              path,
+              planning_agent,
+              execution_agent,
+              selected_environment,
+              resolved_workers,
+              config,
+            )
+          Error(message), _, _, _ -> message
+          _, Error(message), _, _ -> message
+          _, _, Error(message), _ -> message
+          _, _, _, Error(message) -> message
+        },
+      )
+    }
+    types.Start(
+      brief_path,
+      agent_overrides,
+      environment_name,
+      max_workers,
+      True,
+    ) -> {
+      let resolved_brief = resolve_start_brief_path(repo_root, brief_path)
+      let resolved_workers = choose_max_workers(max_workers, config)
+
+      case
+        resolved_brief,
+        ensure_clean_repo_for_start(repo_root),
+        resolve_environment_name(repo_root, environment_name),
+        agent_config.resolve_start_agents(config, agent_overrides)
+      {
+        Ok(path), Ok(Nil), Ok(selected_environment), Ok(#(
+          planning_agent,
+          execution_agent,
+        )) ->
+          case
+            journal.start_run(
+              repo_root,
+              path,
+              planning_agent,
+              execution_agent,
+              selected_environment,
+              resolved_workers,
+            )
+          {
+            Ok(run) ->
+              case
+                dashboard.start_start_session(
+                  repo_root,
+                  run.run_id,
+                  run,
+                  config,
+                )
+              {
+                Ok(session) -> {
+                  io.println(render_dashboard_summary(session.url, run.run_id))
+                  system.wait_forever()
+                }
+                Error(message) -> {
+                  let _ = journal.mark_status(run, types.RunFailed, message)
+                  io.println(message)
+                }
+              }
+            Error(message) -> io.println(message)
+          }
+        Error(message), _, _, _ -> io.println(message)
+        _, Error(message), _, _ -> io.println(message)
+        _, _, Error(message), _ -> io.println(message)
+        _, _, _, Error(message) -> io.println(message)
+      }
+    }
+    types.Status(run) -> io.println(status(repo_root, run))
+    types.Report(run) -> io.println(report(repo_root, run))
+    types.Resume(run, False) -> io.println(resume(repo_root, run, config))
+    types.Resume(run, True) -> resume_with_ui(repo_root, run, config)
+    types.Review(agent_overrides, environment_name) ->
+      io.println(review(repo_root, agent_overrides, environment_name, config))
+    _ -> io.println("Unsupported command.")
   }
 }
 
@@ -174,32 +211,277 @@ fn init(
 ) -> String {
   let config_path = project.config_path(repo_root)
   let setup_path = project.worktree_setup_path(repo_root)
-  let setup_requested = case generate_setup, assume_yes {
-    True, _ -> True
-    False, True -> False
-    False, False ->
-      prompt_yes_no("Draft worktree-setup.toml with the configured provider?")
-  }
+  let config_exists = file_exists(config_path)
+  let setup_exists = file_exists(setup_path)
 
   case
     init_project_home(repo_root),
-    ensure_file(config_path, config.render(config)),
-    ensure_file(project.gitignore_path(repo_root), project_gitignore_contents()),
-    ensure_worktree_setup_file(
+    choose_init_config(
       repo_root,
       config,
       agent_overrides,
-      setup_requested,
-      setup_path,
-    )
+      config_exists,
+    ),
+    choose_setup_request(generate_setup, assume_yes, setup_exists),
+    ensure_file(project.gitignore_path(repo_root), project_gitignore_contents())
   {
-    Ok(Nil), Ok(config_status), Ok(_gitignore_status), Ok(setup_status) ->
-      "Initialized " <> project.home(repo_root) <> "\nConfig: " <> config_status
-      <> "\nWorktree setup: " <> setup_status
+    Ok(Nil), Ok(init_config), Ok(setup_requested), Ok(_gitignore_status) ->
+      case
+        ensure_file(config_path, config.render(init_config)),
+        ensure_worktree_setup_file(
+          repo_root,
+          init_config,
+          agent_overrides,
+          setup_requested,
+          setup_path,
+        )
+      {
+        Ok(config_status), Ok(setup_status) ->
+          "Initialized " <> project.home(repo_root) <> "\nConfig: " <> config_status
+          <> "\nWorktree setup: " <> setup_status
+        Error(message), _ -> message
+        _, Error(message) -> message
+      }
     Error(message), _, _, _ -> message
     _, Error(message), _, _ -> message
     _, _, Error(message), _ -> message
     _, _, _, Error(message) -> message
+  }
+}
+
+fn choose_init_config(
+  repo_root: String,
+  config: types.Config,
+  agent_overrides: types.AgentOverrides,
+  config_exists: Bool,
+) -> Result(types.Config, String) {
+  case config_exists {
+    True -> Ok(config)
+    False -> {
+      use selected_provider <- result.try(resolve_init_provider(config, agent_overrides))
+      use _ <- result.try(validate_init_reasoning(
+        selected_provider,
+        agent_overrides.reasoning,
+      ))
+      use selected_model <- result.try(resolve_init_model(
+        repo_root,
+        config,
+        selected_provider,
+        agent_overrides,
+      ))
+      Ok(build_init_config(config, agent_overrides, selected_provider, selected_model))
+    }
+  }
+}
+
+fn choose_setup_request(
+  generate_setup: Bool,
+  assume_yes: Bool,
+  setup_exists: Bool,
+) -> Result(Bool, String) {
+  case setup_exists {
+    True -> Ok(False)
+    False ->
+      case generate_setup, assume_yes {
+        True, _ -> Ok(True)
+        False, True -> Ok(False)
+        False, False ->
+          case can_prompt_interactively() {
+            True ->
+              Ok(
+                select_from_labels(
+                  "3. Should Night Shift draft an initial worktree setup using that provider?",
+                  ["Yes, draft worktree-setup.toml", "No, create the blank template"],
+                  0,
+                ) == 0,
+              )
+            False ->
+              Error(
+                "night-shift init needs either --generate-setup or --yes when not running in an interactive terminal.",
+              )
+          }
+      }
+  }
+}
+
+fn resolve_init_provider(
+  config: types.Config,
+  agent_overrides: types.AgentOverrides,
+) -> Result(types.Provider, String) {
+  case agent_overrides.provider {
+    Some(provider_name) -> Ok(provider_name)
+    None ->
+      case can_prompt_interactively() {
+        True -> {
+          let options = [
+            "codex - OpenAI Codex CLI",
+            "cursor - Cursor Agent",
+          ]
+          let default_index = default_provider_index(config)
+          case select_from_labels(
+            "1. Which provider do you want to use?",
+            options,
+            default_index,
+          ) {
+            1 -> Ok(types.Cursor)
+            _ -> Ok(types.Codex)
+          }
+        }
+        False ->
+          Error(
+            "night-shift init needs --provider <codex|cursor> when not running in an interactive terminal.",
+          )
+      }
+  }
+}
+
+fn resolve_init_model(
+  repo_root: String,
+  config: types.Config,
+  provider_name: types.Provider,
+  agent_overrides: types.AgentOverrides,
+) -> Result(String, String) {
+  case agent_overrides.model {
+    Some(model) -> Ok(model)
+    None ->
+      case can_prompt_interactively() {
+        True -> {
+          use models <- result.try(provider_models.list_models(provider_name, repo_root))
+          let labels = models |> list.map(fn(model) { model.label })
+          let default_index = preferred_model_index(config, provider_name, models)
+          let selected_index =
+            select_from_labels(
+              "2. Which "
+              <> types.provider_to_string(provider_name)
+              <> " model should be your default?",
+              labels,
+              default_index,
+            )
+          use selected <- result.try(model_id_at(models, selected_index))
+          Ok(selected)
+        }
+        False ->
+          Error(
+            "night-shift init needs --model <id> when not running in an interactive terminal.",
+          )
+      }
+  }
+}
+
+fn build_init_config(
+  config: types.Config,
+  agent_overrides: types.AgentOverrides,
+  provider_name: types.Provider,
+  model: String,
+) -> types.Config {
+  let profile_name = case agent_overrides.profile {
+    Some(name) -> name
+    None -> "default"
+  }
+  let profile =
+    types.AgentProfile(
+      name: profile_name,
+      provider: provider_name,
+      model: Some(model),
+      reasoning: agent_overrides.reasoning,
+      provider_overrides: [],
+    )
+
+  types.Config(
+    ..config,
+    default_profile: profile_name,
+    planning_profile: "",
+    execution_profile: "",
+    review_profile: "",
+    profiles: [profile],
+  )
+}
+
+fn validate_init_reasoning(
+  provider_name: types.Provider,
+  reasoning: Option(types.ReasoningLevel),
+) -> Result(Nil, String) {
+  case provider_name, reasoning {
+    types.Cursor, Some(_) ->
+      Error(
+        "Cursor does not support Night Shift's normalized reasoning control. Omit --reasoning or choose Codex.",
+      )
+    _, _ -> Ok(Nil)
+  }
+}
+
+fn default_provider_index(config: types.Config) -> Int {
+  case default_profile(config) {
+    Ok(profile) ->
+      case profile.provider {
+        types.Cursor -> 1
+        _ -> 0
+      }
+    Error(_) -> 0
+  }
+}
+
+fn preferred_model_index(
+  config: types.Config,
+  provider_name: types.Provider,
+  models: List(provider_models.ProviderModel),
+) -> Int {
+  case default_profile(config) {
+    Ok(profile) if profile.provider == provider_name ->
+      case profile.model {
+        Some(model_id) -> find_model_index(models, model_id, 0)
+        None -> provider_models.default_index(models)
+      }
+    _ -> provider_models.default_index(models)
+  }
+}
+
+fn default_profile(config: types.Config) -> Result(types.AgentProfile, Nil) {
+  list.find(config.profiles, fn(profile) { profile.name == config.default_profile })
+}
+
+fn find_model_index(
+  models: List(provider_models.ProviderModel),
+  target: String,
+  index: Int,
+) -> Int {
+  case models {
+    [] -> 0
+    [model, ..rest] ->
+      case model.id == target {
+        True -> index
+        False -> find_model_index(rest, target, index + 1)
+      }
+  }
+}
+
+fn model_id_at(
+  models: List(provider_models.ProviderModel),
+  index: Int,
+) -> Result(String, String) {
+  case models, index {
+    [model, .._], 0 -> Ok(model.id)
+    [_, ..rest], _ -> model_id_at(rest, index - 1)
+    [], _ -> Error("The selected model was out of range.")
+  }
+}
+
+fn select_from_labels(
+  prompt: String,
+  labels: List(String),
+  default_index: Int,
+) -> Int {
+  system.select_option(prompt, labels, default_index)
+}
+
+fn can_prompt_interactively() -> Bool {
+  system.stdin_is_tty() && system.stdout_is_tty()
+}
+
+fn file_exists(path: String) -> Bool {
+  case simplifile.read(path) {
+    Ok(_) -> True
+    Error(_) -> False
   }
 }
 
@@ -333,7 +615,7 @@ fn ensure_clean_repo_for_start(repo_root: String) -> Result(Nil, String) {
 }
 
 fn default_brief_path(repo_root: String) -> String {
-  filepath.join(repo_root, types.default_brief_filename)
+  project.default_brief_path(repo_root)
 }
 
 fn write_string(path: String, contents: String) -> Result(Nil, String) {
@@ -438,14 +720,6 @@ fn project_gitignore_contents() -> String {
   "*\n!config.toml\n!worktree-setup.toml\n!.gitignore\n"
 }
 
-fn prompt_yes_no(prompt: String) -> Bool {
-  io.print(prompt <> " [y/N]: ")
-  case string.lowercase(string.trim(system.read_line())) {
-    "y" | "yes" -> True
-    _ -> False
-  }
-}
-
 fn crate_summary(config: types.Config) -> String {
   "Default profile: "
   <> config.default_profile
@@ -466,7 +740,7 @@ fn crate_summary(config: types.Config) -> String {
   <> stringify_notifiers(config.notifiers)
   <> "\n"
   <> "Default brief: "
-  <> types.default_brief_filename
+  <> project.default_brief_path(system.cwd())
 }
 
 fn status(repo_root: String, run: types.RunSelector) -> String {

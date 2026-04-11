@@ -1,7 +1,7 @@
 import gleam/list
 import gleam/option.{type Option, None}
 
-pub const default_brief_filename = "night-shift.md"
+pub const default_brief_filename = "execution-brief.md"
 
 pub type Provider {
   Codex
@@ -171,6 +171,26 @@ pub fn execution_mode_to_string(mode: ExecutionMode) -> String {
   }
 }
 
+pub type TaskKind {
+  ImplementationTask
+  ManualAttentionTask
+}
+
+pub fn task_kind_from_string(value: String) -> Result(TaskKind, String) {
+  case value {
+    "implementation" -> Ok(ImplementationTask)
+    "manual_attention" -> Ok(ManualAttentionTask)
+    _ -> Error("Unsupported task kind: " <> value)
+  }
+}
+
+pub fn task_kind_to_string(kind: TaskKind) -> String {
+  case kind {
+    ImplementationTask -> "implementation"
+    ManualAttentionTask -> "manual_attention"
+  }
+}
+
 pub type FollowUpTask {
   FollowUpTask(
     id: String,
@@ -179,6 +199,7 @@ pub type FollowUpTask {
     dependencies: List(String),
     acceptance: List(String),
     demo_plan: List(String),
+    kind: TaskKind,
     execution_mode: ExecutionMode,
   )
 }
@@ -191,6 +212,7 @@ pub type Task {
     dependencies: List(String),
     acceptance: List(String),
     demo_plan: List(String),
+    kind: TaskKind,
     execution_mode: ExecutionMode,
     state: TaskState,
     worktree_path: String,

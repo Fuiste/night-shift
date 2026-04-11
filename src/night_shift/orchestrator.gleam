@@ -41,7 +41,13 @@ pub fn start(
     planned_run,
     planned_event,
   ))
-  scheduler_loop(config, persisted_run)
+  use #(prepared_run, proceed) <- result.try(prepare_run_for_execution(
+    persisted_run,
+  ))
+  case proceed {
+    True -> scheduler_loop(config, prepared_run)
+    False -> Ok(prepared_run)
+  }
 }
 
 pub fn resume(
@@ -63,7 +69,13 @@ pub fn resume(
     )
 
   use persisted_run <- result.try(journal.append_event(resumed_run, event))
-  scheduler_loop(config, persisted_run)
+  use #(prepared_run, proceed) <- result.try(prepare_run_for_execution(
+    persisted_run,
+  ))
+  case proceed {
+    True -> scheduler_loop(config, prepared_run)
+    False -> Ok(prepared_run)
+  }
 }
 
 pub fn review(
@@ -101,7 +113,66 @@ pub fn review(
     )
 
   use persisted_run <- result.try(journal.append_event(seeded_run, event))
-  scheduler_loop(config, persisted_run)
+  use #(prepared_run, proceed) <- result.try(prepare_run_for_execution(
+    persisted_run,
+  ))
+  case proceed {
+    True -> scheduler_loop(config, prepared_run)
+    False -> Ok(prepared_run)
+  }
+}
+
+fn prepare_run_for_execution(
+  run: types.RunRecord,
+) -> Result(#(types.RunRecord, Bool), String) {
+  let refreshed_run =
+    types.RunRecord(..run, tasks: refresh_ready_states(run.tasks))
+
+  case has_blocking_attention(refreshed_run.tasks) {
+    True -> Ok(#(refreshed_run, True))
+    False ->
+      case next_batch(refreshed_run.tasks, refreshed_run.max_workers) {
+        [] -> Ok(#(refreshed_run, True))
+        [task, .._] if task.kind == types.ManualAttentionTask ->
+          Ok(#(refreshed_run, True))
+        _ -> {
+          let preflight_log =
+            filepath.join(
+              refreshed_run.run_path,
+              "logs/environment-preflight.log",
+            )
+          case
+            worktree_setup.preflight_environment(
+              refreshed_run.repo_root,
+              refreshed_run.environment_name,
+              project.worktree_setup_path(refreshed_run.repo_root),
+              preflight_log,
+            )
+          {
+            Ok(_) -> Ok(#(refreshed_run, True))
+            Error(message) -> {
+              let event =
+                types.RunEvent(
+                  kind: "environment_preflight_failed",
+                  at: system.timestamp(),
+                  message: message,
+                  task_id: None,
+                )
+              use failed_run <- result.try(journal.append_event(
+                refreshed_run,
+                event,
+              ))
+              use marked_run <- result.try(journal.mark_status(
+                failed_run,
+                types.RunFailed,
+                message,
+              ))
+              Ok(#(marked_run, False))
+            }
+          }
+        }
+      }
+  }
 }
 
 fn scheduler_loop(
@@ -110,22 +181,27 @@ fn scheduler_loop(
 ) -> Result(types.RunRecord, String) {
   let refreshed_run =
     types.RunRecord(..run, tasks: refresh_ready_states(run.tasks))
-  let batch = next_batch(refreshed_run.tasks, refreshed_run.max_workers)
+  case has_blocking_attention(refreshed_run.tasks) {
+    True -> finish_run(refreshed_run)
+    False -> {
+      let batch = next_batch(refreshed_run.tasks, refreshed_run.max_workers)
 
-  case batch {
-    [] -> finish_run(refreshed_run)
-    _ -> {
-      use #(running_run, task_runs) <- result.try(launch_batch(
-        config,
-        refreshed_run,
-        batch,
-      ))
-      use completed_run <- result.try(await_batch(
-        config,
-        running_run,
-        task_runs,
-      ))
-      scheduler_loop(config, completed_run)
+      case batch {
+        [] -> finish_run(refreshed_run)
+        _ -> {
+          use #(running_run, task_runs) <- result.try(launch_batch(
+            config,
+            refreshed_run,
+            batch,
+          ))
+          use completed_run <- result.try(await_batch(
+            config,
+            running_run,
+            task_runs,
+          ))
+          scheduler_loop(config, completed_run)
+        }
+      }
     }
   }
 }
@@ -159,103 +235,129 @@ fn launch_batch_loop(
   case tasks {
     [] -> Ok(#(run, list.reverse(acc)))
     [task, ..rest] -> {
-      let branch_name = case task.branch_name {
-        "" -> build_branch_name(config.branch_prefix, run.run_id, task.id)
-        existing_branch -> existing_branch
-      }
-      let worktree_path = filepath.join(run.run_path, "worktrees/" <> task.id)
-      let base_ref = case task.branch_name {
-        "" -> task_base_ref(task, run.tasks, config.base_branch)
-        existing_branch -> existing_branch
-      }
-      let git_log =
-        filepath.join(run.run_path, "logs/" <> task.id <> ".git.log")
-      let env_log =
-        filepath.join(run.run_path, "logs/" <> task.id <> ".env.log")
-      let worktree_result = case task.branch_name {
-        "" ->
-          git.create_worktree(
-            run.repo_root,
-            worktree_path,
-            branch_name,
-            base_ref,
-            git_log,
-          )
-        _ ->
-          git.attach_worktree(
-            run.repo_root,
-            worktree_path,
-            branch_name,
-            git_log,
-          )
-      }
-
-      case worktree_result {
-        Ok(_) -> {
-          let running_task =
-            types.Task(
-              ..task,
-              state: types.Running,
-              worktree_path: worktree_path,
-              branch_name: branch_name,
-            )
-          let updated_run =
-            types.RunRecord(..run, tasks: replace_task(run.tasks, running_task))
-          let event =
-            types.RunEvent(
-              kind: "task_started",
-              at: system.timestamp(),
-              message: "Started task " <> task.title,
-              task_id: Some(task.id),
-            )
-
-          use persisted_run <- result.try(journal.append_event(
-            updated_run,
-            event,
+      case task.kind {
+        types.ManualAttentionTask -> {
+          use blocked_run <- result.try(mark_task_with_event(
+            run,
+            task,
+            types.ManualAttention,
+            manual_attention_summary(task),
+            "task_manual_attention",
           ))
-          case
-            start_task_run(
-              persisted_run,
-              running_task,
-              worktree_path,
-              branch_name,
-              base_ref,
-              git_log,
-              env_log,
-            )
-          {
-            Ok(#(started_run, task_run)) ->
-              launch_batch_loop(config, started_run, rest, [task_run, ..acc])
+          Ok(#(blocked_run, list.reverse(acc)))
+        }
+        types.ImplementationTask -> {
+          let branch_name = case task.branch_name {
+            "" -> build_branch_name(config.branch_prefix, run.run_id, task.id)
+            existing_branch -> existing_branch
+          }
+          let worktree_path =
+            filepath.join(run.run_path, "worktrees/" <> task.id)
+          let is_existing_worktree = task.branch_name != ""
+          let base_ref = case task.branch_name {
+            "" -> task_base_ref(task, run.tasks, config.base_branch)
+            existing_branch -> existing_branch
+          }
+          let git_log =
+            filepath.join(run.run_path, "logs/" <> task.id <> ".git.log")
+          let env_log =
+            filepath.join(run.run_path, "logs/" <> task.id <> ".env.log")
+          let worktree_result = case is_existing_worktree {
+            False ->
+              git.create_worktree(
+                run.repo_root,
+                worktree_path,
+                branch_name,
+                base_ref,
+                git_log,
+              )
+            True ->
+              git.attach_worktree(
+                run.repo_root,
+                worktree_path,
+                branch_name,
+                git_log,
+              )
+          }
 
-            Error(message) -> {
-              use failed_run <- result.try(mark_task_with_event(
-                persisted_run,
-                running_task,
-                types.Failed,
-                message,
-                "task_failed",
+          case worktree_result {
+            Ok(_) -> {
+              let running_task =
+                types.Task(
+                  ..task,
+                  state: types.Running,
+                  worktree_path: worktree_path,
+                  branch_name: branch_name,
+                )
+              let updated_run =
+                types.RunRecord(
+                  ..run,
+                  tasks: replace_task(run.tasks, running_task),
+                )
+              let event =
+                types.RunEvent(
+                  kind: "task_started",
+                  at: system.timestamp(),
+                  message: "Started task " <> task.title,
+                  task_id: Some(task.id),
+                )
+
+              use persisted_run <- result.try(journal.append_event(
+                updated_run,
+                event,
               ))
-              launch_batch_loop(config, failed_run, rest, acc)
+              let bootstrap_phase = case is_existing_worktree {
+                True -> worktree_setup.MaintenancePhase
+                False -> worktree_setup.SetupPhase
+              }
+              case
+                start_task_run(
+                  persisted_run,
+                  running_task,
+                  worktree_path,
+                  branch_name,
+                  base_ref,
+                  bootstrap_phase,
+                  git_log,
+                  env_log,
+                )
+              {
+                Ok(#(started_run, task_run)) ->
+                  launch_batch_loop(config, started_run, rest, [task_run, ..acc])
+
+                Error(message) -> {
+                  use failed_run <- result.try(mark_task_with_event(
+                    persisted_run,
+                    running_task,
+                    types.Failed,
+                    message,
+                    "task_failed",
+                  ))
+                  launch_batch_loop(config, failed_run, rest, acc)
+                }
+              }
+            }
+            Error(message) -> {
+              let failed_task =
+                types.Task(..task, state: types.Failed, summary: message)
+              let failed_run = types.RunRecord(
+                ..run,
+                tasks: replace_task(run.tasks, failed_task),
+              )
+              let event =
+                types.RunEvent(
+                  kind: "task_failed",
+                  at: system.timestamp(),
+                  message: message,
+                  task_id: Some(task.id),
+                )
+              use persisted_run <- result.try(journal.append_event(
+                failed_run,
+                event,
+              ))
+              launch_batch_loop(config, persisted_run, rest, acc)
             }
           }
-        }
-        Error(message) -> {
-          let failed_task =
-            types.Task(..task, state: types.Failed, summary: message)
-          let failed_run =
-            types.RunRecord(..run, tasks: replace_task(run.tasks, failed_task))
-          let event =
-            types.RunEvent(
-              kind: "task_failed",
-              at: system.timestamp(),
-              message: message,
-              task_id: Some(task.id),
-            )
-          use persisted_run <- result.try(journal.append_event(
-            failed_run,
-            event,
-          ))
-          launch_batch_loop(config, persisted_run, rest, acc)
         }
       }
     }
@@ -554,10 +656,19 @@ fn refresh_ready_states(tasks: List(types.Task)) -> List(types.Task) {
 }
 
 fn next_batch(tasks: List(types.Task), max_workers: Int) -> List(types.Task) {
-  tasks
-  |> list.filter(fn(task) { task.state == types.Ready })
-  |> build_batch(max_workers, [], False)
-  |> list.reverse
+  let ready_tasks = list.filter(tasks, fn(task) { task.state == types.Ready })
+
+  case
+    list.find(ready_tasks, fn(task) {
+      task.kind == types.ManualAttentionTask
+    })
+  {
+    Ok(task) -> [task]
+    Error(_) ->
+      ready_tasks
+      |> build_batch(max_workers, [], False)
+      |> list.reverse
+  }
 }
 
 fn replace_task(
@@ -589,6 +700,7 @@ fn merge_follow_up_tasks(
           dependencies: follow_up.dependencies,
           acceptance: follow_up.acceptance,
           demo_plan: follow_up.demo_plan,
+          kind: follow_up.kind,
           execution_mode: follow_up.execution_mode,
           state: types.Queued,
           worktree_path: "",
@@ -731,6 +843,7 @@ fn review_task_from_pr(pr: github.ReviewWorkItem) -> types.Task {
       "Leave the PR in a green or clearly blocked state.",
     ],
     demo_plan: ["Summarize the fixes and checks in the PR body."],
+    kind: types.ImplementationTask,
     execution_mode: types.Exclusive,
     state: types.Ready,
     worktree_path: "",
@@ -746,13 +859,10 @@ fn start_task_run(
   worktree_path: String,
   branch_name: String,
   base_ref: String,
+  bootstrap_phase: worktree_setup.BootstrapPhase,
   git_log: String,
   env_log: String,
 ) -> Result(#(types.RunRecord, provider.TaskRun), String) {
-  let bootstrap_phase = case task.branch_name {
-    "" -> worktree_setup.SetupPhase
-    _ -> worktree_setup.MaintenancePhase
-  }
   use _ <- result.try(worktree_setup.prepare_worktree(
     run.repo_root,
     run.environment_name,
@@ -834,6 +944,18 @@ fn build_batch(
           }
       }
   }
+}
+
+fn has_blocking_attention(tasks: List(types.Task)) -> Bool {
+  list.any(tasks, fn(task) {
+    task.state == types.ManualAttention || task.state == types.Blocked
+  })
+}
+
+fn manual_attention_summary(task: types.Task) -> String {
+  "Primary blocker: "
+  <> task.description
+  <> "\n\nEnvironment notes: no worktree bootstrap or provider execution started because this task requires manual attention."
 }
 
 fn blocked_run_message(tasks: List(types.Task)) -> String {
