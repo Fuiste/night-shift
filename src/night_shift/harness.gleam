@@ -46,7 +46,7 @@ pub fn plan_document(
     ),
   ))
   let command = plan_document_command(harness, repo_root, prompt_path)
-  let result = shell.run(command, repo_root, log_path)
+  let result = run_planner_command(command, repo_root, log_path)
 
   case shell.succeeded(result) {
     True -> {
@@ -72,7 +72,7 @@ pub fn plan_tasks(
   use brief_contents <- result.try(read_file(brief_path))
   use _ <- result.try(write_file(prompt_path, planner_prompt(brief_contents)))
   let command = planner_command(harness, repo_root, prompt_path)
-  let result = shell.run(command, repo_root, log_path)
+  let result = run_planner_command(command, repo_root, log_path)
 
   case shell.succeeded(result) {
     True -> {
@@ -96,12 +96,12 @@ pub fn start_task(
   let prompt_path = filepath.join(run_path, "logs/" <> task.id <> ".prompt.md")
   let log_path = filepath.join(run_path, "logs/" <> task.id <> ".log")
   use _ <- result.try(write_file(prompt_path, execution_prompt(task)))
-  let handle =
-    shell.start(
-      executor_command(harness, repo_root, worktree_path, prompt_path),
-      worktree_path,
-      log_path,
-    )
+  let handle = start_harness_command(
+    executor_command(harness, repo_root, worktree_path, prompt_path),
+    worktree_path,
+    log_path,
+    task.id,
+  )
 
   Ok(TaskRun(
     task: task,
@@ -149,10 +149,11 @@ pub fn repair_task(
     repair_prompt(task, verification_output),
   ))
   let result =
-    shell.run(
+    run_harness_command(
       executor_command(harness, repo_root, worktree_path, prompt_path),
       worktree_path,
       log_path,
+      task.id <> " repair",
     )
 
   case shell.succeeded(result) {
@@ -191,6 +192,41 @@ fn plan_document_command(
   case fake_harness {
     "" -> planning_command(harness, repo_root, prompt_path)
     command -> command <> " plan-doc " <> shell.quote(prompt_path)
+  }
+}
+
+fn run_planner_command(
+  command: String,
+  cwd: String,
+  log_path: String,
+) -> shell.CommandResult {
+  case system.get_env("NIGHT_SHIFT_FAKE_HARNESS") {
+    "" -> shell.run_streaming(command, cwd, log_path)
+    _ -> shell.run(command, cwd, log_path)
+  }
+}
+
+fn start_harness_command(
+  command: String,
+  cwd: String,
+  log_path: String,
+  prefix: String,
+) -> shell.JobHandle {
+  case system.get_env("NIGHT_SHIFT_FAKE_HARNESS") {
+    "" -> shell.start_streaming(command, cwd, log_path, prefix)
+    _ -> shell.start(command, cwd, log_path)
+  }
+}
+
+fn run_harness_command(
+  command: String,
+  cwd: String,
+  log_path: String,
+  prefix: String,
+) -> shell.CommandResult {
+  case system.get_env("NIGHT_SHIFT_FAKE_HARNESS") {
+    "" -> shell.run_streaming_prefixed(command, cwd, log_path, prefix)
+    _ -> shell.run(command, cwd, log_path)
   }
 }
 
