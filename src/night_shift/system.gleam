@@ -40,6 +40,9 @@ pub fn terminal_columns() -> Int
 @external(erlang, "night_shift_system", "color_enabled")
 pub fn color_enabled() -> Bool
 
+@external(erlang, "night_shift_system", "os_name")
+pub fn os_name() -> String
+
 pub fn stream_ui_mode() -> String {
   case get_env("NIGHT_SHIFT_STREAM_UI") {
     "tui" -> "tui"

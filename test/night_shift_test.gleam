@@ -482,7 +482,7 @@ pub fn plan_command_tty_streaming_restores_alt_screen_test() {
     <> " --provider codex"
   let output =
     shell.run(
-      "script -q /dev/null sh -lc " <> shell.quote(command),
+      script_capture_command(command),
       repo_root,
       filepath.join(base_dir, "tty-plan.log"),
     )
@@ -1211,6 +1211,13 @@ fn local_demo_command() -> String {
   <> " -noshell -eval "
   <> shell.quote("'night_shift@@main':run(night_shift).")
   <> " -extra"
+}
+
+fn script_capture_command(command: String) -> String {
+  case system.os_name() {
+    "linux" -> "script -q -c " <> shell.quote(command) <> " /dev/null"
+    _ -> "script -q /dev/null sh -lc " <> shell.quote(command)
+  }
 }
 
 fn run_local_cli_command(

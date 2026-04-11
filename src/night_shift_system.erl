@@ -1,6 +1,6 @@
 -module(night_shift_system).
 
--export([argv/0, cwd/0, home_directory/0, state_directory/0, get_env/1, set_env/2, unset_env/1, timestamp/0, unique_id/0, sleep/1, wait_forever/0, stdout_is_tty/0, terminal_columns/0, color_enabled/0]).
+-export([argv/0, cwd/0, home_directory/0, state_directory/0, get_env/1, set_env/2, unset_env/1, timestamp/0, unique_id/0, sleep/1, wait_forever/0, stdout_is_tty/0, terminal_columns/0, color_enabled/0, os_name/0]).
 
 argv() ->
     lists:map(fun to_binary/1, init:get_plain_arguments()).
@@ -73,6 +73,11 @@ terminal_columns() ->
 
 color_enabled() ->
     stdout_is_tty() andalso os:getenv("NO_COLOR") =:= false.
+
+os_name() ->
+    case os:type() of
+        {_, Name} -> atom_to_binary(Name, utf8)
+    end.
 
 to_binary(Value) when is_binary(Value) ->
     Value;
