@@ -2,6 +2,7 @@ import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
+import night_shift/agent_config
 import night_shift/types
 
 pub fn render(run: types.RunRecord, events: List(types.RunEvent)) -> String {
@@ -12,7 +13,8 @@ pub fn render(run: types.RunRecord, events: List(types.RunEvent)) -> String {
     "- Run ID: " <> run.run_id,
     "- Status: " <> types.run_status_to_string(run.status),
     "- Repo: " <> run.repo_root,
-    "- Harness: " <> types.harness_to_string(run.harness),
+    "- Planning: " <> agent_config.summary(run.planning_agent),
+    "- Execution: " <> agent_config.summary(run.execution_agent),
     "- Max workers: " <> int.to_string(run.max_workers),
     "- Created at: " <> run.created_at,
     "- Updated at: " <> run.updated_at,

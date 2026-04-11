@@ -115,8 +115,10 @@ pub fn index_html(initial_run_id: String) -> String {
   <> "    }\n"
   <> "    function renderMeta(run) {\n"
   <> "      const fields = [\n"
-  <> "        ['Run ID', run.run_id], ['Status', run.status], ['Harness', run.harness], ['Repo', run.repo_root],\n"
-  <> "        ['Created', run.created_at], ['Updated', run.updated_at], ['Brief', run.brief_path], ['Max workers', String(run.max_workers)]\n"
+  <> "        ['Run ID', run.run_id], ['Status', run.status], ['Planning profile', run.planning_agent.profile_name], ['Planning provider', run.planning_agent.provider],\n"
+  <> "        ['Planning model', run.planning_agent.model || 'default'], ['Planning reasoning', run.planning_agent.reasoning || 'default'], ['Execution profile', run.execution_agent.profile_name], ['Execution provider', run.execution_agent.provider],\n"
+  <> "        ['Execution model', run.execution_agent.model || 'default'], ['Execution reasoning', run.execution_agent.reasoning || 'default'], ['Repo', run.repo_root], ['Created', run.created_at],\n"
+  <> "        ['Updated', run.updated_at], ['Brief', run.brief_path], ['Max workers', String(run.max_workers)]\n"
   <> "      ];\n"
   <> "      document.getElementById('run-meta').innerHTML = fields.map(([label, value]) => `<div class=\"meta-card\"><div class=\"label\">${label}</div><div class=\"value\"></div></div>`).join('');\n"
   <> "      Array.from(document.querySelectorAll('#run-meta .value')).forEach((node, index) => { node.textContent = fields[index][1] || '—'; });\n"
@@ -216,7 +218,8 @@ fn run_summary_json(run: types.RunRecord) -> json.Json {
   json.object([
     #("run_id", json.string(run.run_id)),
     #("status", json.string(types.run_status_to_string(run.status))),
-    #("harness", json.string(types.harness_to_string(run.harness))),
+    #("planning_agent", agent_json(run.planning_agent)),
+    #("execution_agent", agent_json(run.execution_agent)),
     #("created_at", json.string(run.created_at)),
     #("updated_at", json.string(run.updated_at)),
     #("brief_path", json.string(run.brief_path)),
@@ -230,7 +233,8 @@ fn run_detail_json(run: types.RunRecord) -> json.Json {
     #("run_path", json.string(run.run_path)),
     #("brief_path", json.string(run.brief_path)),
     #("report_path", json.string(run.report_path)),
-    #("harness", json.string(types.harness_to_string(run.harness))),
+    #("planning_agent", agent_json(run.planning_agent)),
+    #("execution_agent", agent_json(run.execution_agent)),
     #("max_workers", json.int(run.max_workers)),
     #("status", json.string(types.run_status_to_string(run.status))),
     #("created_at", json.string(run.created_at)),
@@ -248,6 +252,21 @@ fn task_json(task: types.Task) -> json.Json {
     #("branch_name", json.string(task.branch_name)),
     #("pr_number", json.string(task.pr_number)),
     #("summary", json.string(task.summary)),
+  ])
+}
+
+fn agent_json(agent: types.ResolvedAgentConfig) -> json.Json {
+  json.object([
+    #("profile_name", json.string(agent.profile_name)),
+    #("provider", json.string(types.provider_to_string(agent.provider))),
+    #("model", case agent.model {
+      Some(model) -> json.string(model)
+      None -> json.null()
+    }),
+    #("reasoning", case agent.reasoning {
+      Some(reasoning) -> json.string(types.reasoning_to_string(reasoning))
+      None -> json.null()
+    }),
   ])
 }
 

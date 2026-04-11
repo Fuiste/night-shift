@@ -13,9 +13,11 @@ notifiers = ["console", "report_file"]
 provider = "codex"
 
 [profiles.planner]
-provider = "codex"
-model = "gpt-5.4-mini"
-reasoning = "medium"
+provider = "cursor"
+model = "sonnet-4"
+
+[profiles.planner.provider_overrides]
+mode = "plan"
 
 [profiles.builder]
 provider = "codex"
@@ -27,7 +29,7 @@ provider = "cursor"
 model = "sonnet-4"
 
 [profiles.reviewer.provider_overrides]
-mode = "plan"
+mode = "ask"
 
 [verification]
 commands = []

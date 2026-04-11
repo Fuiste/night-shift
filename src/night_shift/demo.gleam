@@ -15,11 +15,11 @@ pub fn run(ui_enabled: Bool) -> Result(String, String) {
   let remote_root = filepath.join(demo_root, "remote.git")
   let bin_dir = filepath.join(demo_root, "bin")
   let brief_path = filepath.join(repo_root, types.default_brief_filename)
-  let fake_harness = filepath.join(bin_dir, "fake-harness")
+  let fake_provider = filepath.join(bin_dir, "fake-provider")
   let fake_gh = filepath.join(bin_dir, "gh")
   let demo_state_home = filepath.join(demo_root, "state")
   let old_path = system.get_env("PATH")
-  let old_fake_harness = system.get_env("NIGHT_SHIFT_FAKE_HARNESS")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
   let old_demo_command = system.get_env("NIGHT_SHIFT_DEMO_COMMAND")
   let old_state_home = system.get_env("XDG_STATE_HOME")
 
@@ -32,11 +32,11 @@ pub fn run(ui_enabled: Bool) -> Result(String, String) {
     remote_root: remote_root,
     bin_dir: bin_dir,
     brief_path: brief_path,
-    fake_harness: fake_harness,
+    fake_provider: fake_provider,
     fake_gh: fake_gh,
   ))
 
-  system.set_env("NIGHT_SHIFT_FAKE_HARNESS", fake_harness)
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
   system.set_env("PATH", bin_dir <> ":" <> old_path)
   system.set_env("XDG_STATE_HOME", demo_state_home)
 
@@ -46,7 +46,7 @@ pub fn run(ui_enabled: Bool) -> Result(String, String) {
   }
 
   restore_env("PATH", old_path)
-  restore_env("NIGHT_SHIFT_FAKE_HARNESS", old_fake_harness)
+  restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
   restore_env("NIGHT_SHIFT_DEMO_COMMAND", old_demo_command)
   restore_env("XDG_STATE_HOME", old_state_home)
   outcome
@@ -187,16 +187,16 @@ fn setup_demo_environment(
   remote_root remote_root: String,
   bin_dir bin_dir: String,
   brief_path brief_path: String,
-  fake_harness fake_harness: String,
+  fake_provider fake_provider: String,
   fake_gh fake_gh: String,
 ) -> Result(Nil, String) {
   use _ <- result.try(create_directory(demo_root))
   use _ <- result.try(create_directory(bin_dir))
   use _ <- result.try(create_directory(filepath.join(demo_root, "state")))
-  use _ <- result.try(write_fake_harness(fake_harness))
+  use _ <- result.try(write_fake_provider(fake_provider))
   use _ <- result.try(write_fake_gh(fake_gh))
   use _ <- result.try(run_checked(
-    "chmod +x " <> shell.quote(fake_harness) <> " " <> shell.quote(fake_gh),
+    "chmod +x " <> shell.quote(fake_provider) <> " " <> shell.quote(fake_gh),
     demo_root,
     filepath.join(demo_root, "chmod.log"),
     "Unable to make demo fixtures executable.",
@@ -461,7 +461,7 @@ fn reset_demo_root(
   )
 }
 
-fn write_fake_harness(path: String) -> Result(Nil, String) {
+fn write_fake_provider(path: String) -> Result(Nil, String) {
   write_file(
     path,
     "#!/bin/sh\n"
@@ -470,10 +470,10 @@ fn write_fake_harness(path: String) -> Result(Nil, String) {
       <> "if [ \"$MODE\" = \"plan\" ]; then\n"
       <> "  printf 'planning\\nNIGHT_SHIFT_RESULT_START\\n{\"tasks\":[{\"id\":\"demo-task\",\"title\":\"Implement demo task\",\"description\":\"Create a file to prove execution\",\"dependencies\":[],\"acceptance\":[\"Create IMPLEMENTED.md\"],\"demo_plan\":[\"Show the new file\"],\"parallel_safe\":false}]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
       <> "elif [ \"$MODE\" = \"plan-doc\" ]; then\n"
-      <> "  printf 'planning-doc\\nNIGHT_SHIFT_RESULT_START\\n# Night Shift Brief\\n## Objective\\nShip the demo task.\\n## Scope\\n- Implement the demo task fixture.\\n## Constraints\\n- Stay within the fake harness contract.\\n## Deliverables\\n- Create IMPLEMENTED.md.\\n## Acceptance Criteria\\n- IMPLEMENTED.md exists after execution.\\n## Risks and Open Questions\\n- None.\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "  printf 'planning-doc\\nNIGHT_SHIFT_RESULT_START\\n# Night Shift Brief\\n## Objective\\nShip the demo task.\\n## Scope\\n- Implement the demo task fixture.\\n## Constraints\\n- Stay within the fake provider contract.\\n## Deliverables\\n- Create IMPLEMENTED.md.\\n## Acceptance Criteria\\n- IMPLEMENTED.md exists after execution.\\n## Risks and Open Questions\\n- None.\\nNIGHT_SHIFT_RESULT_END\\n'\n"
       <> "else\n"
-      <> "  echo 'completed by fake harness' > IMPLEMENTED.md\n"
-      <> "  printf 'execution\\nNIGHT_SHIFT_RESULT_START\\n{\"status\":\"completed\",\"summary\":\"Implemented demo task\",\"files_touched\":[\"IMPLEMENTED.md\"],\"demo_evidence\":[\"IMPLEMENTED.md created\"],\"pr\":{\"title\":\"[night-shift] Implement demo task\",\"summary\":\"Implemented the fake harness task.\",\"demo\":[\"IMPLEMENTED.md created\"],\"risks\":[]},\"follow_up_tasks\":[]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "  echo 'completed by fake provider' > IMPLEMENTED.md\n"
+      <> "  printf 'execution\\nNIGHT_SHIFT_RESULT_START\\n{\"status\":\"completed\",\"summary\":\"Implemented demo task\",\"files_touched\":[\"IMPLEMENTED.md\"],\"demo_evidence\":[\"IMPLEMENTED.md created\"],\"pr\":{\"title\":\"[night-shift] Implement demo task\",\"summary\":\"Implemented the fake provider task.\",\"demo\":[\"IMPLEMENTED.md created\"],\"risks\":[]},\"follow_up_tasks\":[]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
       <> "fi\n",
   )
 }

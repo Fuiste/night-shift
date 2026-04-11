@@ -3,97 +3,115 @@ import gleam/int
 import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
-import gleam/result
 import gleam/string
+import night_shift/agent_config
 import night_shift/cli
 import night_shift/config
 import night_shift/dashboard
 import night_shift/demo
 import night_shift/git
-import night_shift/harness
 import night_shift/journal
 import night_shift/orchestrator
+import night_shift/provider
 import night_shift/system
 import night_shift/types
 import simplifile
 
 pub fn run(command: types.Command) -> Nil {
-  let config =
-    config.load(".night-shift.toml")
-    |> result.unwrap(or: types.default_config())
-  let repo_root = git.repo_root(system.cwd())
+  case config.load(".night-shift.toml") {
+    Error(message) -> io.println("Invalid .night-shift.toml: " <> message)
+    Ok(config) -> {
+      let repo_root = git.repo_root(system.cwd())
 
-  case command {
-    types.Help ->
-      io.println(
-        "Night Shift is ready.\n\n"
-        <> cli.usage()
-        <> "\n"
-        <> crate_summary(config),
-      )
-    types.Plan(notes_path, doc_path, harness) -> {
-      let resolved_harness = choose_harness(harness, config)
-      io.println(plan(repo_root, notes_path, doc_path, resolved_harness))
-    }
-    types.Start(brief_path, harness, max_workers, False) -> {
-      let resolved_brief = resolve_start_brief_path(repo_root, brief_path)
-      let resolved_harness = choose_harness(harness, config)
-      let resolved_workers = choose_max_workers(max_workers, config)
+      case command {
+        types.Help ->
+          io.println(
+            "Night Shift is ready.\n\n"
+            <> cli.usage()
+            <> "\n"
+            <> crate_summary(config),
+          )
+        types.Plan(notes_path, doc_path, agent_overrides) ->
+          io.println(case agent_config.resolve_plan_agent(config, agent_overrides) {
+            Ok(planning_agent) -> plan(repo_root, notes_path, doc_path, planning_agent)
+            Error(message) -> message
+          })
+        types.Start(brief_path, agent_overrides, max_workers, False) -> {
+          let resolved_brief = resolve_start_brief_path(repo_root, brief_path)
+          let resolved_workers = choose_max_workers(max_workers, config)
 
-      io.println(case resolved_brief {
-        Ok(path) ->
-          start(repo_root, path, resolved_harness, resolved_workers, config)
-        Error(message) -> message
-      })
-    }
-    types.Start(brief_path, harness, max_workers, True) -> {
-      let resolved_brief = resolve_start_brief_path(repo_root, brief_path)
-      let resolved_harness = choose_harness(harness, config)
-      let resolved_workers = choose_max_workers(max_workers, config)
+          io.println(case resolved_brief, agent_config.resolve_start_agents(
+            config,
+            agent_overrides,
+          ) {
+            Ok(path), Ok(#(planning_agent, execution_agent)) ->
+              start(
+                repo_root,
+                path,
+                planning_agent,
+                execution_agent,
+                resolved_workers,
+                config,
+              )
+            Error(message), _ -> message
+            _, Error(message) -> message
+          })
+        }
+        types.Start(brief_path, agent_overrides, max_workers, True) -> {
+          let resolved_brief = resolve_start_brief_path(repo_root, brief_path)
+          let resolved_workers = choose_max_workers(max_workers, config)
 
-      case resolved_brief {
-        Ok(path) ->
-          case
-            journal.start_run(
-              repo_root,
-              path,
-              resolved_harness,
-              resolved_workers,
-            )
-          {
-            Ok(run) ->
+          case resolved_brief, agent_config.resolve_start_agents(
+            config,
+            agent_overrides,
+          ) {
+            Ok(path), Ok(#(planning_agent, execution_agent)) ->
               case
-                dashboard.start_start_session(
+                journal.start_run(
                   repo_root,
-                  run.run_id,
-                  run,
-                  config,
+                  path,
+                  planning_agent,
+                  execution_agent,
+                  resolved_workers,
                 )
               {
-                Ok(session) -> {
-                  io.println(render_dashboard_summary(session.url, run.run_id))
-                  system.wait_forever()
-                }
-                Error(message) -> {
-                  let _ = journal.mark_status(run, types.RunFailed, message)
-                  io.println(message)
-                }
+                Ok(run) ->
+                  case
+                    dashboard.start_start_session(
+                      repo_root,
+                      run.run_id,
+                      run,
+                      config,
+                    )
+                  {
+                    Ok(session) -> {
+                      io.println(render_dashboard_summary(session.url, run.run_id))
+                      system.wait_forever()
+                    }
+                    Error(message) -> {
+                      let _ = journal.mark_status(run, types.RunFailed, message)
+                      io.println(message)
+                    }
+                  }
+                Error(message) -> io.println(message)
               }
+            Error(message), _ -> io.println(message)
+            _, Error(message) -> io.println(message)
+          }
+        }
+        types.Status(run) -> io.println(status(repo_root, run))
+        types.Report(run) -> io.println(report(repo_root, run))
+        types.Resume(run, False) -> io.println(resume(repo_root, run, config))
+        types.Resume(run, True) -> resume_with_ui(repo_root, run, config)
+        types.Review(agent_overrides) ->
+          io.println(review(repo_root, agent_overrides, config))
+        types.Demo(ui) ->
+          case demo.run(ui) {
+            Ok(summary) -> io.println(summary)
             Error(message) -> io.println(message)
           }
-        Error(message) -> io.println(message)
       }
     }
-    types.Status(run) -> io.println(status(repo_root, run))
-    types.Report(run) -> io.println(report(repo_root, run))
-    types.Resume(run, False) -> io.println(resume(repo_root, run, config))
-    types.Resume(run, True) -> resume_with_ui(repo_root, run, config)
-    types.Review(harness) -> io.println(review(repo_root, harness, config))
-    types.Demo(ui) ->
-      case demo.run(ui) {
-        Ok(summary) -> io.println(summary)
-        Error(message) -> io.println(message)
-      }
   }
 }
 
@@ -101,12 +119,12 @@ fn plan(
   repo_root: String,
   notes_path: String,
   doc_path: Option(String),
-  resolved_harness: types.Harness,
+  planning_agent: types.ResolvedAgentConfig,
 ) -> String {
   let target_doc_path = resolve_doc_path(repo_root, doc_path)
   case
-    harness.plan_document(
-      resolved_harness,
+    provider.plan_document(
+      planning_agent,
       repo_root,
       notes_path,
       target_doc_path,
@@ -117,6 +135,9 @@ fn plan(
         Ok(_) ->
           "Updated planning brief: "
           <> target_doc_path
+          <> "\n"
+          <> "Planning profile: "
+          <> agent_config.summary(planning_agent)
           <> "\n"
           <> "Artifacts: "
           <> artifact_path
@@ -129,11 +150,20 @@ fn plan(
 fn start(
   repo_root: String,
   brief_path: String,
-  harness: types.Harness,
+  planning_agent: types.ResolvedAgentConfig,
+  execution_agent: types.ResolvedAgentConfig,
   max_workers: Int,
   config: types.Config,
 ) -> String {
-  case journal.start_run(repo_root, brief_path, harness, max_workers) {
+  case
+    journal.start_run(
+      repo_root,
+      brief_path,
+      planning_agent,
+      execution_agent,
+      max_workers,
+    )
+  {
     Ok(run) ->
       case orchestrator.start(run, config) {
         Ok(completed_run) -> render_run_summary(completed_run)
@@ -186,8 +216,17 @@ fn write_string(path: String, contents: String) -> Result(Nil, String) {
 }
 
 fn crate_summary(config: types.Config) -> String {
-  "Default harness: "
-  <> types.harness_to_string(config.default_harness)
+  "Default profile: "
+  <> config.default_profile
+  <> "\n"
+  <> "Planning profile: "
+  <> agent_config.effective_phase_profile_name(config.planning_profile, config)
+  <> "\n"
+  <> "Execution profile: "
+  <> agent_config.effective_phase_profile_name(config.execution_profile, config)
+  <> "\n"
+  <> "Review profile: "
+  <> agent_config.effective_phase_profile_name(config.review_profile, config)
   <> "\n"
   <> "Max workers: "
   <> int.to_string(config.max_workers)
@@ -206,6 +245,12 @@ fn status(repo_root: String, run: types.RunSelector) -> String {
       <> saved_run.run_id
       <> " is "
       <> types.run_status_to_string(saved_run.status)
+      <> "\n"
+      <> "Planning: "
+      <> agent_config.summary(saved_run.planning_agent)
+      <> "\n"
+      <> "Execution: "
+      <> agent_config.summary(saved_run.execution_agent)
       <> "\n"
       <> "Events: "
       <> int.to_string(list.length(events))
@@ -240,30 +285,28 @@ fn resume(
 
 fn review(
   repo_root: String,
-  harness: Result(types.Harness, Nil),
+  agent_overrides: types.AgentOverrides,
   config: types.Config,
 ) -> String {
-  let review_harness = choose_harness(harness, config)
-  let review_run =
-    journal.start_run(repo_root, ".night-shift.toml", review_harness, 1)
-
-  case review_run {
-    Ok(run) ->
-      case orchestrator.review(run, config) {
-        Ok(updated_run) -> render_run_summary(updated_run)
+  case agent_config.resolve_review_agent(config, agent_overrides) {
+    Ok(review_agent) ->
+      case
+        journal.start_run(
+          repo_root,
+          ".night-shift.toml",
+          review_agent,
+          review_agent,
+          1,
+        )
+      {
+        Ok(run) ->
+          case orchestrator.review(run, config) {
+            Ok(updated_run) -> render_run_summary(updated_run)
+            Error(message) -> message
+          }
         Error(message) -> message
       }
     Error(message) -> message
-  }
-}
-
-fn choose_harness(
-  candidate: Result(types.Harness, Nil),
-  config: types.Config,
-) -> types.Harness {
-  case candidate {
-    Ok(harness) -> harness
-    Error(Nil) -> config.default_harness
   }
 }
 
@@ -285,6 +328,12 @@ fn render_run_summary(run: types.RunRecord) -> String {
   <> run.run_id
   <> " finished with status "
   <> types.run_status_to_string(run.status)
+  <> "\n"
+  <> "Planning: "
+  <> agent_config.summary(run.planning_agent)
+  <> "\n"
+  <> "Execution: "
+  <> agent_config.summary(run.execution_agent)
   <> "\n"
   <> "Report: "
   <> run.report_path

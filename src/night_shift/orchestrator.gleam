@@ -6,8 +6,8 @@ import gleam/result
 import gleam/string
 import night_shift/git
 import night_shift/github
-import night_shift/harness
 import night_shift/journal
+import night_shift/provider
 import night_shift/shell
 import night_shift/system
 import night_shift/types
@@ -16,8 +16,8 @@ pub fn start(
   run: types.RunRecord,
   config: types.Config,
 ) -> Result(types.RunRecord, String) {
-  use planned_tasks <- result.try(harness.plan_tasks(
-    run.harness,
+  use planned_tasks <- result.try(provider.plan_tasks(
+    run.planning_agent,
     run.repo_root,
     run.brief_path,
     run.run_path,
@@ -144,7 +144,7 @@ fn launch_batch(
   config: types.Config,
   run: types.RunRecord,
   tasks: List(types.Task),
-) -> Result(#(types.RunRecord, List(harness.TaskRun)), String) {
+) -> Result(#(types.RunRecord, List(provider.TaskRun)), String) {
   launch_batch_loop(config, run, tasks, [])
 }
 
@@ -152,8 +152,8 @@ fn launch_batch_loop(
   config: types.Config,
   run: types.RunRecord,
   tasks: List(types.Task),
-  acc: List(harness.TaskRun),
-) -> Result(#(types.RunRecord, List(harness.TaskRun)), String) {
+  acc: List(provider.TaskRun),
+) -> Result(#(types.RunRecord, List(provider.TaskRun)), String) {
   case tasks {
     [] -> Ok(#(run, list.reverse(acc)))
     [task, ..rest] -> {
@@ -209,8 +209,8 @@ fn launch_batch_loop(
             updated_run,
             event,
           ))
-          use task_run <- result.try(harness.start_task(
-            persisted_run.harness,
+          use task_run <- result.try(provider.start_task(
+            persisted_run.execution_agent,
             persisted_run.repo_root,
             persisted_run.run_path,
             running_task,
@@ -246,12 +246,12 @@ fn launch_batch_loop(
 fn await_batch(
   config: types.Config,
   run: types.RunRecord,
-  task_runs: List(harness.TaskRun),
+  task_runs: List(provider.TaskRun),
 ) -> Result(types.RunRecord, String) {
   case task_runs {
     [] -> Ok(run)
     [task_run, ..rest] -> {
-      use execution_result <- result.try(harness.await_task(task_run))
+      use execution_result <- result.try(provider.await_task(task_run))
       use updated_run <- result.try(complete_task(
         config,
         run,
@@ -266,7 +266,7 @@ fn await_batch(
 fn complete_task(
   config: types.Config,
   run: types.RunRecord,
-  task_run: harness.TaskRun,
+  task_run: provider.TaskRun,
   execution_result: types.ExecutionResult,
 ) -> Result(types.RunRecord, String) {
   case execution_result.status {
@@ -304,7 +304,7 @@ fn finalize_non_success(
 fn finalize_success(
   config: types.Config,
   run: types.RunRecord,
-  task_run: harness.TaskRun,
+  task_run: provider.TaskRun,
   execution_result: types.ExecutionResult,
 ) -> Result(types.RunRecord, String) {
   let verification_log =
@@ -320,8 +320,8 @@ fn finalize_success(
     Ok(output) -> Ok(#(execution_result, output))
     Error(output) ->
       case
-        harness.repair_task(
-          run.harness,
+        provider.repair_task(
+          run.execution_agent,
           run.repo_root,
           task_run.worktree_path,
           run.run_path,
@@ -357,7 +357,7 @@ fn finalize_success(
             types.Task(
               ..task_run.task,
               state: types.ManualAttention,
-              summary: "Harness reported completion but produced no changes.",
+              summary: "Provider reported completion but produced no changes.",
             )
           let updated_run =
             types.RunRecord(..run, tasks: replace_task(run.tasks, task))
