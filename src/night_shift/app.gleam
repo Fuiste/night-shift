@@ -45,6 +45,7 @@ pub fn run(command: types.Command) -> Nil {
             init(repo_root, config, agent_overrides, generate_setup, assume_yes),
           )
       }
+    types.Reset(assume_yes, force) -> io.println(reset(repo_root, assume_yes, force))
     _ ->
       case load_initialized_repo_config(repo_root) {
         Error(message) -> io.println(message)
@@ -92,108 +93,19 @@ fn run_initialized_command(
   command: types.Command,
 ) -> Nil {
   case command {
-    types.Plan(notes_path, doc_path, agent_overrides) ->
+    types.Plan(notes_value, doc_path, agent_overrides) ->
       io.println(
         case agent_config.resolve_plan_agent(config, agent_overrides) {
-          Ok(planning_agent) -> plan(repo_root, notes_path, doc_path, planning_agent)
+          Ok(planning_agent) ->
+            plan(repo_root, notes_value, doc_path, planning_agent, config)
           Error(message) -> message
         },
       )
-    types.Start(
-      brief_path,
-      agent_overrides,
-      environment_name,
-      max_workers,
-      False,
-    ) -> {
-      let resolved_brief = resolve_start_brief_path(repo_root, brief_path)
-      let resolved_workers = choose_max_workers(max_workers, config)
-
-      io.println(
-        case
-          resolved_brief,
-          ensure_clean_repo_for_start(repo_root),
-          resolve_environment_name(repo_root, environment_name),
-          agent_config.resolve_start_agents(config, agent_overrides)
-        {
-          Ok(path), Ok(Nil), Ok(selected_environment), Ok(#(
-            planning_agent,
-            execution_agent,
-          )) ->
-            start(
-              repo_root,
-              path,
-              planning_agent,
-              execution_agent,
-              selected_environment,
-              resolved_workers,
-              config,
-            )
-          Error(message), _, _, _ -> message
-          _, Error(message), _, _ -> message
-          _, _, Error(message), _ -> message
-          _, _, _, Error(message) -> message
-        },
-      )
-    }
-    types.Start(
-      brief_path,
-      agent_overrides,
-      environment_name,
-      max_workers,
-      True,
-    ) -> {
-      let resolved_brief = resolve_start_brief_path(repo_root, brief_path)
-      let resolved_workers = choose_max_workers(max_workers, config)
-
-      case
-        resolved_brief,
-        ensure_clean_repo_for_start(repo_root),
-        resolve_environment_name(repo_root, environment_name),
-        agent_config.resolve_start_agents(config, agent_overrides)
-      {
-        Ok(path), Ok(Nil), Ok(selected_environment), Ok(#(
-          planning_agent,
-          execution_agent,
-        )) ->
-          case
-            journal.start_run(
-              repo_root,
-              path,
-              planning_agent,
-              execution_agent,
-              selected_environment,
-              resolved_workers,
-            )
-          {
-            Ok(run) ->
-              case
-                dashboard.start_start_session(
-                  repo_root,
-                  run.run_id,
-                  run,
-                  config,
-                )
-              {
-                Ok(session) -> {
-                  io.println(render_dashboard_summary(session.url, run.run_id))
-                  system.wait_forever()
-                }
-                Error(message) -> {
-                  let _ = journal.mark_status(run, types.RunFailed, message)
-                  io.println(message)
-                }
-              }
-            Error(message) -> io.println(message)
-          }
-        Error(message), _, _, _ -> io.println(message)
-        _, Error(message), _, _ -> io.println(message)
-        _, _, Error(message), _ -> io.println(message)
-        _, _, _, Error(message) -> io.println(message)
-      }
-    }
+    types.Start(run, False) -> io.println(start(repo_root, run, config))
+    types.Start(run, True) -> start_with_ui(repo_root, run, config)
     types.Status(run) -> io.println(status(repo_root, run))
     types.Report(run) -> io.println(report(repo_root, run))
+    types.Resolve(run) -> io.println(resolve(repo_root, run, config))
     types.Resume(run, False) -> io.println(resume(repo_root, run, config))
     types.Resume(run, True) -> resume_with_ui(repo_root, run, config)
     types.Review(agent_overrides, environment_name) ->
@@ -475,7 +387,10 @@ fn select_from_labels(
 }
 
 fn can_prompt_interactively() -> Bool {
-  system.stdin_is_tty() && system.stdout_is_tty()
+  case system.get_env("NIGHT_SHIFT_ASSUME_TTY") {
+    "1" -> True
+    _ -> system.stdin_is_tty() && system.stdout_is_tty()
+  }
 }
 
 fn file_exists(path: String) -> Bool {
@@ -487,82 +402,89 @@ fn file_exists(path: String) -> Bool {
 
 fn plan(
   repo_root: String,
-  notes_path: String,
+  notes_value: String,
   doc_path: Option(String),
   planning_agent: types.ResolvedAgentConfig,
+  config: types.Config,
 ) -> String {
   let target_doc_path = resolve_doc_path(repo_root, doc_path)
   case
-    provider.plan_document(
-      planning_agent,
-      repo_root,
-      notes_path,
-      target_doc_path,
-    )
+    resolve_notes_source(repo_root, notes_value),
+    agent_config.resolve_start_agents(config, types.empty_agent_overrides()),
+    resolve_environment_name(repo_root, None)
   {
-    Ok(#(document, artifact_path)) ->
-      case write_string(target_doc_path, document) {
-        Ok(_) ->
-          "Updated planning brief: "
-          <> target_doc_path
-          <> "\n"
-          <> "Planning profile: "
-          <> agent_config.summary(planning_agent)
-          <> "\n"
-          <> "Artifacts: "
-          <> artifact_path
+            Ok(notes_source), Ok(#(_default_plan_agent, execution_agent)), Ok(
+      selected_environment,
+    ) ->
+      case
+        provider.plan_document(
+          planning_agent,
+          repo_root,
+          notes_source,
+          target_doc_path,
+        )
+      {
+        Ok(#(document, artifact_path, resolved_notes_source)) ->
+          case write_string(target_doc_path, document) {
+            Ok(_) ->
+              case
+                prepare_planning_run(
+                  repo_root,
+                  target_doc_path,
+                  planning_agent,
+                  execution_agent,
+                  selected_environment,
+                  config.max_workers,
+                  resolved_notes_source,
+                )
+              {
+                Ok(#(seeded_run, replanning)) ->
+                  case case replanning {
+                    True -> orchestrator.replan(seeded_run)
+                    False -> orchestrator.plan(seeded_run)
+                  } {
+                    Ok(planned_run) ->
+                      render_planning_summary(
+                        planned_run,
+                        target_doc_path,
+                        artifact_path,
+                        resolved_notes_source,
+                      )
+                    Error(message) -> message
+                  }
+                Error(message) -> message
+              }
+            Error(message) -> message
+          }
         Error(message) -> message
       }
-    Error(message) -> message
+    Error(message), _, _ -> message
+    _, Error(message), _ -> message
+    _, _, Error(message) -> message
   }
 }
 
 fn start(
   repo_root: String,
-  brief_path: String,
-  planning_agent: types.ResolvedAgentConfig,
-  execution_agent: types.ResolvedAgentConfig,
-  environment_name: String,
-  max_workers: Int,
+  run_selector: types.RunSelector,
   config: types.Config,
 ) -> String {
-  case
-    journal.start_run(
-      repo_root,
-      brief_path,
-      planning_agent,
-      execution_agent,
-      environment_name,
-      max_workers,
-    )
-  {
+  case load_start_run(repo_root, run_selector) {
     Ok(run) ->
-      case orchestrator.start(run, config) {
-        Ok(completed_run) -> render_run_summary(completed_run)
+      case ensure_clean_repo_for_start(repo_root) {
+        Ok(warning) ->
+          case journal.activate_run(run) {
+            Ok(active_run) ->
+              render_active_run_outcome(
+                active_run,
+                warning,
+                orchestrator.start(active_run, config),
+              )
+            Error(message) -> message
+          }
         Error(message) -> message
       }
     Error(message) -> message
-  }
-}
-
-fn resolve_start_brief_path(
-  repo_root: String,
-  brief_path: Option(String),
-) -> Result(String, String) {
-  case brief_path {
-    Some(path) -> Ok(path)
-    None -> {
-      let path = default_brief_path(repo_root)
-      case simplifile.read(path) {
-        Ok(_) -> Ok(path)
-        Error(_) ->
-          Error(
-            "No default brief was found at "
-            <> path
-            <> ". Run `night-shift plan --notes <path>` to create it or pass `--brief <path>`.",
-          )
-      }
-    }
   }
 }
 
@@ -600,17 +522,31 @@ fn ensure_saved_environment_is_valid(
   }
 }
 
-fn ensure_clean_repo_for_start(repo_root: String) -> Result(Nil, String) {
+fn ensure_clean_repo_for_start(repo_root: String) -> Result(Option(String), String) {
   let log_path =
     filepath.join(system.state_directory(), "night-shift/start-clean.log")
-  case git.has_changes(repo_root, log_path) {
-    True ->
+  let changed_files = git.changed_files(repo_root, log_path)
+  let source_changes =
+    changed_files
+    |> list.filter(fn(path) { !is_control_plane_path(path) })
+  let control_changes =
+    changed_files
+    |> list.filter(is_control_plane_path)
+
+  case source_changes, control_changes {
+    [], [] -> Ok(None)
+    [], _ ->
+      Ok(Some(
+        "Night Shift noticed repo-local control-plane changes under `.night-shift/` and will continue.\nChanged control files:\n"
+        <> render_changed_paths(control_changes)
+        <> "\nThese files stay in the source checkout and are not part of execution worktrees or delivery PRs.",
+      ))
+    _, _ ->
       Error(
-        "Night Shift start requires a clean source repository so execution worktrees and delivery stay aligned. Commit, stash, or move the existing changes out of "
-        <> repo_root
-        <> " and rerun `night-shift start`.",
+        "Night Shift start requires a clean source repository so execution worktrees and delivery stay aligned.\nChanged files:\n"
+        <> render_changed_paths(source_changes)
+        <> start_clean_repo_suggestion(source_changes, repo_root),
       )
-    False -> Ok(Nil)
   }
 }
 
@@ -744,7 +680,7 @@ fn crate_summary(config: types.Config) -> String {
 }
 
 fn status(repo_root: String, run: types.RunSelector) -> String {
-  case journal.load(repo_root, run) {
+  case load_display_run(repo_root, run) {
     Ok(#(saved_run, events)) ->
       "Run "
       <> saved_run.run_id
@@ -757,11 +693,32 @@ fn status(repo_root: String, run: types.RunSelector) -> String {
       <> "Execution: "
       <> agent_config.summary(saved_run.execution_agent)
       <> "\n"
+      <> "Notes: "
+      <> render_notes_source(saved_run.notes_source)
+      <> "\n"
+      <> status_summary(saved_run, events)
+      <> "\n"
       <> "Events: "
       <> int.to_string(list.length(events))
       <> "\n"
       <> "Report: "
       <> saved_run.report_path
+    Error(message) -> message
+  }
+}
+
+fn resolve(
+  repo_root: String,
+  selector: types.RunSelector,
+  _config: types.Config,
+) -> String {
+  case load_resolvable_run(repo_root, selector) {
+    Ok(run) ->
+      case can_prompt_interactively() {
+        False ->
+          "night-shift resolve requires an interactive terminal so it can capture decision answers."
+        True -> resolve_loop(run)
+      }
     Error(message) -> message
   }
 }
@@ -785,10 +742,11 @@ fn resume(
         saved_run.environment_name,
       ) {
         Ok(Nil) ->
-          case orchestrator.resume(saved_run, config) {
-            Ok(updated_run) -> render_run_summary(updated_run)
-            Error(message) -> message
-          }
+          render_active_run_outcome(
+            saved_run,
+            None,
+            orchestrator.resume(saved_run, config),
+          )
         Error(message) -> message
       }
     Error(message) -> message
@@ -817,21 +775,15 @@ fn review(
         )
       {
         Ok(run) ->
-          case orchestrator.review(run, config) {
-            Ok(updated_run) -> render_run_summary(updated_run)
-            Error(message) -> message
-          }
+          render_active_run_outcome(
+            run,
+            None,
+            orchestrator.review(run, config),
+          )
         Error(message) -> message
       }
     Error(message), _ -> message
     _, Error(message) -> message
-  }
-}
-
-fn choose_max_workers(candidate: Result(Int, Nil), config: types.Config) -> Int {
-  case candidate {
-    Ok(worker_count) -> worker_count
-    Error(Nil) -> config.max_workers
   }
 }
 
@@ -853,11 +805,1076 @@ fn render_run_summary(run: types.RunRecord) -> String {
   <> "Execution: "
   <> agent_config.summary(run.execution_agent)
   <> "\n"
+  <> "Notes: "
+  <> render_notes_source(run.notes_source)
+  <> "\n"
   <> "Report: "
   <> run.report_path
   <> "\n"
   <> "Journal: "
   <> run.run_path
+}
+
+fn render_active_run_outcome(
+  active_run: types.RunRecord,
+  warning: Option(String),
+  outcome: Result(types.RunRecord, String),
+) -> String {
+  case outcome {
+    Ok(updated_run) ->
+      prefix_warning(warning, render_run_summary(updated_run))
+    Error(message) ->
+      case mark_latest_persisted_run_failed(active_run, message) {
+        Ok(failed_run) ->
+          prefix_warning(
+            warning,
+            message <> "\n" <> render_run_summary(failed_run),
+          )
+        Error(_) -> prefix_warning(warning, message)
+      }
+  }
+}
+
+fn mark_latest_persisted_run_failed(
+  active_run: types.RunRecord,
+  message: String,
+) -> Result(types.RunRecord, String) {
+  let latest_run = case journal.load(
+    active_run.repo_root,
+    types.RunId(active_run.run_id),
+  ) {
+    Ok(#(run, _)) -> recover_in_flight_tasks(run)
+    Error(_) -> recover_in_flight_tasks(active_run)
+  }
+  journal.mark_status(latest_run, types.RunFailed, message)
+}
+
+fn recover_in_flight_tasks(run: types.RunRecord) -> types.RunRecord {
+  let recovered_tasks =
+    run.tasks
+    |> list.map(recover_in_flight_task(run.run_path, _))
+  types.RunRecord(..run, tasks: recovered_tasks)
+}
+
+fn recover_in_flight_task(run_path: String, task: types.Task) -> types.Task {
+  case task.state {
+    types.Running -> {
+      let recovery_log = filepath.join(run_path, "logs/" <> task.id <> ".recovery.log")
+      let has_worktree_changes =
+        case task.worktree_path {
+          "" -> False
+          worktree_path -> git.has_changes(worktree_path, recovery_log)
+        }
+      let recovered_state = case has_worktree_changes {
+        True -> types.ManualAttention
+        False -> types.Failed
+      }
+      let recovered_summary =
+        case string.trim(task.summary) {
+          "" ->
+            "Primary blocker: Night Shift stopped before this started task could be finalized.\n\nEnvironment notes: inspect the task log and worktree before retrying."
+          existing ->
+            existing
+            <> "\n\nRecovery notes: Night Shift stopped before this started task could be finalized."
+        }
+      types.Task(..task, state: recovered_state, summary: recovered_summary)
+    }
+    _ -> task
+  }
+}
+
+fn render_planning_summary(
+  run: types.RunRecord,
+  brief_path: String,
+  artifact_path: String,
+  notes_source: types.NotesSource,
+) -> String {
+  "Planned run "
+  <> run.run_id
+  <> " with status "
+  <> types.run_status_to_string(run.status)
+  <> "\n"
+  <> "Brief: "
+  <> brief_path
+  <> "\n"
+  <> "Notes: "
+  <> types.notes_source_label(notes_source)
+  <> "\n"
+  <> "Planning: "
+  <> agent_config.summary(run.planning_agent)
+  <> "\n"
+  <> "Artifacts: "
+  <> artifact_path
+  <> "\n"
+  <> "Report: "
+  <> run.report_path
+}
+
+fn resolve_notes_source(
+  repo_root: String,
+  notes_value: String,
+) -> Result(types.NotesSource, String) {
+  case simplifile.read(notes_value) {
+    Ok(_) -> Ok(types.NotesFile(notes_value))
+    Error(_) -> {
+      let artifact_path = planning_artifact_path(repo_root)
+      let saved_path = filepath.join(artifact_path, "inline-notes.md")
+      use _ <- result.try(create_directory(artifact_path))
+      use _ <- result.try(write_string(saved_path, notes_value))
+      Ok(types.InlineNotes(saved_path))
+    }
+  }
+}
+
+fn prepare_planning_run(
+  repo_root: String,
+  brief_path: String,
+  planning_agent: types.ResolvedAgentConfig,
+  execution_agent: types.ResolvedAgentConfig,
+  environment_name: String,
+  max_workers: Int,
+  notes_source: types.NotesSource,
+) -> Result(#(types.RunRecord, Bool), String) {
+  case journal.latest_reusable_run(repo_root) {
+    Ok(Some(existing_run)) -> {
+      use brief_contents <- result.try(simplifile.read(brief_path)
+        |> result.map_error(fn(error) {
+          "Unable to read " <> brief_path <> ": " <> simplifile.describe_error(error)
+        }))
+      use _ <- result.try(write_string(existing_run.brief_path, brief_contents))
+      let updated_run =
+        types.RunRecord(
+          ..existing_run,
+          planning_agent: planning_agent,
+          execution_agent: execution_agent,
+          environment_name: environment_name,
+          max_workers: max_workers,
+          notes_source: Some(notes_source),
+          planning_dirty: True,
+        )
+      use rewritten_run <- result.try(journal.rewrite_run(updated_run))
+      Ok(#(rewritten_run, True))
+    }
+    Ok(None) -> {
+      use pending_run <- result.try(journal.create_pending_run(
+        repo_root,
+        brief_path,
+        planning_agent,
+        execution_agent,
+        environment_name,
+        max_workers,
+        Some(notes_source),
+      ))
+      let updated_run = types.RunRecord(..pending_run, planning_dirty: True)
+      journal.rewrite_run(updated_run)
+      |> result.map(fn(run) { #(run, False) })
+    }
+    Error(message) -> Error(message)
+  }
+}
+
+fn load_start_run(
+  repo_root: String,
+  selector: types.RunSelector,
+) -> Result(types.RunRecord, String) {
+  case selector {
+    types.RunId(_) -> {
+      use #(run, _) <- result.try(journal.load(repo_root, selector))
+      validate_startable_run(run)
+    }
+    types.LatestRun -> load_latest_start_run(repo_root)
+  }
+}
+
+fn load_resolvable_run(
+  repo_root: String,
+  selector: types.RunSelector,
+) -> Result(types.RunRecord, String) {
+  case selector {
+    types.RunId(_) -> {
+      use #(run, _) <- result.try(journal.load(repo_root, selector))
+      validate_resolvable_run(run)
+    }
+    types.LatestRun -> load_latest_resolvable_run(repo_root)
+  }
+}
+
+fn load_display_run(
+  repo_root: String,
+  selector: types.RunSelector,
+) -> Result(#(types.RunRecord, List(types.RunEvent)), String) {
+  journal.load(repo_root, selector)
+}
+
+fn validate_startable_run(run: types.RunRecord) -> Result(types.RunRecord, String) {
+  case run.status {
+    types.RunPending ->
+      case run.planning_dirty {
+        True ->
+          Error(
+            "Run "
+            <> run.run_id
+            <> " has newer planning inputs than the current task graph. Run `night-shift resolve --run "
+            <> run.run_id
+            <> "` first.",
+          )
+        False -> Ok(run)
+      }
+    types.RunBlocked ->
+      Error(start_guidance_for_run(run))
+    types.RunActive ->
+      Error("Run " <> run.run_id <> " is already active. Use `night-shift resume --run " <> run.run_id <> "` or inspect status/report.")
+    types.RunCompleted ->
+      Error("Run " <> run.run_id <> " is already completed. Run `night-shift plan --notes ...` to create or refresh a runnable plan.")
+    types.RunFailed ->
+      Error("Run " <> run.run_id <> " already failed. Run `night-shift plan --notes ...` to create a fresh or refreshed plan.")
+  }
+}
+
+fn validate_resolvable_run(run: types.RunRecord) -> Result(types.RunRecord, String) {
+  case run.status, run.planning_dirty, outstanding_decision_count(run) {
+    types.RunBlocked, _, _ -> Ok(run)
+    types.RunPending, True, _ -> Ok(run)
+    types.RunPending, False, _ ->
+      Error("Run " <> run.run_id <> " is already ready to start. Run `night-shift start --run " <> run.run_id <> "`.")
+    types.RunActive, _, _ ->
+      Error("Run " <> run.run_id <> " is active and cannot be resolved right now.")
+    types.RunCompleted, _, _ ->
+      Error("Run " <> run.run_id <> " is already completed.")
+    types.RunFailed, _, _ ->
+      Error("Run " <> run.run_id <> " failed and cannot be resolved in place.")
+  }
+}
+
+fn load_latest_start_run(repo_root: String) -> Result(types.RunRecord, String) {
+  case latest_open_run(repo_root) {
+    Ok(run) -> validate_startable_run(run)
+    Error(_) ->
+      Error(
+        "No open Night Shift run was found. Run `night-shift plan --notes ...` first.",
+      )
+  }
+}
+
+fn load_latest_resolvable_run(repo_root: String) -> Result(types.RunRecord, String) {
+  case latest_open_run(repo_root) {
+    Ok(run) -> validate_resolvable_run(run)
+    Error(_) ->
+      Error(
+        "No blocked Night Shift run was found. Run `night-shift plan --notes ...` first.",
+      )
+  }
+}
+
+fn latest_open_run(repo_root: String) -> Result(types.RunRecord, String) {
+  use runs <- result.try(journal.list_runs(repo_root))
+  case list.find(runs, fn(run) {
+    case run.status {
+      types.RunPending | types.RunBlocked | types.RunActive -> True
+      _ -> False
+    }
+  }) {
+    Ok(run) -> Ok(run)
+    Error(_) -> Error("No open Night Shift run was found.")
+  }
+}
+
+fn render_notes_source(notes_source: Option(types.NotesSource)) -> String {
+  case notes_source {
+    Some(source) -> types.notes_source_label(source)
+    None -> "(none)"
+  }
+}
+
+fn status_summary(
+  run: types.RunRecord,
+  events: List(types.RunEvent),
+) -> String {
+  case latest_environment_preflight_failure(events) {
+    Some(message) ->
+      "Environment bootstrap blocker: yes\n"
+      <> "Failure: "
+      <> message
+      <> "\n"
+      <> "Ready implementation tasks: "
+      <> int.to_string(ready_implementation_task_count(run.tasks))
+      <> "\n"
+      <> "Queued tasks: "
+      <> int.to_string(queued_task_count(run.tasks))
+      <> "\n"
+      <> "Next action: fix the worktree environment, then rerun `night-shift start` or `night-shift reset`"
+    None ->
+      case run.status {
+        types.RunFailed ->
+          "Completed tasks: "
+          <> int.to_string(completed_task_count(run.tasks))
+          <> "\n"
+          <> "Opened PRs: "
+          <> int.to_string(opened_pr_count(run.tasks))
+          <> "\n"
+          <> "Failed tasks: "
+          <> int.to_string(failed_task_count(run.tasks))
+          <> "\n"
+          <> "Outstanding decisions: "
+          <> int.to_string(outstanding_decision_count(run))
+          <> "\n"
+          <> "Queued tasks: "
+          <> int.to_string(queued_task_count(run.tasks))
+          <> "\n"
+          <> "Failure: "
+          <> latest_run_failed_message(events)
+          <> "\n"
+          <> "Next action: inspect the report, then rerun `night-shift plan --notes ...` when you're ready for the next pass."
+        _ ->
+          case run.status == types.RunBlocked || run.planning_dirty {
+            True ->
+              "Blocked tasks: "
+              <> int.to_string(blocked_task_count(run))
+              <> "\n"
+              <> "Outstanding decisions: "
+              <> int.to_string(outstanding_decision_count(run))
+              <> "\n"
+              <> "Planning sync pending: "
+              <> bool_label(run.planning_dirty)
+              <> "\n"
+              <> "Ready implementation tasks: "
+              <> int.to_string(ready_implementation_task_count(run.tasks))
+              <> "\n"
+              <> "Queued tasks: "
+              <> int.to_string(queued_task_count(run.tasks))
+              <> "\n"
+              <> "Next action: "
+              <> next_action_label(run)
+            False ->
+              "Outstanding decisions: "
+              <> int.to_string(outstanding_decision_count(run))
+              <> "\n"
+              <> "Ready tasks: "
+              <> int.to_string(ready_task_count(run.tasks))
+              <> "\n"
+              <> "Queued tasks: "
+              <> int.to_string(queued_task_count(run.tasks))
+          }
+      }
+  }
+}
+
+fn completed_task_count(tasks: List(types.Task)) -> Int {
+  tasks
+  |> list.filter(fn(task) { task.state == types.Completed })
+  |> list.length
+}
+
+fn opened_pr_count(tasks: List(types.Task)) -> Int {
+  tasks
+  |> list.filter(fn(task) { task.pr_number != "" })
+  |> list.length
+}
+
+fn failed_task_count(tasks: List(types.Task)) -> Int {
+  tasks
+  |> list.filter(fn(task) { task.state == types.Failed })
+  |> list.length
+}
+
+fn outstanding_decision_count(run: types.RunRecord) -> Int {
+  unresolved_manual_attention_tasks(run)
+  |> list.map(types.unresolved_decision_requests(run.decisions, _))
+  |> list.flatten
+  |> list.length
+}
+
+fn ready_task_count(tasks: List(types.Task)) -> Int {
+  tasks
+  |> list.filter(fn(task) { task.state == types.Ready })
+  |> list.length
+}
+
+fn ready_implementation_task_count(tasks: List(types.Task)) -> Int {
+  tasks
+  |> list.filter(fn(task) {
+    task.state == types.Ready && task.kind == types.ImplementationTask
+  })
+  |> list.length
+}
+
+fn blocked_task_count(run: types.RunRecord) -> Int {
+  let unresolved_blockers =
+    unresolved_manual_attention_tasks(run)
+    |> list.length
+  let implementation_blockers =
+    run.tasks
+    |> list.filter(fn(task) {
+      task.kind == types.ImplementationTask
+      && {
+        task.state == types.Blocked || task.state == types.ManualAttention
+      }
+    })
+    |> list.length
+  case run.planning_dirty && unresolved_blockers == 0 && implementation_blockers == 0 {
+    True -> 1
+    False -> unresolved_blockers + implementation_blockers
+  }
+}
+
+fn queued_task_count(tasks: List(types.Task)) -> Int {
+  tasks
+  |> list.filter(fn(task) { task.state == types.Queued })
+  |> list.length
+}
+
+fn unresolved_manual_attention_tasks(run: types.RunRecord) -> List(types.Task) {
+  run.tasks
+  |> list.filter(fn(task) { types.task_requires_manual_attention(run.decisions, task) })
+}
+
+fn collect_recorded_decisions(
+  run: types.RunRecord,
+  tasks: List(types.Task),
+) -> Result(#(List(types.RecordedDecision), List(types.RunEvent)), String) {
+  let prompts = pending_decision_prompts(run.decisions, tasks)
+  case prompts {
+    [] -> Error("No unresolved manual-attention decisions were found for this run.")
+    _ -> collect_request_answers(prompts, [])
+  }
+}
+
+fn collect_request_answers(
+  prompts: List(#(types.Task, types.DecisionRequest)),
+  acc: List(types.RecordedDecision),
+) -> Result(#(List(types.RecordedDecision), List(types.RunEvent)), String) {
+  collect_request_answers_with_warnings(prompts, acc, [], 1, list.length(prompts))
+}
+
+fn collect_request_answers_with_warnings(
+  prompts: List(#(types.Task, types.DecisionRequest)),
+  acc: List(types.RecordedDecision),
+  warnings: List(types.RunEvent),
+  index: Int,
+  total: Int,
+) -> Result(#(List(types.RecordedDecision), List(types.RunEvent)), String) {
+  case prompts {
+    [] -> Ok(#(list.reverse(acc), list.reverse(warnings)))
+    [#(task, request), ..rest] -> {
+      use #(answer, warning) <- result.try(prompt_for_decision(
+        task,
+        request,
+        index,
+        total,
+      ))
+      let recorded =
+        types.RecordedDecision(
+          key: request.key,
+          question: request.question,
+          answer: answer,
+          answered_at: system.timestamp(),
+        )
+      let updated_warnings = case warning {
+        Some(event) -> [event, ..warnings]
+        None -> warnings
+      }
+      collect_request_answers_with_warnings(
+        rest,
+        [recorded, ..acc],
+        updated_warnings,
+        index + 1,
+        total,
+      )
+    }
+  }
+}
+
+fn pending_decision_prompts(
+  decisions: List(types.RecordedDecision),
+  tasks: List(types.Task),
+) -> List(#(types.Task, types.DecisionRequest)) {
+  tasks
+  |> list.map(fn(task) {
+    types.unresolved_decision_requests(decisions, task)
+    |> list.map(fn(request) { #(task, request) })
+  })
+  |> list.flatten
+}
+
+fn prompt_for_decision(
+  task: types.Task,
+  request: types.DecisionRequest,
+  index: Int,
+  total: Int,
+) -> Result(#(String, Option(types.RunEvent)), String) {
+  io.println("")
+  io.println("Question " <> int.to_string(index) <> "/" <> int.to_string(total))
+  io.println("Task: " <> task.title)
+  io.println("Question: " <> request.question)
+  case string.trim(request.rationale) {
+    "" -> Nil
+    rationale -> io.println("Why this matters: " <> rationale)
+  }
+
+  case request.options {
+    [] -> {
+      let warning = case request.allow_freeform {
+        True -> None
+        False -> Some(decision_contract_warning_event(task, request))
+      }
+      use answer <- result.try(prompt_for_freeform_answer(
+        request,
+        request.recommended_option,
+      ))
+      Ok(#(answer, warning))
+    }
+    options -> {
+      let labels =
+        options
+        |> list.map(fn(option) {
+          case request.recommended_option {
+            Some(recommended) if recommended == option.label ->
+              option.label <> " (recommended) - " <> option.description
+            _ -> option.label <> " - " <> option.description
+          }
+        })
+      let final_labels = case request.allow_freeform {
+        True -> list.append(labels, ["Enter a custom answer"])
+        False -> labels
+      }
+      let selected =
+        select_from_labels(
+          "Choose an answer:",
+          final_labels,
+          recommended_option_index(options, request.recommended_option),
+        )
+      case request.allow_freeform && selected == list.length(final_labels) - 1 {
+        True ->
+          prompt_for_freeform_answer(request, request.recommended_option)
+          |> result.map(fn(answer) { #(answer, None) })
+        False ->
+          case list.drop(options, selected) {
+            [choice, ..] -> Ok(#(choice.label, None))
+            [] -> Error("The selected decision option was out of range.")
+          }
+      }
+    }
+  }
+}
+
+fn prompt_for_freeform_answer(
+  request: types.DecisionRequest,
+  default_answer: Option(String),
+) -> Result(String, String) {
+  case default_answer {
+    Some(answer) -> {
+      io.println("Answer [default: " <> answer <> "]:")
+      case string.trim(system.read_line()) {
+        "" -> Ok(answer)
+        custom -> Ok(custom)
+      }
+    }
+    None -> {
+      io.println("Answer:")
+      case string.trim(system.read_line()) {
+        "" ->
+          Error(
+            "Night Shift needs a non-empty answer for `" <> request.key <> "`.",
+          )
+        answer -> Ok(answer)
+      }
+    }
+  }
+}
+
+fn recommended_option_index(
+  options: List(types.DecisionOption),
+  recommended_option: Option(String),
+) -> Int {
+  case recommended_option {
+    Some(recommended) -> find_option_index(options, recommended, 0)
+    None -> 0
+  }
+}
+
+fn find_option_index(
+  options: List(types.DecisionOption),
+  target: String,
+  index: Int,
+) -> Int {
+  case options {
+    [] -> 0
+    [option, ..rest] ->
+      case option.label == target {
+        True -> index
+        False -> find_option_index(rest, target, index + 1)
+      }
+  }
+}
+
+fn decision_contract_warning_event(
+  task: types.Task,
+  request: types.DecisionRequest,
+) -> types.RunEvent {
+  types.RunEvent(
+    kind: "decision_contract_warning",
+    at: system.timestamp(),
+    message: "Coerced `"
+      <> request.key
+      <> "` into a freeform prompt because the planner returned no options and disallowed freeform input.",
+    task_id: Some(task.id),
+  )
+}
+
+fn resolve_loop(run: types.RunRecord) -> String {
+  let blocked_tasks = unresolved_manual_attention_tasks(run)
+  case blocked_tasks, run.planning_dirty {
+    [], True -> continue_resolve_run(run)
+    [], False ->
+      case run.status {
+        types.RunPending -> render_run_summary(run)
+        _ ->
+          "Run "
+          <> run.run_id
+          <> " is blocked but has no unresolved decisions left to collect. Inspect "
+          <> run.report_path
+          <> " or rerun `night-shift plan --notes ...`."
+      }
+    _, _ -> {
+      io.println(render_resolve_summary(run, blocked_tasks))
+      case collect_recorded_decisions(run, blocked_tasks) {
+        Ok(#(new_decisions, warning_events)) -> {
+          let updated_run =
+            types.RunRecord(
+              ..run,
+              decisions: merge_recorded_decisions(run.decisions, new_decisions),
+              planning_dirty: True,
+            )
+          case journal.rewrite_run(updated_run) {
+            Ok(rewritten_run) ->
+              case append_run_events(rewritten_run, warning_events) {
+                Ok(warned_run) ->
+                  case append_decision_recorded_events(warned_run, new_decisions) {
+                    Ok(signaled_run) ->
+                      case append_run_events(signaled_run, [planning_sync_pending_event()]) {
+                        Ok(dirty_run) -> continue_resolve_run(dirty_run)
+                        Error(message) -> message
+                      }
+                    Error(message) -> message
+                  }
+                Error(message) -> message
+              }
+            Error(message) -> message
+          }
+        }
+        Error(message) -> message
+      }
+    }
+  }
+}
+
+fn continue_resolve_run(run: types.RunRecord) -> String {
+  case orchestrator.replan(run) {
+    Ok(replanned_run) ->
+      case replanned_run.status {
+        types.RunBlocked -> resolve_loop(replanned_run)
+        _ -> render_run_summary(replanned_run)
+      }
+    Error(message) -> message
+  }
+}
+
+fn render_resolve_summary(
+  run: types.RunRecord,
+  _blocked_tasks: List(types.Task),
+) -> String {
+  "\nResolving run "
+  <> run.run_id
+  <> "\nBlocked tasks: "
+  <> int.to_string(blocked_task_count(run))
+  <> "\nOutstanding decisions: "
+  <> int.to_string(outstanding_decision_count(run))
+  <> "\nPlanning sync pending: "
+  <> bool_label(run.planning_dirty)
+  <> "\nNext action: answer the questions below to make this run ready to start."
+}
+
+fn merge_recorded_decisions(
+  existing: List(types.RecordedDecision),
+  new_decisions: List(types.RecordedDecision),
+) -> List(types.RecordedDecision) {
+  case new_decisions {
+    [] -> existing
+    [decision, ..rest] -> {
+      let filtered =
+        existing
+        |> list.filter(fn(current) { current.key != decision.key })
+      merge_recorded_decisions(list.append(filtered, [decision]), rest)
+    }
+  }
+}
+
+fn append_decision_recorded_events(
+  run: types.RunRecord,
+  decisions: List(types.RecordedDecision),
+) -> Result(types.RunRecord, String) {
+  case decisions {
+    [] -> Ok(run)
+    [decision, ..rest] -> {
+      use updated_run <- result.try(journal.append_event(
+        run,
+        types.RunEvent(
+          kind: "decision_recorded",
+          at: decision.answered_at,
+          message: decision.question <> " -> " <> decision.answer,
+          task_id: None,
+        ),
+      ))
+      append_decision_recorded_events(updated_run, rest)
+    }
+  }
+}
+
+fn append_run_events(
+  run: types.RunRecord,
+  events: List(types.RunEvent),
+) -> Result(types.RunRecord, String) {
+  case events {
+    [] -> Ok(run)
+    [event, ..rest] -> {
+      use updated_run <- result.try(journal.append_event(run, event))
+      append_run_events(updated_run, rest)
+    }
+  }
+}
+
+fn planning_sync_pending_event() -> types.RunEvent {
+  types.RunEvent(
+    kind: "planning_sync_pending",
+    at: system.timestamp(),
+    message: "Recorded new planning answers; Night Shift must replan before this run can start.",
+    task_id: None,
+  )
+}
+
+fn start_guidance_for_run(run: types.RunRecord) -> String {
+  let outstanding = outstanding_decision_count(run)
+  case outstanding > 0 {
+    True ->
+      "Run "
+      <> run.run_id
+      <> " is blocked on "
+      <> int.to_string(outstanding)
+      <> " unresolved decision(s). Run `night-shift resolve --run "
+      <> run.run_id
+      <> "` first."
+    False ->
+      case run.planning_dirty {
+        True ->
+          "Run "
+          <> run.run_id
+          <> " recorded new planning answers or notes but has not been replanned yet. Run `night-shift resolve --run "
+          <> run.run_id
+          <> "` first."
+        False ->
+          "Run "
+          <> run.run_id
+          <> " is blocked. Run `night-shift resolve --run "
+          <> run.run_id
+          <> "` first."
+      }
+  }
+}
+
+fn next_action_label(run: types.RunRecord) -> String {
+  case outstanding_decision_count(run) > 0 || run.planning_dirty {
+    True -> "night-shift resolve"
+    False ->
+      case run.status {
+        types.RunPending -> "night-shift start"
+        _ -> "inspect report"
+      }
+  }
+}
+
+fn bool_label(value: Bool) -> String {
+  case value {
+    True -> "yes"
+    False -> "no"
+  }
+}
+
+fn render_changed_paths(paths: List(String)) -> String {
+  paths
+  |> list.map(fn(path) { "- " <> path })
+  |> string.join(with: "\n")
+}
+
+fn is_control_plane_path(path: String) -> Bool {
+  path == ".night-shift" || string.starts_with(path, ".night-shift/")
+}
+
+fn start_clean_repo_suggestion(paths: List(String), repo_root: String) -> String {
+  let only_night_shift =
+    list.all(paths, fn(path) {
+      path == ".night-shift" || string.starts_with(path, ".night-shift/")
+    })
+  case only_night_shift {
+    True ->
+      "\nCommit or discard those .night-shift changes before rerunning `night-shift start`, or run `night-shift reset` from "
+      <> repo_root
+      <> " to eject and reinitialize Night Shift."
+    False ->
+      "\nCommit, stash, or move those changes out of "
+      <> repo_root
+      <> " and rerun `night-shift start`."
+  }
+}
+
+fn prefix_warning(warning: Option(String), body: String) -> String {
+  case warning {
+    Some(message) -> message <> "\n\n" <> body
+    None -> body
+  }
+}
+
+fn latest_environment_preflight_failure(
+  events: List(types.RunEvent),
+) -> Option(String) {
+  latest_environment_preflight_failure_loop(list.reverse(events))
+}
+
+fn latest_environment_preflight_failure_loop(
+  events: List(types.RunEvent),
+) -> Option(String) {
+  case events {
+    [] -> None
+    [event, ..rest] ->
+      case event.kind == "environment_preflight_failed" {
+        True -> Some(event.message)
+        False -> latest_environment_preflight_failure_loop(rest)
+      }
+  }
+}
+
+fn latest_run_failed_message(events: List(types.RunEvent)) -> String {
+  case latest_run_failed_message_loop(list.reverse(events)) {
+    Some(message) -> message
+    None -> "Night Shift stopped after an execution failure."
+  }
+}
+
+fn latest_run_failed_message_loop(events: List(types.RunEvent)) -> Option(String) {
+  case events {
+    [] -> None
+    [event, ..rest] ->
+      case event.kind == "run_failed" {
+        True -> Some(event.message)
+        False -> latest_run_failed_message_loop(rest)
+      }
+  }
+}
+
+fn reset(repo_root: String, assume_yes: Bool, force: Bool) -> String {
+  case confirm_reset(repo_root, assume_yes) {
+    Error(message) -> message
+    Ok(Nil) ->
+      case ensure_reset_is_safe(repo_root, force) {
+        Error(message) -> message
+        Ok(Nil) -> perform_reset(repo_root)
+      }
+  }
+}
+
+fn confirm_reset(repo_root: String, assume_yes: Bool) -> Result(Nil, String) {
+  case assume_yes {
+    True -> Ok(Nil)
+    False ->
+      case can_prompt_interactively() {
+        False ->
+          Error("night-shift reset requires --yes when not running in an interactive terminal.")
+        True -> {
+          io.println(
+            "Reset Night Shift for "
+            <> repo_root
+            <> "? This removes "
+            <> project.home(repo_root)
+            <> " and all recorded Night Shift worktrees. Type `reset` to continue:",
+          )
+          case string.trim(system.read_line()) {
+            "reset" -> Ok(Nil)
+            _ -> Error("Night Shift reset aborted.")
+          }
+        }
+      }
+  }
+}
+
+fn ensure_reset_is_safe(repo_root: String, force: Bool) -> Result(Nil, String) {
+  case journal.active_run_id(repo_root) {
+    Ok(run_id) ->
+      case force {
+        True -> Ok(Nil)
+        False ->
+          Error(
+            "Night Shift run "
+            <> run_id
+            <> " is still active for this repository. Stop it first or rerun `night-shift reset --force`.",
+          )
+      }
+    Error(_) -> Ok(Nil)
+  }
+}
+
+fn perform_reset(repo_root: String) -> String {
+  let runs = journal.list_runs(repo_root) |> result.unwrap(or: [])
+  let worktrees = collect_worktree_paths(runs, [])
+  let reset_log = filepath.join(system.state_directory(), "night-shift/reset.log")
+  let #(removed_worktrees, failed_worktrees) =
+    remove_worktrees(repo_root, worktrees, reset_log, [], [])
+  let prune_result = git.prune_worktrees(repo_root, reset_log)
+  let home_path = project.home(repo_root)
+  let home_deleted = case simplifile.delete(file_or_dir_at: home_path) {
+    Ok(_) -> Ok(home_path)
+    Error(error) ->
+      case project.home_exists(repo_root) {
+        False -> Ok("(already absent) " <> home_path)
+        True ->
+          Error(
+            "Unable to remove "
+            <> home_path
+            <> ": "
+            <> simplifile.describe_error(error),
+          )
+      }
+  }
+
+  [
+    "Night Shift reset complete for " <> repo_root,
+    "Removed worktrees: " <> int.to_string(list.length(removed_worktrees)),
+    render_optional_list(removed_worktrees),
+    case prune_result {
+      Ok(_) -> "Pruned git worktree metadata."
+      Error(message) -> "Worktree prune warning: " <> message
+    },
+    case home_deleted {
+      Ok(message) -> "Removed state: " <> message
+      Error(message) -> message
+    },
+    case failed_worktrees {
+      [] -> ""
+      _ ->
+        "Worktree cleanup warnings:\n"
+        <> {
+          failed_worktrees
+          |> list.map(fn(entry) { "- " <> entry })
+          |> string.join(with: "\n")
+        }
+    },
+  ]
+  |> list.filter(fn(line) { string.trim(line) != "" })
+  |> string.join(with: "\n")
+}
+
+fn collect_worktree_paths(
+  runs: List(types.RunRecord),
+  acc: List(String),
+) -> List(String) {
+  case runs {
+    [] -> acc
+    [run, ..rest] -> {
+      let next =
+        run.tasks
+        |> list.fold(acc, fn(paths, task) {
+          case task.worktree_path, list.contains(paths, task.worktree_path) {
+            "", _ -> paths
+            _, True -> paths
+            path, False -> [path, ..paths]
+          }
+        })
+      collect_worktree_paths(rest, next)
+    }
+  }
+}
+
+fn remove_worktrees(
+  repo_root: String,
+  worktrees: List(String),
+  log_path: String,
+  removed: List(String),
+  failed: List(String),
+) -> #(List(String), List(String)) {
+  case worktrees {
+    [] -> #(list.reverse(removed), list.reverse(failed))
+    [path, ..rest] ->
+      case git.remove_worktree(repo_root, path, log_path) {
+        Ok(_) ->
+          remove_worktrees(repo_root, rest, log_path, [path, ..removed], failed)
+        Error(message) ->
+          remove_worktrees(
+            repo_root,
+            rest,
+            log_path,
+            removed,
+            [path <> ": " <> message, ..failed],
+          )
+      }
+  }
+}
+
+fn render_optional_list(entries: List(String)) -> String {
+  case entries {
+    [] -> ""
+    _ ->
+      entries
+      |> list.map(fn(entry) { "- " <> entry })
+      |> string.join(with: "\n")
+  }
+}
+
+fn planning_artifact_path(repo_root: String) -> String {
+  filepath.join(
+    project.planning_root(repo_root),
+    system.timestamp()
+      |> string.replace(each: ":", with: "-")
+      |> string.replace(each: "T", with: "_")
+      |> string.replace(each: "+", with: "_")
+      |> string.replace(each: "Z", with: "")
+      |> string.append("-")
+      |> string.append(system.unique_id()),
+  )
+}
+
+fn start_with_ui(
+  repo_root: String,
+  selector: types.RunSelector,
+  config: types.Config,
+) -> Nil {
+  case load_start_run(repo_root, selector) {
+    Ok(run) ->
+      case ensure_clean_repo_for_start(repo_root) {
+        Ok(warning) ->
+          case journal.activate_run(run) {
+            Ok(active_run) ->
+              case
+                dashboard.start_start_session(
+                  repo_root,
+                  active_run.run_id,
+                  active_run,
+                  config,
+                )
+              {
+                Ok(session) -> {
+                  case warning {
+                    Some(message) -> io.println(message)
+                    None -> Nil
+                  }
+                  io.println(render_dashboard_summary(session.url, active_run.run_id))
+                  system.wait_forever()
+                }
+                Error(message) -> io.println(message)
+              }
+            Error(message) -> io.println(message)
+          }
+        Error(message) -> io.println(message)
+      }
+    Error(message) -> io.println(message)
+  }
 }
 
 fn resume_with_ui(

@@ -18,36 +18,21 @@ pub fn start(
   run: types.RunRecord,
   config: types.Config,
 ) -> Result(types.RunRecord, String) {
-  use planned_tasks <- result.try(provider.plan_tasks(
-    run.planning_agent,
-    run.repo_root,
-    run.brief_path,
-    run.run_path,
-  ))
-
-  let normalized_tasks = normalize_tasks(planned_tasks)
-  let planned_run = types.RunRecord(..run, tasks: normalized_tasks)
-  let planned_event =
-    types.RunEvent(
-      kind: "task_progress",
-      at: system.timestamp(),
-      message: "Planner produced "
-        <> int.to_string(list.length(normalized_tasks))
-        <> " tasks.",
-      task_id: None,
-    )
-
-  use persisted_run <- result.try(journal.append_event(
-    planned_run,
-    planned_event,
-  ))
   use #(prepared_run, proceed) <- result.try(prepare_run_for_execution(
-    persisted_run,
+    run,
   ))
   case proceed {
     True -> scheduler_loop(config, prepared_run)
     False -> Ok(prepared_run)
   }
+}
+
+pub fn plan(run: types.RunRecord) -> Result(types.RunRecord, String) {
+  plan_with_event(run, "run_planned", "Planner produced ")
+}
+
+pub fn replan(run: types.RunRecord) -> Result(types.RunRecord, String) {
+  plan_with_event(run, "run_replanned", "Replanner produced ")
 }
 
 pub fn resume(
@@ -122,6 +107,59 @@ pub fn review(
   }
 }
 
+fn plan_with_event(
+  run: types.RunRecord,
+  event_kind: String,
+  message_prefix: String,
+) -> Result(types.RunRecord, String) {
+  use planned_tasks <- result.try(provider.plan_tasks(
+    run.planning_agent,
+    run.repo_root,
+    run.brief_path,
+    run.run_path,
+    run.decisions,
+    completed_tasks(run.tasks),
+  ))
+
+  let normalized_tasks = normalize_tasks(planned_tasks)
+  let merged_tasks =
+    merge_planned_tasks(run.tasks, normalized_tasks)
+    |> apply_decision_states(run.decisions)
+    |> refresh_ready_states
+  let status = planning_status(run.decisions, merged_tasks)
+  let updated_run =
+    types.RunRecord(
+      ..run,
+      tasks: merged_tasks,
+      planning_dirty: False,
+      status: status,
+    )
+  let unresolved_count = unresolved_decision_count(run.decisions, merged_tasks)
+  let plan_event =
+    types.RunEvent(
+      kind: event_kind,
+      at: system.timestamp(),
+      message: message_prefix
+        <> int.to_string(list.length(normalized_tasks))
+        <> " tasks"
+        <> planning_event_suffix(unresolved_count)
+        <> ".",
+      task_id: None,
+    )
+
+  use rewritten_run <- result.try(journal.rewrite_run(updated_run))
+  use planned_run <- result.try(journal.append_event(rewritten_run, plan_event))
+  use signaled_run <- result.try(append_decision_request_events(
+    planned_run,
+    decision_requesting_tasks(run.decisions, merged_tasks),
+  ))
+  journal.mark_status(
+    signaled_run,
+    status,
+    planning_status_message(run.decisions, merged_tasks),
+  )
+}
+
 fn prepare_run_for_execution(
   run: types.RunRecord,
 ) -> Result(#(types.RunRecord, Bool), String) {
@@ -129,12 +167,15 @@ fn prepare_run_for_execution(
     types.RunRecord(..run, tasks: refresh_ready_states(run.tasks))
 
   case has_blocking_attention(refreshed_run.tasks) {
-    True -> Ok(#(refreshed_run, True))
+    True ->
+      append_manual_attention_events(refreshed_run)
+      |> result.map(fn(updated_run) { #(updated_run, True) })
     False ->
       case next_batch(refreshed_run.tasks, refreshed_run.max_workers) {
         [] -> Ok(#(refreshed_run, True))
         [task, .._] if task.kind == types.ManualAttentionTask ->
-          Ok(#(refreshed_run, True))
+          append_manual_attention_events(refreshed_run)
+          |> result.map(fn(updated_run) { #(updated_run, True) })
         _ -> {
           let preflight_log =
             filepath.join(
@@ -372,13 +413,35 @@ fn await_batch(
   case task_runs {
     [] -> Ok(run)
     [task_run, ..rest] -> {
-      use execution_result <- result.try(provider.await_task(task_run))
-      use updated_run <- result.try(complete_task(
-        config,
-        run,
-        task_run,
-        execution_result,
-      ))
+      let next_run_result = case provider.await_task(task_run) {
+        Ok(execution_result) ->
+          case complete_task(
+            config,
+            run,
+            task_run,
+            execution_result,
+          ) {
+            Ok(updated_run) -> Ok(updated_run)
+            Error(message) ->
+              mark_task_with_event(
+                run,
+                task_run.task,
+                types.Failed,
+                completion_failure_summary(message),
+                "task_failed",
+              )
+          }
+        Error(message) ->
+          mark_task_with_event(
+            run,
+            task_run.task,
+            types.Failed,
+            message,
+            "task_failed",
+          )
+      }
+
+      use updated_run <- result.try(next_run_result)
       await_batch(config, updated_run, rest)
     }
   }
@@ -484,100 +547,124 @@ fn finalize_success(
         False -> Ok(Nil)
       }
 
-      use _ <- result.try(delivery_result)
-      use delivered_head <- result.try(git.head_commit(
-        task_run.worktree_path,
-        git_log,
-      ))
-      let delivered_files =
-        git.changed_files_between(
-          task_run.worktree_path,
-          task_run.start_head,
-          "HEAD",
-          git_log,
-        )
+      case delivery_result {
+        Error(message) ->
+          Error(task_failure_summary("git delivery failed.", message))
+        Ok(_) ->
+          case git.head_commit(task_run.worktree_path, git_log) {
+            Error(message) ->
+              Error(task_failure_summary("git delivery failed.", message))
+            Ok(delivered_head) -> {
+              let delivered_files =
+                git.changed_files_between(
+                  task_run.worktree_path,
+                  task_run.start_head,
+                  "HEAD",
+                  git_log,
+                )
 
-      case delivered_head == task_run.start_head {
-        True -> {
-          mark_task_with_event(
-            run,
-            task_run.task,
-            types.ManualAttention,
-            "Primary blocker: provider reported completion but the task worktree produced no committed or uncommitted changes.\n\nEnvironment notes: verification completed, but there was nothing new to deliver.",
-            "task_manual_attention",
-          )
-        }
-        False -> {
-          use _ <- result.try(git.push_branch(
-            task_run.worktree_path,
-            task_run.branch_name,
-            git_log,
-          ))
-          let pr_body =
-            build_pr_body(
-              run,
-              task_run.task,
-              final_execution,
-              verification_output,
-            )
-          use pull_request <- result.try(github.open_or_update_pr(
-            task_run.worktree_path,
-            task_run.branch_name,
-            task_run.base_ref,
-            final_execution.pr.title,
-            pr_body,
-            run.run_path,
-            git_log,
-          ))
+              case delivered_head == task_run.start_head {
+                True -> {
+                  mark_task_with_event(
+                    run,
+                    task_run.task,
+                    types.ManualAttention,
+                    "Primary blocker: provider reported completion but the task worktree produced no committed or uncommitted changes.\n\nEnvironment notes: verification completed, but there was nothing new to deliver.",
+                    "task_manual_attention",
+                  )
+                }
+                False ->
+                  case git.push_branch(
+                    task_run.worktree_path,
+                    task_run.branch_name,
+                    git_log,
+                  ) {
+                    Error(message) ->
+                      Error(task_failure_summary("git delivery failed.", message))
+                    Ok(_) -> {
+                      let pr_body =
+                        build_pr_body(
+                          run,
+                          task_run.task,
+                          final_execution,
+                          verification_output,
+                        )
+                      case github.open_or_update_pr(
+                        task_run.worktree_path,
+                        task_run.branch_name,
+                        task_run.base_ref,
+                        final_execution.pr.title,
+                        pr_body,
+                        run.run_path,
+                        git_log,
+                      ) {
+                        Error(message) ->
+                          Error(task_failure_summary(
+                            "GitHub PR delivery failed.",
+                            message,
+                          ))
+                        Ok(pull_request) -> {
+                          let completed_task =
+                            types.Task(
+                              ..task_run.task,
+                              state: types.Completed,
+                              worktree_path: task_run.worktree_path,
+                              branch_name: task_run.branch_name,
+                              pr_number: int.to_string(pull_request.number),
+                              summary: final_execution.summary,
+                            )
 
-          let completed_task =
-            types.Task(
-              ..task_run.task,
-              state: types.Completed,
-              worktree_path: task_run.worktree_path,
-              branch_name: task_run.branch_name,
-              pr_number: int.to_string(pull_request.number),
-              summary: final_execution.summary,
-            )
-
-          let merged_tasks =
-            merge_follow_up_tasks(
-              replace_task(run.tasks, completed_task),
-              final_execution.follow_up_tasks,
-            )
-          let updated_run = types.RunRecord(..run, tasks: merged_tasks)
-          let verified_event =
-            types.RunEvent(
-              kind: "task_verified",
-              at: system.timestamp(),
-              message: "Verification passed for " <> task_run.task.title,
-              task_id: Some(task_run.task.id),
-            )
-          use verified_run <- result.try(journal.append_event(
-            updated_run,
-            verified_event,
-          ))
-          journal.append_event(
-            types.RunRecord(
-              ..verified_run,
-              tasks: replace_task(
-                verified_run.tasks,
-                types.Task(
-                  ..completed_task,
-                  summary: final_execution.summary
-                    <> " Changed files: "
-                    <> string.join(delivered_files, ", "),
-                ),
-              ),
-            ),
-            types.RunEvent(
-              kind: "pr_opened",
-              at: system.timestamp(),
-              message: pull_request.url,
-              task_id: Some(task_run.task.id),
-            ),
-          )
-        }
+                          let merged_tasks =
+                            apply_decision_states(
+                              merge_follow_up_tasks(
+                                replace_task(run.tasks, completed_task),
+                                final_execution.follow_up_tasks,
+                              ),
+                              run.decisions,
+                            )
+                            |> refresh_ready_states
+                          let updated_run = types.RunRecord(
+                            ..run,
+                            tasks: merged_tasks,
+                          )
+                          let verified_event =
+                            types.RunEvent(
+                              kind: "task_verified",
+                              at: system.timestamp(),
+                              message: "Verification passed for " <> task_run.task.title,
+                              task_id: Some(task_run.task.id),
+                            )
+                          use verified_run <- result.try(journal.append_event(
+                            updated_run,
+                            verified_event,
+                          ))
+                          journal.append_event(
+                            types.RunRecord(
+                              ..verified_run,
+                              tasks: replace_task(
+                                verified_run.tasks,
+                                types.Task(
+                                  ..completed_task,
+                                  summary: final_execution.summary
+                                    <> " Changed files: "
+                                    <> string.join(delivered_files, ", "),
+                                ),
+                              ),
+                            ),
+                            types.RunEvent(
+                              kind: "pr_opened",
+                              at: system.timestamp(),
+                              message: pull_request.url,
+                              task_id: Some(task_run.task.id),
+                            ),
+                          )
+                        }
+                      }
+                    }
+                  }
+              }
+            }
+          }
       }
     }
     Error(output) -> {
@@ -590,6 +677,20 @@ fn finalize_success(
         "task_failed",
       )
     }
+  }
+}
+
+fn task_failure_summary(headline: String, details: String) -> String {
+  "Primary blocker: "
+  <> headline
+  <> "\n\nEnvironment notes:\n"
+  <> details
+}
+
+fn completion_failure_summary(message: String) -> String {
+  case string.starts_with(message, "Primary blocker:") {
+    True -> message
+    False -> task_failure_summary("task completion failed unexpectedly.", message)
   }
 }
 
@@ -630,10 +731,17 @@ fn normalize_tasks(tasks: List(types.Task)) -> List(types.Task) {
   tasks
   |> list.map(fn(task) {
     case task.dependencies {
-      [] -> types.Task(..task, state: types.Ready)
+      [] -> types.Task(..task, state: initial_task_state(task))
       _ -> types.Task(..task, state: types.Queued)
     }
   })
+}
+
+fn initial_task_state(task: types.Task) -> types.TaskState {
+  case task.kind {
+    types.ManualAttentionTask -> types.Ready
+    types.ImplementationTask -> types.Ready
+  }
 }
 
 fn refresh_ready_states(tasks: List(types.Task)) -> List(types.Task) {
@@ -700,6 +808,7 @@ fn merge_follow_up_tasks(
           dependencies: follow_up.dependencies,
           acceptance: follow_up.acceptance,
           demo_plan: follow_up.demo_plan,
+          decision_requests: follow_up.decision_requests,
           kind: follow_up.kind,
           execution_mode: follow_up.execution_mode,
           state: types.Queued,
@@ -714,6 +823,170 @@ fn merge_follow_up_tasks(
   })
   |> list.reverse
   |> refresh_ready_states
+}
+
+fn merge_planned_tasks(
+  existing_tasks: List(types.Task),
+  planned_tasks: List(types.Task),
+) -> List(types.Task) {
+  let preserved_completed = completed_tasks(existing_tasks)
+  let completed_ids = preserved_completed |> list.map(fn(task) { task.id })
+  let remaining_planned =
+    planned_tasks
+    |> list.filter(fn(task) { !list.contains(completed_ids, task.id) })
+
+  list.append(preserved_completed, remaining_planned)
+  |> refresh_ready_states
+}
+
+fn completed_tasks(tasks: List(types.Task)) -> List(types.Task) {
+  tasks
+  |> list.filter(fn(task) { task.state == types.Completed })
+}
+
+fn apply_decision_states(
+  tasks: List(types.Task),
+  decisions: List(types.RecordedDecision),
+) -> List(types.Task) {
+  tasks
+  |> list.map(fn(task) {
+    case task.kind {
+      types.ManualAttentionTask ->
+        case types.task_requires_manual_attention(decisions, task) {
+          True ->
+            types.Task(
+              ..task,
+              state: types.ManualAttention,
+              summary: manual_attention_summary(task),
+            )
+          False ->
+            types.Task(
+              ..task,
+              state: types.Completed,
+              summary: resolved_manual_attention_summary(task.summary),
+            )
+        }
+      types.ImplementationTask -> task
+    }
+  })
+}
+
+fn resolved_manual_attention_summary(existing_summary: String) -> String {
+  case string.trim(existing_summary) {
+    "" -> "Resolved during planning."
+    summary -> summary
+  }
+}
+
+fn planning_status(
+  decisions: List(types.RecordedDecision),
+  tasks: List(types.Task),
+) -> types.RunStatus {
+  case list.any(tasks, fn(task) { types.task_requires_manual_attention(decisions, task) }) {
+    True -> types.RunBlocked
+    False -> types.RunPending
+  }
+}
+
+fn planning_status_message(
+  decisions: List(types.RecordedDecision),
+  tasks: List(types.Task),
+) -> String {
+  let unresolved_count = unresolved_decision_count(decisions, tasks)
+  case planning_status(decisions, tasks) {
+    types.RunBlocked ->
+      "Night Shift is awaiting manual review for "
+      <> pluralize(list.length(decision_requesting_tasks(decisions, tasks)), "task")
+      <> " across "
+      <> pluralize(unresolved_count, "decision")
+      <> "."
+    _ ->
+      "Night Shift planned "
+      <> pluralize(list.length(tasks), "task")
+      <> " and is ready to start."
+  }
+}
+
+fn decision_requesting_tasks(
+  decisions: List(types.RecordedDecision),
+  tasks: List(types.Task),
+) -> List(types.Task) {
+  tasks
+  |> list.filter(fn(task) { types.task_requires_manual_attention(decisions, task) })
+}
+
+fn unresolved_decision_count(
+  decisions: List(types.RecordedDecision),
+  tasks: List(types.Task),
+) -> Int {
+  decision_requesting_tasks(decisions, tasks)
+  |> list.map(fn(task) { list.length(types.unresolved_decision_requests(decisions, task)) })
+  |> list.fold(0, fn(total, count) { total + count })
+}
+
+fn planning_event_suffix(unresolved_count: Int) -> String {
+  case unresolved_count {
+    0 -> ""
+    _ -> " and " <> pluralize(unresolved_count, "unresolved decision")
+  }
+}
+
+fn append_decision_request_events(
+  run: types.RunRecord,
+  tasks: List(types.Task),
+) -> Result(types.RunRecord, String) {
+  case tasks {
+    [] -> Ok(run)
+    [task, ..rest] -> {
+      let requests = types.unresolved_decision_requests(run.decisions, task)
+      let message = case requests {
+        [] -> task.description
+        unresolved_requests ->
+          unresolved_requests
+          |> list.map(fn(request) { request.question })
+          |> string.join(with: " | ")
+      }
+      use updated_run <- result.try(journal.append_event(
+        run,
+        types.RunEvent(
+          kind: "decision_requested",
+          at: system.timestamp(),
+          message: message,
+          task_id: Some(task.id),
+        ),
+      ))
+      append_decision_request_events(updated_run, rest)
+    }
+  }
+}
+
+fn append_manual_attention_events(
+  run: types.RunRecord,
+) -> Result(types.RunRecord, String) {
+  run.tasks
+  |> list.filter(fn(task) { task.state == types.ManualAttention })
+  |> append_manual_attention_events_for_tasks(run)
+}
+
+fn append_manual_attention_events_for_tasks(
+  tasks: List(types.Task),
+  run: types.RunRecord,
+) -> Result(types.RunRecord, String) {
+  case tasks {
+    [] -> Ok(run)
+    [task, ..rest] -> {
+      use updated_run <- result.try(journal.append_event(
+        run,
+        types.RunEvent(
+          kind: "task_manual_attention",
+          at: system.timestamp(),
+          message: manual_attention_summary(task),
+          task_id: Some(task.id),
+        ),
+      ))
+      append_manual_attention_events_for_tasks(rest, updated_run)
+    }
+  }
 }
 
 fn task_base_ref(
@@ -843,6 +1116,7 @@ fn review_task_from_pr(pr: github.ReviewWorkItem) -> types.Task {
       "Leave the PR in a green or clearly blocked state.",
     ],
     demo_plan: ["Summarize the fixes and checks in the PR body."],
+    decision_requests: [],
     kind: types.ImplementationTask,
     execution_mode: types.Exclusive,
     state: types.Ready,

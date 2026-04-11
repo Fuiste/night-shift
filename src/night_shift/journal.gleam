@@ -2,7 +2,7 @@ import filepath
 import gleam/dynamic/decode
 import gleam/json
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import night_shift/project
@@ -19,6 +19,27 @@ pub fn start_run(
   environment_name: String,
   max_workers: Int,
 ) -> Result(types.RunRecord, String) {
+  use run <- result.try(create_pending_run(
+    repo_root,
+    brief_path,
+    planning_agent,
+    execution_agent,
+    environment_name,
+    max_workers,
+    None,
+  ))
+  activate_run(run)
+}
+
+pub fn create_pending_run(
+  repo_root: String,
+  brief_path: String,
+  planning_agent: types.ResolvedAgentConfig,
+  execution_agent: types.ResolvedAgentConfig,
+  environment_name: String,
+  max_workers: Int,
+  notes_source: Option(types.NotesSource),
+) -> Result(types.RunRecord, String) {
   let run_id = make_run_id()
   let project_home = repo_state_path(repo_root)
   let runs_path = runs_root(repo_root)
@@ -29,7 +50,7 @@ pub fn start_run(
   let report_path = filepath.join(run_path, "report.md")
   let lock_path = project.active_lock_path(repo_root)
 
-  use _ <- result.try(ensure_repo_ready(repo_root, project_home, runs_path, lock_path))
+  use _ <- result.try(ensure_repo_home_ready(repo_root, project_home, runs_path))
   use _ <- result.try(create_run_directories(run_path))
   use _ <- result.try(copy_brief(brief_path, brief_copy_path))
 
@@ -48,24 +69,57 @@ pub fn start_run(
       execution_agent: execution_agent,
       environment_name: environment_name,
       max_workers: max_workers,
-      status: types.RunActive,
+      notes_source: notes_source,
+      decisions: [],
+      planning_dirty: False,
+      status: types.RunPending,
       created_at: timestamp,
       updated_at: timestamp,
       tasks: [],
     )
 
+  use _ <- result.try(save(run, []))
+  Ok(run)
+}
+
+pub fn activate_run(run: types.RunRecord) -> Result(types.RunRecord, String) {
+  use _ <- result.try(ensure_no_active_run(run.lock_path))
+  use _ <- result.try(write_lock(run.lock_path, run.run_id))
   let event =
     types.RunEvent(
       kind: "run_started",
-      at: timestamp,
+      at: system.timestamp(),
       message: "Night Shift started.",
       task_id: None,
     )
+  let updated_run = types.RunRecord(
+    ..run,
+    status: types.RunActive,
+    updated_at: event.at,
+  )
+  use existing_events <- result.try(read_events(run.events_path))
+  use _ <- result.try(save(updated_run, list.append(existing_events, [event])))
+  Ok(updated_run)
+}
 
-  use _ <- result.try(save(run, [event]))
-  use _ <- result.try(write_lock(lock_path, run_id))
+pub fn rewrite_run(run: types.RunRecord) -> Result(types.RunRecord, String) {
+  use existing_events <- result.try(read_events(run.events_path))
+  let updated_run = types.RunRecord(..run, updated_at: system.timestamp())
+  use _ <- result.try(save(updated_run, existing_events))
+  Ok(updated_run)
+}
 
-  Ok(run)
+pub fn latest_reusable_run(
+  repo_root: String,
+) -> Result(Option(types.RunRecord), String) {
+  case list_runs(repo_root) {
+    Ok(runs) ->
+      Ok(case list.find(runs, fn(run) { is_reusable_planning_run(run) }) {
+        Ok(run) -> Some(run)
+        Error(_) -> None
+      })
+    Error(_) -> Ok(None)
+  }
 }
 
 pub fn load(
@@ -178,15 +232,17 @@ pub fn planning_root_for(repo_root: String) -> String {
   planning_root(repo_root)
 }
 
-fn ensure_repo_ready(
+fn ensure_repo_home_ready(
   repo_root: String,
   project_home: String,
   runs_path: String,
-  lock_path: String,
 ) -> Result(Nil, String) {
   use _ <- result.try(create_directory(project_home))
   use _ <- result.try(create_directory(runs_path))
-  use _ <- result.try(create_directory(planning_root(repo_root)))
+  create_directory(planning_root(repo_root))
+}
+
+fn ensure_no_active_run(lock_path: String) -> Result(Nil, String) {
   case simplifile.read(lock_path) {
     Ok(existing_run) ->
       Error(
@@ -376,12 +432,33 @@ fn encode_run(run: types.RunRecord) -> String {
     #("execution_agent", encode_resolved_agent(run.execution_agent)),
     #("environment_name", json.string(run.environment_name)),
     #("max_workers", json.int(run.max_workers)),
+    #("notes_source", json.nullable(from: run.notes_source, of: encode_notes_source)),
+    #("decisions", json.array(run.decisions, encode_recorded_decision)),
+    #("planning_dirty", json.bool(run.planning_dirty)),
     #("status", json.string(types.run_status_to_string(run.status))),
     #("created_at", json.string(run.created_at)),
     #("updated_at", json.string(run.updated_at)),
     #("tasks", json.array(run.tasks, encode_task)),
   ])
   |> json.to_string
+}
+
+fn encode_notes_source(source: types.NotesSource) -> json.Json {
+  case source {
+    types.NotesFile(path) ->
+      json.object([#("kind", json.string("file")), #("path", json.string(path))])
+    types.InlineNotes(path) ->
+      json.object([#("kind", json.string("inline")), #("path", json.string(path))])
+  }
+}
+
+fn encode_recorded_decision(decision: types.RecordedDecision) -> json.Json {
+  json.object([
+    #("key", json.string(decision.key)),
+    #("question", json.string(decision.question)),
+    #("answer", json.string(decision.answer)),
+    #("answered_at", json.string(decision.answered_at)),
+  ])
 }
 
 fn encode_resolved_agent(agent: types.ResolvedAgentConfig) -> json.Json {
@@ -417,6 +494,10 @@ fn encode_task(task: types.Task) -> json.Json {
     #("dependencies", json.array(task.dependencies, json.string)),
     #("acceptance", json.array(task.acceptance, json.string)),
     #("demo_plan", json.array(task.demo_plan, json.string)),
+    #(
+      "decision_requests",
+      json.array(task.decision_requests, encode_decision_request),
+    ),
     #("task_kind", json.string(types.task_kind_to_string(task.kind))),
     #("execution_mode", json.string(types.execution_mode_to_string(task.execution_mode))),
     #("state", json.string(types.task_state_to_string(task.state))),
@@ -424,6 +505,27 @@ fn encode_task(task: types.Task) -> json.Json {
     #("branch_name", json.string(task.branch_name)),
     #("pr_number", json.string(task.pr_number)),
     #("summary", json.string(task.summary)),
+  ])
+}
+
+fn encode_decision_request(request: types.DecisionRequest) -> json.Json {
+  json.object([
+    #("key", json.string(request.key)),
+    #("question", json.string(request.question)),
+    #("rationale", json.string(request.rationale)),
+    #("options", json.array(request.options, encode_decision_option)),
+    #(
+      "recommended_option",
+      json.nullable(from: request.recommended_option, of: json.string),
+    ),
+    #("allow_freeform", json.bool(request.allow_freeform)),
+  ])
+}
+
+fn encode_decision_option(option: types.DecisionOption) -> json.Json {
+  json.object([
+    #("label", json.string(option.label)),
+    #("description", json.string(option.description)),
   ])
 }
 
@@ -456,6 +558,18 @@ fn run_decoder() -> decode.Decoder(types.RunRecord) {
     decode.optional(decode.string),
   )
   use max_workers <- decode.field("max_workers", decode.int)
+  use notes_source <- decode.field(
+    "notes_source",
+    decode.optional(notes_source_decoder()),
+  )
+  use decisions <- decode.field(
+    "decisions",
+    decode.optional(decode.list(recorded_decision_decoder())),
+  )
+  use planning_dirty <- decode.field(
+    "planning_dirty",
+    decode.optional(decode.bool),
+  )
   use status <- decode.field("status", run_status_decoder())
   use created_at <- decode.field("created_at", decode.string)
   use updated_at <- decode.field("updated_at", decode.string)
@@ -476,6 +590,15 @@ fn run_decoder() -> decode.Decoder(types.RunRecord) {
       None -> ""
     },
     max_workers: max_workers,
+    notes_source: notes_source,
+    decisions: case decisions {
+      Some(entries) -> entries
+      None -> []
+    },
+    planning_dirty: case planning_dirty {
+      Some(value) -> value
+      None -> False
+    },
     status: status,
     created_at: created_at,
     updated_at: updated_at,
@@ -512,6 +635,9 @@ fn legacy_run_decoder() -> decode.Decoder(types.RunRecord) {
     execution_agent: resolved_agent,
     environment_name: "",
     max_workers: max_workers,
+    notes_source: None,
+    decisions: [],
+    planning_dirty: False,
     status: status,
     created_at: created_at,
     updated_at: updated_at,
@@ -577,6 +703,7 @@ fn task_decoder() -> decode.Decoder(types.Task) {
   use dependencies <- decode.field("dependencies", decode.list(decode.string))
   use acceptance <- decode.field("acceptance", decode.list(decode.string))
   use demo_plan <- decode.field("demo_plan", decode.list(decode.string))
+  use decision_requests <- decode.then(optional_decision_requests_decoder())
   use kind <- decode.then(task_kind_decoder())
   use execution_mode <- decode.then(task_execution_mode_decoder())
   use state <- decode.field("state", task_state_decoder())
@@ -591,6 +718,7 @@ fn task_decoder() -> decode.Decoder(types.Task) {
     dependencies: dependencies,
     acceptance: acceptance,
     demo_plan: demo_plan,
+    decision_requests: decision_requests,
     kind: kind,
     execution_mode: execution_mode,
     state: state,
@@ -599,6 +727,65 @@ fn task_decoder() -> decode.Decoder(types.Task) {
     pr_number: pr_number,
     summary: summary,
   ))
+}
+
+fn decision_request_decoder() -> decode.Decoder(types.DecisionRequest) {
+  use key <- decode.field("key", decode.string)
+  use question <- decode.field("question", decode.string)
+  use rationale <- decode.field("rationale", decode.string)
+  use options <- decode.then(optional_decision_options_decoder())
+  use recommended_option <- decode.then(optional_recommended_option_decoder())
+  use allow_freeform <- decode.then(optional_allow_freeform_decoder())
+  decode.success(types.DecisionRequest(
+    key: key,
+    question: question,
+    rationale: rationale,
+    options: options,
+    recommended_option: recommended_option,
+    allow_freeform: allow_freeform,
+  ))
+}
+
+fn decision_option_decoder() -> decode.Decoder(types.DecisionOption) {
+  use label <- decode.field("label", decode.string)
+  use description <- decode.field("description", decode.string)
+  decode.success(types.DecisionOption(label: label, description: description))
+}
+
+fn recorded_decision_decoder() -> decode.Decoder(types.RecordedDecision) {
+  use key <- decode.field("key", decode.string)
+  use question <- decode.field("question", decode.string)
+  use answer <- decode.field("answer", decode.string)
+  use answered_at <- decode.field("answered_at", decode.string)
+  decode.success(types.RecordedDecision(
+    key: key,
+    question: question,
+    answer: answer,
+    answered_at: answered_at,
+  ))
+}
+
+fn notes_source_decoder() -> decode.Decoder(types.NotesSource) {
+  use kind <- decode.field("kind", decode.string)
+  use path <- decode.field("path", decode.string)
+  case kind {
+    "file" -> decode.success(types.NotesFile(path))
+    "inline" -> decode.success(types.InlineNotes(path))
+    _ -> decode.failure(types.NotesFile(path), "NotesSource")
+  }
+}
+
+fn is_reusable_planning_run(run: types.RunRecord) -> Bool {
+  case run.status {
+    types.RunPending | types.RunBlocked ->
+      !list.any(run.tasks, fn(task) {
+        task.state == types.Completed
+        || task.state == types.Running
+        || task.pr_number != ""
+        || task.worktree_path != ""
+      })
+    _ -> False
+  }
 }
 
 fn task_execution_mode_decoder() -> decode.Decoder(types.ExecutionMode) {
@@ -635,6 +822,52 @@ fn task_parallel_safe_decoder() -> decode.Decoder(types.ExecutionMode) {
     True -> decode.success(types.Parallel)
     False -> decode.success(types.Exclusive)
   }
+}
+
+fn optional_decision_requests_decoder() -> decode.Decoder(List(types.DecisionRequest)) {
+  decode.one_of(
+    {
+      use requests <- decode.field(
+        "decision_requests",
+        decode.list(decision_request_decoder()),
+      )
+      decode.success(requests)
+    },
+    or: [decode.success([])],
+  )
+}
+
+fn optional_decision_options_decoder() -> decode.Decoder(List(types.DecisionOption)) {
+  decode.one_of(
+    {
+      use options <- decode.field("options", decode.list(decision_option_decoder()))
+      decode.success(options)
+    },
+    or: [decode.success([])],
+  )
+}
+
+fn optional_recommended_option_decoder() -> decode.Decoder(Option(String)) {
+  decode.one_of(
+    {
+      use option <- decode.field(
+        "recommended_option",
+        decode.optional(decode.string),
+      )
+      decode.success(option)
+    },
+    or: [decode.success(None)],
+  )
+}
+
+fn optional_allow_freeform_decoder() -> decode.Decoder(Bool) {
+  decode.one_of(
+    {
+      use allow_freeform <- decode.field("allow_freeform", decode.bool)
+      decode.success(allow_freeform)
+    },
+    or: [decode.success(True)],
+  )
 }
 
 fn decode_event(line: String) -> Result(types.RunEvent, String) {
