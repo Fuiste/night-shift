@@ -5,6 +5,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
+import night_shift/codec/artifact_path
 import night_shift/journal
 import night_shift/shell
 import night_shift/system
@@ -735,10 +736,7 @@ fn render_decision_requests(requests: List(types.DecisionRequest)) -> String {
     _ ->
       requests
       |> list.map(fn(request) {
-        "  - "
-        <> request.key
-        <> ": "
-        <> request.question
+        "  - " <> request.key <> ": " <> request.question
       })
       |> string.join(with: "\n")
   }
@@ -750,10 +748,7 @@ fn render_recorded_decisions(decisions: List(types.RecordedDecision)) -> String 
     _ ->
       decisions
       |> list.map(fn(decision) {
-        "- "
-        <> decision.key
-        <> ": "
-        <> decision.answer
+        "- " <> decision.key <> ": " <> decision.answer
       })
       |> string.join(with: "\n")
   }
@@ -857,14 +852,12 @@ fn decode_execution_result(
           })
         }
         _ ->
-          Error(
-            execution_decode_failure(
-              failure_prefix,
-              log_path,
-              raw_payload_path,
-              None,
-            ),
-          )
+          Error(execution_decode_failure(
+            failure_prefix,
+            log_path,
+            raw_payload_path,
+            None,
+          ))
       }
   }
 }
@@ -1030,7 +1023,9 @@ fn execution_status_decoder() -> decode.Decoder(types.TaskState) {
 }
 
 fn execution_mode_decoder() -> decode.Decoder(types.ExecutionMode) {
-  decode.one_of(field_execution_mode_decoder(), or: [legacy_parallel_safe_decoder()])
+  decode.one_of(field_execution_mode_decoder(), or: [
+    legacy_parallel_safe_decoder(),
+  ])
 }
 
 fn task_kind_decoder() -> decode.Decoder(types.TaskKind) {
@@ -1088,7 +1083,9 @@ fn legacy_parallel_safe_decoder() -> decode.Decoder(types.ExecutionMode) {
   }
 }
 
-fn optional_decision_requests_decoder() -> decode.Decoder(List(types.DecisionRequest)) {
+fn optional_decision_requests_decoder() -> decode.Decoder(
+  List(types.DecisionRequest),
+) {
   decode.one_of(
     {
       use requests <- decode.field(
@@ -1101,10 +1098,15 @@ fn optional_decision_requests_decoder() -> decode.Decoder(List(types.DecisionReq
   )
 }
 
-fn optional_decision_options_decoder() -> decode.Decoder(List(types.DecisionOption)) {
+fn optional_decision_options_decoder() -> decode.Decoder(
+  List(types.DecisionOption),
+) {
   decode.one_of(
     {
-      use options <- decode.field("options", decode.list(decision_option_decoder()))
+      use options <- decode.field(
+        "options",
+        decode.list(decision_option_decoder()),
+      )
       decode.success(options)
     },
     or: [decode.success([])],
@@ -1135,16 +1137,7 @@ fn optional_allow_freeform_decoder() -> decode.Decoder(Bool) {
 }
 
 fn planning_artifact_path(repo_root: String) -> String {
-  filepath.join(
-    journal.planning_root_for(repo_root),
-    system.timestamp()
-      |> string.replace(each: ":", with: "-")
-      |> string.replace(each: "T", with: "_")
-      |> string.replace(each: "+", with: "_")
-      |> string.replace(each: "Z", with: "")
-      |> string.append("-")
-      |> string.append(system.unique_id()),
-  )
+  artifact_path.timestamped_directory(journal.planning_root_for(repo_root))
 }
 
 fn create_directory(path: String) -> Result(Nil, String) {

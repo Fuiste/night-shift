@@ -59,7 +59,9 @@ fn render_summary(
       task.kind == types.ImplementationTask && task.state == types.Blocked
     })
     |> list.length
-  let derived_blocked_count = case planning_dirty && manual_attention_count == 0 && blocked_count == 0 {
+  let derived_blocked_count = case
+    planning_dirty && manual_attention_count == 0 && blocked_count == 0
+  {
     True -> 1
     False -> manual_attention_count + blocked_count
   }
@@ -67,7 +69,9 @@ fn render_summary(
     tasks
     |> list.filter(fn(task) { task.state == types.Failed })
     |> list.length
-  let run_level_failure_count = case latest_environment_preflight_failure(events) {
+  let run_level_failure_count = case
+    latest_environment_preflight_failure(events)
+  {
     Some(_) -> 1
     None -> 0
   }
@@ -75,15 +79,17 @@ fn render_summary(
     tasks
     |> list.filter(fn(task) {
       task.state == types.Queued
-      || {
-        task.state == types.Ready && task.kind == types.ImplementationTask
-      }
+      || { task.state == types.Ready && task.kind == types.ImplementationTask }
     })
     |> list.length
   let outstanding_decisions =
     tasks
-    |> list.filter(fn(task) { types.task_requires_manual_attention(decisions, task) })
-    |> list.map(fn(task) { list.length(types.unresolved_decision_requests(decisions, task)) })
+    |> list.filter(fn(task) {
+      types.task_requires_manual_attention(decisions, task)
+    })
+    |> list.map(fn(task) {
+      list.length(types.unresolved_decision_requests(decisions, task))
+    })
     |> list.fold(0, fn(total, count) { total + count })
 
   [
@@ -119,7 +125,11 @@ fn render_task(
   task: types.Task,
 ) -> String {
   "- ["
-  <> types.task_state_to_string(render_task_state(decisions, planning_dirty, task))
+  <> types.task_state_to_string(render_task_state(
+    decisions,
+    planning_dirty,
+    task,
+  ))
   <> "] "
   <> task.id
   <> ": "
@@ -163,7 +173,9 @@ fn render_task_details(
     pr_number -> " (PR #" <> pr_number <> ")"
   }
 
-  let decision_fragment = case types.task_requires_manual_attention(decisions, task) {
+  let decision_fragment = case
+    types.task_requires_manual_attention(decisions, task)
+  {
     True ->
       "\n  Outstanding decisions:\n"
       <> {
@@ -174,11 +186,14 @@ fn render_task_details(
     False -> ""
   }
 
-  let planning_fragment = case task.kind == types.ManualAttentionTask && planning_dirty {
+  let planning_fragment = case
+    task.kind == types.ManualAttentionTask && planning_dirty
+  {
     True ->
       case types.task_requires_manual_attention(decisions, task) {
         True -> ""
-        False -> "\n  Decision recorded; Night Shift still needs to replan this run."
+        False ->
+          "\n  Decision recorded; Night Shift still needs to replan this run."
       }
     False -> ""
   }
@@ -274,7 +289,9 @@ fn latest_run_failed_message(events: List(types.RunEvent)) -> Option(String) {
   latest_run_failed_message_loop(list.reverse(events))
 }
 
-fn latest_run_failed_message_loop(events: List(types.RunEvent)) -> Option(String) {
+fn latest_run_failed_message_loop(
+  events: List(types.RunEvent),
+) -> Option(String) {
   case events {
     [] -> None
     [event, ..rest] ->
@@ -288,7 +305,9 @@ fn latest_run_failed_message_loop(events: List(types.RunEvent)) -> Option(String
 fn run_failure_type(tasks: List(types.Task)) -> String {
   let completed_count =
     tasks
-    |> list.filter(fn(task) { task.state == types.Completed || task.pr_number != "" })
+    |> list.filter(fn(task) {
+      task.state == types.Completed || task.pr_number != ""
+    })
     |> list.length
   case completed_count > 0 {
     True -> "partial success"

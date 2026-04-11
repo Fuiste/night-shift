@@ -4,11 +4,15 @@ import gleam/list
 import gleam/option.{None, Some}
 import gleam/result
 import gleam/string
+import night_shift/domain/decisions as decision_domain
+import night_shift/domain/run_state
+import night_shift/domain/summary as domain_summary
+import night_shift/domain/task_graph
 import night_shift/git
 import night_shift/github
 import night_shift/journal
-import night_shift/provider
 import night_shift/project
+import night_shift/provider
 import night_shift/shell
 import night_shift/system
 import night_shift/types
@@ -18,9 +22,7 @@ pub fn start(
   run: types.RunRecord,
   config: types.Config,
 ) -> Result(types.RunRecord, String) {
-  use #(prepared_run, proceed) <- result.try(prepare_run_for_execution(
-    run,
-  ))
+  use #(prepared_run, proceed) <- result.try(prepare_run_for_execution(run))
   case proceed {
     True -> scheduler_loop(config, prepared_run)
     False -> Ok(prepared_run)
@@ -42,7 +44,7 @@ pub fn resume(
   let resumed_tasks =
     run.tasks
     |> list.map(fn(task) { recover_task(task) })
-    |> refresh_ready_states
+    |> task_graph.refresh_ready_states
 
   let resumed_run = types.RunRecord(..run, tasks: resumed_tasks)
   let event =
@@ -86,7 +88,8 @@ pub fn review(
     })
 
   use tasks <- result.try(review_tasks)
-  let seeded_run = types.RunRecord(..run, tasks: normalize_tasks(tasks))
+  let seeded_run =
+    types.RunRecord(..run, tasks: task_graph.normalize_tasks(tasks))
   let event =
     types.RunEvent(
       kind: "task_progress",
@@ -118,15 +121,15 @@ fn plan_with_event(
     run.brief_path,
     run.run_path,
     run.decisions,
-    completed_tasks(run.tasks),
+    task_graph.completed_tasks(run.tasks),
   ))
 
-  let normalized_tasks = normalize_tasks(planned_tasks)
+  let normalized_tasks = task_graph.normalize_tasks(planned_tasks)
   let merged_tasks =
-    merge_planned_tasks(run.tasks, normalized_tasks)
-    |> apply_decision_states(run.decisions)
-    |> refresh_ready_states
-  let status = planning_status(run.decisions, merged_tasks)
+    task_graph.merge_planned_tasks(run.tasks, normalized_tasks)
+    |> decision_domain.apply_decision_states(run.decisions)
+    |> task_graph.refresh_ready_states
+  let status = decision_domain.planning_status(run.decisions, merged_tasks)
   let updated_run =
     types.RunRecord(
       ..run,
@@ -134,7 +137,8 @@ fn plan_with_event(
       planning_dirty: False,
       status: status,
     )
-  let unresolved_count = unresolved_decision_count(run.decisions, merged_tasks)
+  let unresolved_count =
+    decision_domain.unresolved_decision_count(run.decisions, merged_tasks)
   let plan_event =
     types.RunEvent(
       kind: event_kind,
@@ -142,7 +146,7 @@ fn plan_with_event(
       message: message_prefix
         <> int.to_string(list.length(normalized_tasks))
         <> " tasks"
-        <> planning_event_suffix(unresolved_count)
+        <> decision_domain.planning_event_suffix(unresolved_count)
         <> ".",
       task_id: None,
     )
@@ -151,12 +155,12 @@ fn plan_with_event(
   use planned_run <- result.try(journal.append_event(rewritten_run, plan_event))
   use signaled_run <- result.try(append_decision_request_events(
     planned_run,
-    decision_requesting_tasks(run.decisions, merged_tasks),
+    decision_domain.decision_requesting_tasks(run.decisions, merged_tasks),
   ))
   journal.mark_status(
     signaled_run,
     status,
-    planning_status_message(run.decisions, merged_tasks),
+    decision_domain.planning_status_message(run.decisions, merged_tasks),
   )
 }
 
@@ -164,16 +168,18 @@ fn prepare_run_for_execution(
   run: types.RunRecord,
 ) -> Result(#(types.RunRecord, Bool), String) {
   let refreshed_run =
-    types.RunRecord(..run, tasks: refresh_ready_states(run.tasks))
+    types.RunRecord(..run, tasks: task_graph.refresh_ready_states(run.tasks))
 
-  case has_blocking_attention(refreshed_run.tasks) {
+  case run_state.has_blocking_attention(refreshed_run.tasks) {
     True ->
       append_manual_attention_events(refreshed_run)
       |> result.map(fn(updated_run) { #(updated_run, True) })
     False ->
-      case next_batch(refreshed_run.tasks, refreshed_run.max_workers) {
+      case
+        task_graph.next_batch(refreshed_run.tasks, refreshed_run.max_workers)
+      {
         [] -> Ok(#(refreshed_run, True))
-        [task, .._] if task.kind == types.ManualAttentionTask ->
+        [task, ..] if task.kind == types.ManualAttentionTask ->
           append_manual_attention_events(refreshed_run)
           |> result.map(fn(updated_run) { #(updated_run, True) })
         _ -> {
@@ -221,11 +227,12 @@ fn scheduler_loop(
   run: types.RunRecord,
 ) -> Result(types.RunRecord, String) {
   let refreshed_run =
-    types.RunRecord(..run, tasks: refresh_ready_states(run.tasks))
-  case has_blocking_attention(refreshed_run.tasks) {
+    types.RunRecord(..run, tasks: task_graph.refresh_ready_states(run.tasks))
+  case run_state.has_blocking_attention(refreshed_run.tasks) {
     True -> finish_run(refreshed_run)
     False -> {
-      let batch = next_batch(refreshed_run.tasks, refreshed_run.max_workers)
+      let batch =
+        task_graph.next_batch(refreshed_run.tasks, refreshed_run.max_workers)
 
       case batch {
         [] -> finish_run(refreshed_run)
@@ -248,11 +255,11 @@ fn scheduler_loop(
 }
 
 fn finish_run(run: types.RunRecord) -> Result(types.RunRecord, String) {
-  let status = final_status(run.tasks)
+  let status = run_state.final_status(run.tasks)
   let message = case status {
     types.RunCompleted -> "Night Shift completed all queued work."
     types.RunFailed -> "Night Shift encountered failed tasks."
-    types.RunBlocked -> blocked_run_message(run.tasks)
+    types.RunBlocked -> domain_summary.blocked_run_message(run.tasks)
     _ -> "Night Shift stopped."
   }
 
@@ -282,21 +289,26 @@ fn launch_batch_loop(
             run,
             task,
             types.ManualAttention,
-            manual_attention_summary(task),
+            domain_summary.manual_attention_summary(task),
             "task_manual_attention",
           ))
           Ok(#(blocked_run, list.reverse(acc)))
         }
         types.ImplementationTask -> {
           let branch_name = case task.branch_name {
-            "" -> build_branch_name(config.branch_prefix, run.run_id, task.id)
+            "" ->
+              task_graph.build_branch_name(
+                config.branch_prefix,
+                run.run_id,
+                task.id,
+              )
             existing_branch -> existing_branch
           }
           let worktree_path =
             filepath.join(run.run_path, "worktrees/" <> task.id)
           let is_existing_worktree = task.branch_name != ""
           let base_ref = case task.branch_name {
-            "" -> task_base_ref(task, run.tasks, config.base_branch)
+            "" -> task_graph.task_base_ref(task, run.tasks, config.base_branch)
             existing_branch -> existing_branch
           }
           let git_log =
@@ -333,7 +345,7 @@ fn launch_batch_loop(
               let updated_run =
                 types.RunRecord(
                   ..run,
-                  tasks: replace_task(run.tasks, running_task),
+                  tasks: task_graph.replace_task(run.tasks, running_task),
                 )
               let event =
                 types.RunEvent(
@@ -381,10 +393,11 @@ fn launch_batch_loop(
             Error(message) -> {
               let failed_task =
                 types.Task(..task, state: types.Failed, summary: message)
-              let failed_run = types.RunRecord(
-                ..run,
-                tasks: replace_task(run.tasks, failed_task),
-              )
+              let failed_run =
+                types.RunRecord(
+                  ..run,
+                  tasks: task_graph.replace_task(run.tasks, failed_task),
+                )
               let event =
                 types.RunEvent(
                   kind: "task_failed",
@@ -415,19 +428,14 @@ fn await_batch(
     [task_run, ..rest] -> {
       let next_run_result = case provider.await_task(task_run) {
         Ok(execution_result) ->
-          case complete_task(
-            config,
-            run,
-            task_run,
-            execution_result,
-          ) {
+          case complete_task(config, run, task_run, execution_result) {
             Ok(updated_run) -> Ok(updated_run)
             Error(message) ->
               mark_task_with_event(
                 run,
                 task_run.task,
                 types.Failed,
-                completion_failure_summary(message),
+                domain_summary.completion_failure_summary(message),
                 "task_failed",
               )
           }
@@ -466,7 +474,7 @@ fn finalize_non_success(
   task: types.Task,
   execution_result: types.ExecutionResult,
 ) -> Result(types.RunRecord, String) {
-  let event_kind = event_kind_for_state(execution_result.status)
+  let event_kind = run_state.event_kind_for_state(execution_result.status)
   mark_task_with_event(
     run,
     task,
@@ -549,11 +557,17 @@ fn finalize_success(
 
       case delivery_result {
         Error(message) ->
-          Error(task_failure_summary("git delivery failed.", message))
+          Error(domain_summary.task_failure_summary(
+            "git delivery failed.",
+            message,
+          ))
         Ok(_) ->
           case git.head_commit(task_run.worktree_path, git_log) {
             Error(message) ->
-              Error(task_failure_summary("git delivery failed.", message))
+              Error(domain_summary.task_failure_summary(
+                "git delivery failed.",
+                message,
+              ))
             Ok(delivered_head) -> {
               let delivered_files =
                 git.changed_files_between(
@@ -574,13 +588,18 @@ fn finalize_success(
                   )
                 }
                 False ->
-                  case git.push_branch(
-                    task_run.worktree_path,
-                    task_run.branch_name,
-                    git_log,
-                  ) {
+                  case
+                    git.push_branch(
+                      task_run.worktree_path,
+                      task_run.branch_name,
+                      git_log,
+                    )
+                  {
                     Error(message) ->
-                      Error(task_failure_summary("git delivery failed.", message))
+                      Error(domain_summary.task_failure_summary(
+                        "git delivery failed.",
+                        message,
+                      ))
                     Ok(_) -> {
                       let pr_body =
                         build_pr_body(
@@ -589,17 +608,19 @@ fn finalize_success(
                           final_execution,
                           verification_output,
                         )
-                      case github.open_or_update_pr(
-                        task_run.worktree_path,
-                        task_run.branch_name,
-                        task_run.base_ref,
-                        final_execution.pr.title,
-                        pr_body,
-                        run.run_path,
-                        git_log,
-                      ) {
+                      case
+                        github.open_or_update_pr(
+                          task_run.worktree_path,
+                          task_run.branch_name,
+                          task_run.base_ref,
+                          final_execution.pr.title,
+                          pr_body,
+                          run.run_path,
+                          git_log,
+                        )
+                      {
                         Error(message) ->
-                          Error(task_failure_summary(
+                          Error(domain_summary.task_failure_summary(
                             "GitHub PR delivery failed.",
                             message,
                           ))
@@ -615,23 +636,25 @@ fn finalize_success(
                             )
 
                           let merged_tasks =
-                            apply_decision_states(
-                              merge_follow_up_tasks(
-                                replace_task(run.tasks, completed_task),
+                            decision_domain.apply_decision_states(
+                              task_graph.merge_follow_up_tasks(
+                                task_graph.replace_task(
+                                  run.tasks,
+                                  completed_task,
+                                ),
                                 final_execution.follow_up_tasks,
                               ),
                               run.decisions,
                             )
-                            |> refresh_ready_states
-                          let updated_run = types.RunRecord(
-                            ..run,
-                            tasks: merged_tasks,
-                          )
+                            |> task_graph.refresh_ready_states
+                          let updated_run =
+                            types.RunRecord(..run, tasks: merged_tasks)
                           let verified_event =
                             types.RunEvent(
                               kind: "task_verified",
                               at: system.timestamp(),
-                              message: "Verification passed for " <> task_run.task.title,
+                              message: "Verification passed for "
+                                <> task_run.task.title,
                               task_id: Some(task_run.task.id),
                             )
                           use verified_run <- result.try(journal.append_event(
@@ -641,7 +664,7 @@ fn finalize_success(
                           journal.append_event(
                             types.RunRecord(
                               ..verified_run,
-                              tasks: replace_task(
+                              tasks: task_graph.replace_task(
                                 verified_run.tasks,
                                 types.Task(
                                   ..completed_task,
@@ -681,16 +704,14 @@ fn finalize_success(
 }
 
 fn task_failure_summary(headline: String, details: String) -> String {
-  "Primary blocker: "
-  <> headline
-  <> "\n\nEnvironment notes:\n"
-  <> details
+  "Primary blocker: " <> headline <> "\n\nEnvironment notes:\n" <> details
 }
 
 fn completion_failure_summary(message: String) -> String {
   case string.starts_with(message, "Primary blocker:") {
     True -> message
-    False -> task_failure_summary("task completion failed unexpectedly.", message)
+    False ->
+      task_failure_summary("task completion failed unexpectedly.", message)
   }
 }
 
@@ -767,9 +788,7 @@ fn next_batch(tasks: List(types.Task), max_workers: Int) -> List(types.Task) {
   let ready_tasks = list.filter(tasks, fn(task) { task.state == types.Ready })
 
   case
-    list.find(ready_tasks, fn(task) {
-      task.kind == types.ManualAttentionTask
-    })
+    list.find(ready_tasks, fn(task) { task.kind == types.ManualAttentionTask })
   {
     Ok(task) -> [task]
     Error(_) ->
@@ -882,7 +901,11 @@ fn planning_status(
   decisions: List(types.RecordedDecision),
   tasks: List(types.Task),
 ) -> types.RunStatus {
-  case list.any(tasks, fn(task) { types.task_requires_manual_attention(decisions, task) }) {
+  case
+    list.any(tasks, fn(task) {
+      types.task_requires_manual_attention(decisions, task)
+    })
+  {
     True -> types.RunBlocked
     False -> types.RunPending
   }
@@ -896,7 +919,10 @@ fn planning_status_message(
   case planning_status(decisions, tasks) {
     types.RunBlocked ->
       "Night Shift is awaiting manual review for "
-      <> pluralize(list.length(decision_requesting_tasks(decisions, tasks)), "task")
+      <> pluralize(
+        list.length(decision_requesting_tasks(decisions, tasks)),
+        "task",
+      )
       <> " across "
       <> pluralize(unresolved_count, "decision")
       <> "."
@@ -912,7 +938,9 @@ fn decision_requesting_tasks(
   tasks: List(types.Task),
 ) -> List(types.Task) {
   tasks
-  |> list.filter(fn(task) { types.task_requires_manual_attention(decisions, task) })
+  |> list.filter(fn(task) {
+    types.task_requires_manual_attention(decisions, task)
+  })
 }
 
 fn unresolved_decision_count(
@@ -920,7 +948,9 @@ fn unresolved_decision_count(
   tasks: List(types.Task),
 ) -> Int {
   decision_requesting_tasks(decisions, tasks)
-  |> list.map(fn(task) { list.length(types.unresolved_decision_requests(decisions, task)) })
+  |> list.map(fn(task) {
+    list.length(types.unresolved_decision_requests(decisions, task))
+  })
   |> list.fold(0, fn(total, count) { total + count })
 }
 

@@ -7,6 +7,7 @@ import gleam/result
 import gleam/string
 import night_shift/agent_config
 import night_shift/cli
+import night_shift/codec/artifact_path
 import night_shift/config
 import night_shift/dashboard
 import night_shift/demo
@@ -18,6 +19,13 @@ import night_shift/provider
 import night_shift/provider_models
 import night_shift/system
 import night_shift/types
+import night_shift/usecase/plan as plan_usecase
+import night_shift/usecase/render as usecase_render
+import night_shift/usecase/reset as reset_usecase
+import night_shift/usecase/resume as resume_usecase
+import night_shift/usecase/review as review_usecase
+import night_shift/usecase/start as start_usecase
+import night_shift/usecase/status as status_usecase
 import night_shift/worktree_setup
 import simplifile
 
@@ -41,16 +49,20 @@ pub fn run(command: types.Command) -> Nil {
       case load_repo_config(repo_root) {
         Error(message) -> io.println(message)
         Ok(config) ->
-          io.println(
-            init(repo_root, config, agent_overrides, generate_setup, assume_yes),
-          )
+          io.println(init(
+            repo_root,
+            config,
+            agent_overrides,
+            generate_setup,
+            assume_yes,
+          ))
       }
-    types.Reset(assume_yes, force) -> io.println(reset(repo_root, assume_yes, force))
+    types.Reset(assume_yes, force) ->
+      io.println(reset(repo_root, assume_yes, force))
     _ ->
       case load_initialized_repo_config(repo_root) {
         Error(message) -> io.println(message)
-        Ok(config) ->
-          run_initialized_command(repo_root, config, command)
+        Ok(config) -> run_initialized_command(repo_root, config, command)
       }
   }
 }
@@ -70,7 +82,9 @@ fn load_repo_config(repo_root: String) -> Result(types.Config, String) {
   }
 }
 
-fn load_initialized_repo_config(repo_root: String) -> Result(types.Config, String) {
+fn load_initialized_repo_config(
+  repo_root: String,
+) -> Result(types.Config, String) {
   let config_path = project.config_path(repo_root)
   case simplifile.read(config_path) {
     Ok(contents) ->
@@ -94,13 +108,11 @@ fn run_initialized_command(
 ) -> Nil {
   case command {
     types.Plan(notes_value, doc_path, agent_overrides) ->
-      io.println(
-        case agent_config.resolve_plan_agent(config, agent_overrides) {
-          Ok(planning_agent) ->
-            plan(repo_root, notes_value, doc_path, planning_agent, config)
-          Error(message) -> message
-        },
-      )
+      io.println(case agent_config.resolve_plan_agent(config, agent_overrides) {
+        Ok(planning_agent) ->
+          plan(repo_root, notes_value, doc_path, planning_agent, config)
+        Error(message) -> message
+      })
     types.Start(run, False) -> io.println(start(repo_root, run, config))
     types.Start(run, True) -> start_with_ui(repo_root, run, config)
     types.Status(run) -> io.println(status(repo_root, run))
@@ -128,12 +140,7 @@ fn init(
 
   case
     init_project_home(repo_root),
-    choose_init_config(
-      repo_root,
-      config,
-      agent_overrides,
-      config_exists,
-    ),
+    choose_init_config(repo_root, config, agent_overrides, config_exists),
     choose_setup_request(generate_setup, assume_yes, setup_exists),
     ensure_file(project.gitignore_path(repo_root), project_gitignore_contents())
   {
@@ -149,8 +156,12 @@ fn init(
         )
       {
         Ok(config_status), Ok(setup_status) ->
-          "Initialized " <> project.home(repo_root) <> "\nConfig: " <> config_status
-          <> "\nWorktree setup: " <> setup_status
+          "Initialized "
+          <> project.home(repo_root)
+          <> "\nConfig: "
+          <> config_status
+          <> "\nWorktree setup: "
+          <> setup_status
         Error(message), _ -> message
         _, Error(message) -> message
       }
@@ -170,7 +181,10 @@ fn choose_init_config(
   case config_exists {
     True -> Ok(config)
     False -> {
-      use selected_provider <- result.try(resolve_init_provider(config, agent_overrides))
+      use selected_provider <- result.try(resolve_init_provider(
+        config,
+        agent_overrides,
+      ))
       use _ <- result.try(validate_init_reasoning(
         selected_provider,
         agent_overrides.reasoning,
@@ -181,7 +195,12 @@ fn choose_init_config(
         selected_provider,
         agent_overrides,
       ))
-      Ok(build_init_config(config, agent_overrides, selected_provider, selected_model))
+      Ok(build_init_config(
+        config,
+        agent_overrides,
+        selected_provider,
+        selected_model,
+      ))
     }
   }
 }
@@ -203,9 +222,13 @@ fn choose_setup_request(
               Ok(
                 select_from_labels(
                   "3. Should Night Shift draft an initial worktree setup using that provider?",
-                  ["Yes, draft worktree-setup.toml", "No, create the blank template"],
+                  [
+                    "Yes, draft worktree-setup.toml",
+                    "No, create the blank template",
+                  ],
                   0,
-                ) == 0,
+                )
+                == 0,
               )
             False ->
               Error(
@@ -230,11 +253,13 @@ fn resolve_init_provider(
             "cursor - Cursor Agent",
           ]
           let default_index = default_provider_index(config)
-          case select_from_labels(
-            "1. Which provider do you want to use?",
-            options,
-            default_index,
-          ) {
+          case
+            select_from_labels(
+              "1. Which provider do you want to use?",
+              options,
+              default_index,
+            )
+          {
             1 -> Ok(types.Cursor)
             _ -> Ok(types.Codex)
           }
@@ -258,14 +283,18 @@ fn resolve_init_model(
     None ->
       case can_prompt_interactively() {
         True -> {
-          use models <- result.try(provider_models.list_models(provider_name, repo_root))
+          use models <- result.try(provider_models.list_models(
+            provider_name,
+            repo_root,
+          ))
           let labels = models |> list.map(fn(model) { model.label })
-          let default_index = preferred_model_index(config, provider_name, models)
+          let default_index =
+            preferred_model_index(config, provider_name, models)
           let selected_index =
             select_from_labels(
               "2. Which "
-              <> types.provider_to_string(provider_name)
-              <> " model should be your default?",
+                <> types.provider_to_string(provider_name)
+                <> " model should be your default?",
               labels,
               default_index,
             )
@@ -349,7 +378,9 @@ fn preferred_model_index(
 }
 
 fn default_profile(config: types.Config) -> Result(types.AgentProfile, Nil) {
-  list.find(config.profiles, fn(profile) { profile.name == config.default_profile })
+  list.find(config.profiles, fn(profile) {
+    profile.name == config.default_profile
+  })
 }
 
 fn find_model_index(
@@ -372,7 +403,7 @@ fn model_id_at(
   index: Int,
 ) -> Result(String, String) {
   case models, index {
-    [model, .._], 0 -> Ok(model.id)
+    [model, ..], 0 -> Ok(model.id)
     [_, ..rest], _ -> model_id_at(rest, index - 1)
     [], _ -> Error("The selected model was out of range.")
   }
@@ -407,60 +438,17 @@ fn plan(
   planning_agent: types.ResolvedAgentConfig,
   config: types.Config,
 ) -> String {
-  let target_doc_path = resolve_doc_path(repo_root, doc_path)
   case
-    resolve_notes_source(repo_root, notes_value),
-    agent_config.resolve_start_agents(config, types.empty_agent_overrides()),
-    resolve_environment_name(repo_root, None)
+    plan_usecase.execute(
+      repo_root,
+      notes_value,
+      doc_path,
+      planning_agent,
+      config,
+    )
   {
-            Ok(notes_source), Ok(#(_default_plan_agent, execution_agent)), Ok(
-      selected_environment,
-    ) ->
-      case
-        provider.plan_document(
-          planning_agent,
-          repo_root,
-          notes_source,
-          target_doc_path,
-        )
-      {
-        Ok(#(document, artifact_path, resolved_notes_source)) ->
-          case write_string(target_doc_path, document) {
-            Ok(_) ->
-              case
-                prepare_planning_run(
-                  repo_root,
-                  target_doc_path,
-                  planning_agent,
-                  execution_agent,
-                  selected_environment,
-                  config.max_workers,
-                  resolved_notes_source,
-                )
-              {
-                Ok(#(seeded_run, replanning)) ->
-                  case case replanning {
-                    True -> orchestrator.replan(seeded_run)
-                    False -> orchestrator.plan(seeded_run)
-                  } {
-                    Ok(planned_run) ->
-                      render_planning_summary(
-                        planned_run,
-                        target_doc_path,
-                        artifact_path,
-                        resolved_notes_source,
-                      )
-                    Error(message) -> message
-                  }
-                Error(message) -> message
-              }
-            Error(message) -> message
-          }
-        Error(message) -> message
-      }
-    Error(message), _, _ -> message
-    _, Error(message), _ -> message
-    _, _, Error(message) -> message
+    Ok(view) -> usecase_render.render_plan(view)
+    Error(message) -> message
   }
 }
 
@@ -469,21 +457,8 @@ fn start(
   run_selector: types.RunSelector,
   config: types.Config,
 ) -> String {
-  case load_start_run(repo_root, run_selector) {
-    Ok(run) ->
-      case ensure_clean_repo_for_start(repo_root) {
-        Ok(warning) ->
-          case journal.activate_run(run) {
-            Ok(active_run) ->
-              render_active_run_outcome(
-                active_run,
-                warning,
-                orchestrator.start(active_run, config),
-              )
-            Error(message) -> message
-          }
-        Error(message) -> message
-      }
+  case start_usecase.execute(repo_root, run_selector, config) {
+    Ok(view) -> usecase_render.render_start(view)
     Error(message) -> message
   }
 }
@@ -499,9 +474,9 @@ fn resolve_environment_name(
   repo_root: String,
   requested: Option(String),
 ) -> Result(String, String) {
-  use maybe_config <- result.try(worktree_setup.load(
-    project.worktree_setup_path(repo_root),
-  ))
+  use maybe_config <- result.try(
+    worktree_setup.load(project.worktree_setup_path(repo_root)),
+  )
   use selected <- result.try(worktree_setup.choose_environment(
     maybe_config,
     requested,
@@ -518,11 +493,15 @@ fn ensure_saved_environment_is_valid(
 ) -> Result(Nil, String) {
   case environment_name {
     "" -> Ok(Nil)
-    name -> resolve_environment_name(repo_root, Some(name)) |> result.map(fn(_) { Nil })
+    name ->
+      resolve_environment_name(repo_root, Some(name))
+      |> result.map(fn(_) { Nil })
   }
 }
 
-fn ensure_clean_repo_for_start(repo_root: String) -> Result(Option(String), String) {
+fn ensure_clean_repo_for_start(
+  repo_root: String,
+) -> Result(Option(String), String) {
   let log_path =
     filepath.join(system.state_directory(), "night-shift/start-clean.log")
   let changed_files = git.changed_files(repo_root, log_path)
@@ -564,7 +543,10 @@ fn write_string(path: String, contents: String) -> Result(Nil, String) {
   }
 }
 
-fn write_and_verify_string(path: String, contents: String) -> Result(Nil, String) {
+fn write_and_verify_string(
+  path: String,
+  contents: String,
+) -> Result(Nil, String) {
   use _ <- result.try(write_string(path, contents))
   case simplifile.read(path) {
     Ok(saved_contents) ->
@@ -680,29 +662,8 @@ fn crate_summary(config: types.Config) -> String {
 }
 
 fn status(repo_root: String, run: types.RunSelector) -> String {
-  case load_display_run(repo_root, run) {
-    Ok(#(saved_run, events)) ->
-      "Run "
-      <> saved_run.run_id
-      <> " is "
-      <> types.run_status_to_string(saved_run.status)
-      <> "\n"
-      <> "Planning: "
-      <> agent_config.summary(saved_run.planning_agent)
-      <> "\n"
-      <> "Execution: "
-      <> agent_config.summary(saved_run.execution_agent)
-      <> "\n"
-      <> "Notes: "
-      <> render_notes_source(saved_run.notes_source)
-      <> "\n"
-      <> status_summary(saved_run, events)
-      <> "\n"
-      <> "Events: "
-      <> int.to_string(list.length(events))
-      <> "\n"
-      <> "Report: "
-      <> saved_run.report_path
+  case status_usecase.execute(repo_root, run) {
+    Ok(view) -> usecase_render.render_status(view)
     Error(message) -> message
   }
 }
@@ -735,20 +696,8 @@ fn resume(
   run: types.RunSelector,
   config: types.Config,
 ) -> String {
-  case journal.load(repo_root, run) {
-    Ok(#(saved_run, _)) ->
-      case ensure_saved_environment_is_valid(
-        repo_root,
-        saved_run.environment_name,
-      ) {
-        Ok(Nil) ->
-          render_active_run_outcome(
-            saved_run,
-            None,
-            orchestrator.resume(saved_run, config),
-          )
-        Error(message) -> message
-      }
+  case resume_usecase.execute(repo_root, run, config) {
+    Ok(view) -> usecase_render.render_resume(view)
     Error(message) -> message
   }
 }
@@ -760,30 +709,10 @@ fn review(
   config: types.Config,
 ) -> String {
   case
-    resolve_environment_name(repo_root, environment_name),
-    agent_config.resolve_review_agent(config, agent_overrides)
+    review_usecase.execute(repo_root, agent_overrides, environment_name, config)
   {
-    Ok(selected_environment), Ok(review_agent) ->
-      case
-        journal.start_run(
-          repo_root,
-          project.config_path(repo_root),
-          review_agent,
-          review_agent,
-          selected_environment,
-          1,
-        )
-      {
-        Ok(run) ->
-          render_active_run_outcome(
-            run,
-            None,
-            orchestrator.review(run, config),
-          )
-        Error(message) -> message
-      }
-    Error(message), _ -> message
-    _, Error(message) -> message
+    Ok(view) -> usecase_render.render_review(view)
+    Error(message) -> message
   }
 }
 
@@ -821,8 +750,7 @@ fn render_active_run_outcome(
   outcome: Result(types.RunRecord, String),
 ) -> String {
   case outcome {
-    Ok(updated_run) ->
-      prefix_warning(warning, render_run_summary(updated_run))
+    Ok(updated_run) -> prefix_warning(warning, render_run_summary(updated_run))
     Error(message) ->
       case mark_latest_persisted_run_failed(active_run, message) {
         Ok(failed_run) ->
@@ -839,10 +767,9 @@ fn mark_latest_persisted_run_failed(
   active_run: types.RunRecord,
   message: String,
 ) -> Result(types.RunRecord, String) {
-  let latest_run = case journal.load(
-    active_run.repo_root,
-    types.RunId(active_run.run_id),
-  ) {
+  let latest_run = case
+    journal.load(active_run.repo_root, types.RunId(active_run.run_id))
+  {
     Ok(#(run, _)) -> recover_in_flight_tasks(run)
     Error(_) -> recover_in_flight_tasks(active_run)
   }
@@ -859,24 +786,23 @@ fn recover_in_flight_tasks(run: types.RunRecord) -> types.RunRecord {
 fn recover_in_flight_task(run_path: String, task: types.Task) -> types.Task {
   case task.state {
     types.Running -> {
-      let recovery_log = filepath.join(run_path, "logs/" <> task.id <> ".recovery.log")
-      let has_worktree_changes =
-        case task.worktree_path {
-          "" -> False
-          worktree_path -> git.has_changes(worktree_path, recovery_log)
-        }
+      let recovery_log =
+        filepath.join(run_path, "logs/" <> task.id <> ".recovery.log")
+      let has_worktree_changes = case task.worktree_path {
+        "" -> False
+        worktree_path -> git.has_changes(worktree_path, recovery_log)
+      }
       let recovered_state = case has_worktree_changes {
         True -> types.ManualAttention
         False -> types.Failed
       }
-      let recovered_summary =
-        case string.trim(task.summary) {
-          "" ->
-            "Primary blocker: Night Shift stopped before this started task could be finalized.\n\nEnvironment notes: inspect the task log and worktree before retrying."
-          existing ->
-            existing
-            <> "\n\nRecovery notes: Night Shift stopped before this started task could be finalized."
-        }
+      let recovered_summary = case string.trim(task.summary) {
+        "" ->
+          "Primary blocker: Night Shift stopped before this started task could be finalized.\n\nEnvironment notes: inspect the task log and worktree before retrying."
+        existing ->
+          existing
+          <> "\n\nRecovery notes: Night Shift stopped before this started task could be finalized."
+      }
       types.Task(..task, state: recovered_state, summary: recovered_summary)
     }
     _ -> task
@@ -937,10 +863,15 @@ fn prepare_planning_run(
 ) -> Result(#(types.RunRecord, Bool), String) {
   case journal.latest_reusable_run(repo_root) {
     Ok(Some(existing_run)) -> {
-      use brief_contents <- result.try(simplifile.read(brief_path)
+      use brief_contents <- result.try(
+        simplifile.read(brief_path)
         |> result.map_error(fn(error) {
-          "Unable to read " <> brief_path <> ": " <> simplifile.describe_error(error)
-        }))
+          "Unable to read "
+          <> brief_path
+          <> ": "
+          <> simplifile.describe_error(error)
+        }),
+      )
       use _ <- result.try(write_string(existing_run.brief_path, brief_contents))
       let updated_run =
         types.RunRecord(
@@ -1006,7 +937,9 @@ fn load_display_run(
   journal.load(repo_root, selector)
 }
 
-fn validate_startable_run(run: types.RunRecord) -> Result(types.RunRecord, String) {
+fn validate_startable_run(
+  run: types.RunRecord,
+) -> Result(types.RunRecord, String) {
   case run.status {
     types.RunPending ->
       case run.planning_dirty {
@@ -1020,25 +953,48 @@ fn validate_startable_run(run: types.RunRecord) -> Result(types.RunRecord, Strin
           )
         False -> Ok(run)
       }
-    types.RunBlocked ->
-      Error(start_guidance_for_run(run))
+    types.RunBlocked -> Error(start_guidance_for_run(run))
     types.RunActive ->
-      Error("Run " <> run.run_id <> " is already active. Use `night-shift resume --run " <> run.run_id <> "` or inspect status/report.")
+      Error(
+        "Run "
+        <> run.run_id
+        <> " is already active. Use `night-shift resume --run "
+        <> run.run_id
+        <> "` or inspect status/report.",
+      )
     types.RunCompleted ->
-      Error("Run " <> run.run_id <> " is already completed. Run `night-shift plan --notes ...` to create or refresh a runnable plan.")
+      Error(
+        "Run "
+        <> run.run_id
+        <> " is already completed. Run `night-shift plan --notes ...` to create or refresh a runnable plan.",
+      )
     types.RunFailed ->
-      Error("Run " <> run.run_id <> " already failed. Run `night-shift plan --notes ...` to create a fresh or refreshed plan.")
+      Error(
+        "Run "
+        <> run.run_id
+        <> " already failed. Run `night-shift plan --notes ...` to create a fresh or refreshed plan.",
+      )
   }
 }
 
-fn validate_resolvable_run(run: types.RunRecord) -> Result(types.RunRecord, String) {
+fn validate_resolvable_run(
+  run: types.RunRecord,
+) -> Result(types.RunRecord, String) {
   case run.status, run.planning_dirty, outstanding_decision_count(run) {
     types.RunBlocked, _, _ -> Ok(run)
     types.RunPending, True, _ -> Ok(run)
     types.RunPending, False, _ ->
-      Error("Run " <> run.run_id <> " is already ready to start. Run `night-shift start --run " <> run.run_id <> "`.")
+      Error(
+        "Run "
+        <> run.run_id
+        <> " is already ready to start. Run `night-shift start --run "
+        <> run.run_id
+        <> "`.",
+      )
     types.RunActive, _, _ ->
-      Error("Run " <> run.run_id <> " is active and cannot be resolved right now.")
+      Error(
+        "Run " <> run.run_id <> " is active and cannot be resolved right now.",
+      )
     types.RunCompleted, _, _ ->
       Error("Run " <> run.run_id <> " is already completed.")
     types.RunFailed, _, _ ->
@@ -1056,7 +1012,9 @@ fn load_latest_start_run(repo_root: String) -> Result(types.RunRecord, String) {
   }
 }
 
-fn load_latest_resolvable_run(repo_root: String) -> Result(types.RunRecord, String) {
+fn load_latest_resolvable_run(
+  repo_root: String,
+) -> Result(types.RunRecord, String) {
   case latest_open_run(repo_root) {
     Ok(run) -> validate_resolvable_run(run)
     Error(_) ->
@@ -1068,12 +1026,14 @@ fn load_latest_resolvable_run(repo_root: String) -> Result(types.RunRecord, Stri
 
 fn latest_open_run(repo_root: String) -> Result(types.RunRecord, String) {
   use runs <- result.try(journal.list_runs(repo_root))
-  case list.find(runs, fn(run) {
-    case run.status {
-      types.RunPending | types.RunBlocked | types.RunActive -> True
-      _ -> False
-    }
-  }) {
+  case
+    list.find(runs, fn(run) {
+      case run.status {
+        types.RunPending | types.RunBlocked | types.RunActive -> True
+        _ -> False
+      }
+    })
+  {
     Ok(run) -> Ok(run)
     Error(_) -> Error("No open Night Shift run was found.")
   }
@@ -1086,10 +1046,7 @@ fn render_notes_source(notes_source: Option(types.NotesSource)) -> String {
   }
 }
 
-fn status_summary(
-  run: types.RunRecord,
-  events: List(types.RunEvent),
-) -> String {
+fn status_summary(run: types.RunRecord, events: List(types.RunEvent)) -> String {
   case latest_environment_preflight_failure(events) {
     Some(message) ->
       "Environment bootstrap blocker: yes\n"
@@ -1206,12 +1163,14 @@ fn blocked_task_count(run: types.RunRecord) -> Int {
     run.tasks
     |> list.filter(fn(task) {
       task.kind == types.ImplementationTask
-      && {
-        task.state == types.Blocked || task.state == types.ManualAttention
-      }
+      && { task.state == types.Blocked || task.state == types.ManualAttention }
     })
     |> list.length
-  case run.planning_dirty && unresolved_blockers == 0 && implementation_blockers == 0 {
+  case
+    run.planning_dirty
+    && unresolved_blockers == 0
+    && implementation_blockers == 0
+  {
     True -> 1
     False -> unresolved_blockers + implementation_blockers
   }
@@ -1225,7 +1184,9 @@ fn queued_task_count(tasks: List(types.Task)) -> Int {
 
 fn unresolved_manual_attention_tasks(run: types.RunRecord) -> List(types.Task) {
   run.tasks
-  |> list.filter(fn(task) { types.task_requires_manual_attention(run.decisions, task) })
+  |> list.filter(fn(task) {
+    types.task_requires_manual_attention(run.decisions, task)
+  })
 }
 
 fn collect_recorded_decisions(
@@ -1234,7 +1195,8 @@ fn collect_recorded_decisions(
 ) -> Result(#(List(types.RecordedDecision), List(types.RunEvent)), String) {
   let prompts = pending_decision_prompts(run.decisions, tasks)
   case prompts {
-    [] -> Error("No unresolved manual-attention decisions were found for this run.")
+    [] ->
+      Error("No unresolved manual-attention decisions were found for this run.")
     _ -> collect_request_answers(prompts, [])
   }
 }
@@ -1243,7 +1205,13 @@ fn collect_request_answers(
   prompts: List(#(types.Task, types.DecisionRequest)),
   acc: List(types.RecordedDecision),
 ) -> Result(#(List(types.RecordedDecision), List(types.RunEvent)), String) {
-  collect_request_answers_with_warnings(prompts, acc, [], 1, list.length(prompts))
+  collect_request_answers_with_warnings(
+    prompts,
+    acc,
+    [],
+    1,
+    list.length(prompts),
+  )
 }
 
 fn collect_request_answers_with_warnings(
@@ -1449,9 +1417,15 @@ fn resolve_loop(run: types.RunRecord) -> String {
             Ok(rewritten_run) ->
               case append_run_events(rewritten_run, warning_events) {
                 Ok(warned_run) ->
-                  case append_decision_recorded_events(warned_run, new_decisions) {
+                  case
+                    append_decision_recorded_events(warned_run, new_decisions)
+                  {
                     Ok(signaled_run) ->
-                      case append_run_events(signaled_run, [planning_sync_pending_event()]) {
+                      case
+                        append_run_events(signaled_run, [
+                          planning_sync_pending_event(),
+                        ])
+                      {
                         Ok(dirty_run) -> continue_resolve_run(dirty_run)
                         Error(message) -> message
                       }
@@ -1659,7 +1633,9 @@ fn latest_run_failed_message(events: List(types.RunEvent)) -> String {
   }
 }
 
-fn latest_run_failed_message_loop(events: List(types.RunEvent)) -> Option(String) {
+fn latest_run_failed_message_loop(
+  events: List(types.RunEvent),
+) -> Option(String) {
   case events {
     [] -> None
     [event, ..rest] ->
@@ -1676,7 +1652,7 @@ fn reset(repo_root: String, assume_yes: Bool, force: Bool) -> String {
     Ok(Nil) ->
       case ensure_reset_is_safe(repo_root, force) {
         Error(message) -> message
-        Ok(Nil) -> perform_reset(repo_root)
+        Ok(Nil) -> usecase_render.render_reset(reset_usecase.execute(repo_root))
       }
   }
 }
@@ -1687,7 +1663,9 @@ fn confirm_reset(repo_root: String, assume_yes: Bool) -> Result(Nil, String) {
     False ->
       case can_prompt_interactively() {
         False ->
-          Error("night-shift reset requires --yes when not running in an interactive terminal.")
+          Error(
+            "night-shift reset requires --yes when not running in an interactive terminal.",
+          )
         True -> {
           io.println(
             "Reset Night Shift for "
@@ -1724,7 +1702,8 @@ fn ensure_reset_is_safe(repo_root: String, force: Bool) -> Result(Nil, String) {
 fn perform_reset(repo_root: String) -> String {
   let runs = journal.list_runs(repo_root) |> result.unwrap(or: [])
   let worktrees = collect_worktree_paths(runs, [])
-  let reset_log = filepath.join(system.state_directory(), "night-shift/reset.log")
+  let reset_log =
+    filepath.join(system.state_directory(), "night-shift/reset.log")
   let #(removed_worktrees, failed_worktrees) =
     remove_worktrees(repo_root, worktrees, reset_log, [], [])
   let prune_result = git.prune_worktrees(repo_root, reset_log)
@@ -1806,13 +1785,10 @@ fn remove_worktrees(
         Ok(_) ->
           remove_worktrees(repo_root, rest, log_path, [path, ..removed], failed)
         Error(message) ->
-          remove_worktrees(
-            repo_root,
-            rest,
-            log_path,
-            removed,
-            [path <> ": " <> message, ..failed],
-          )
+          remove_worktrees(repo_root, rest, log_path, removed, [
+            path <> ": " <> message,
+            ..failed
+          ])
       }
   }
 }
@@ -1828,16 +1804,7 @@ fn render_optional_list(entries: List(String)) -> String {
 }
 
 fn planning_artifact_path(repo_root: String) -> String {
-  filepath.join(
-    project.planning_root(repo_root),
-    system.timestamp()
-      |> string.replace(each: ":", with: "-")
-      |> string.replace(each: "T", with: "_")
-      |> string.replace(each: "+", with: "_")
-      |> string.replace(each: "Z", with: "")
-      |> string.append("-")
-      |> string.append(system.unique_id()),
-  )
+  artifact_path.timestamped_directory(project.planning_root(repo_root))
 }
 
 fn start_with_ui(
@@ -1864,7 +1831,10 @@ fn start_with_ui(
                     Some(message) -> io.println(message)
                     None -> Nil
                   }
-                  io.println(render_dashboard_summary(session.url, active_run.run_id))
+                  io.println(render_dashboard_summary(
+                    session.url,
+                    active_run.run_id,
+                  ))
                   system.wait_forever()
                 }
                 Error(message) -> io.println(message)
@@ -1884,10 +1854,9 @@ fn resume_with_ui(
 ) -> Nil {
   case journal.load(repo_root, run) {
     Ok(#(saved_run, _)) ->
-      case ensure_saved_environment_is_valid(
-        repo_root,
-        saved_run.environment_name,
-      ) {
+      case
+        ensure_saved_environment_is_valid(repo_root, saved_run.environment_name)
+      {
         Ok(Nil) ->
           case
             dashboard.start_resume_session(

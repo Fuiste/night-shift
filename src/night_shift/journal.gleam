@@ -5,6 +5,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
+import night_shift/codec/artifact_path
 import night_shift/project
 import night_shift/report
 import night_shift/system
@@ -92,11 +93,8 @@ pub fn activate_run(run: types.RunRecord) -> Result(types.RunRecord, String) {
       message: "Night Shift started.",
       task_id: None,
     )
-  let updated_run = types.RunRecord(
-    ..run,
-    status: types.RunActive,
-    updated_at: event.at,
-  )
+  let updated_run =
+    types.RunRecord(..run, status: types.RunActive, updated_at: event.at)
   use existing_events <- result.try(read_events(run.events_path))
   use _ <- result.try(save(updated_run, list.append(existing_events, [event])))
   Ok(updated_run)
@@ -387,13 +385,7 @@ fn read_run(path: String) -> Result(types.RunRecord, String) {
 }
 
 fn make_run_id() -> String {
-  system.timestamp()
-  |> string.replace(each: ":", with: "-")
-  |> string.replace(each: "T", with: "_")
-  |> string.replace(each: "+", with: "_")
-  |> string.replace(each: "Z", with: "")
-  |> string.append("-")
-  |> string.append(system.unique_id())
+  artifact_path.timestamped_id()
 }
 
 fn repo_state_path(repo_root: String) -> String {
@@ -432,7 +424,10 @@ fn encode_run(run: types.RunRecord) -> String {
     #("execution_agent", encode_resolved_agent(run.execution_agent)),
     #("environment_name", json.string(run.environment_name)),
     #("max_workers", json.int(run.max_workers)),
-    #("notes_source", json.nullable(from: run.notes_source, of: encode_notes_source)),
+    #(
+      "notes_source",
+      json.nullable(from: run.notes_source, of: encode_notes_source),
+    ),
     #("decisions", json.array(run.decisions, encode_recorded_decision)),
     #("planning_dirty", json.bool(run.planning_dirty)),
     #("status", json.string(types.run_status_to_string(run.status))),
@@ -448,7 +443,10 @@ fn encode_notes_source(source: types.NotesSource) -> json.Json {
     types.NotesFile(path) ->
       json.object([#("kind", json.string("file")), #("path", json.string(path))])
     types.InlineNotes(path) ->
-      json.object([#("kind", json.string("inline")), #("path", json.string(path))])
+      json.object([
+        #("kind", json.string("inline")),
+        #("path", json.string(path)),
+      ])
   }
 }
 
@@ -499,7 +497,10 @@ fn encode_task(task: types.Task) -> json.Json {
       json.array(task.decision_requests, encode_decision_request),
     ),
     #("task_kind", json.string(types.task_kind_to_string(task.kind))),
-    #("execution_mode", json.string(types.execution_mode_to_string(task.execution_mode))),
+    #(
+      "execution_mode",
+      json.string(types.execution_mode_to_string(task.execution_mode)),
+    ),
     #("state", json.string(types.task_state_to_string(task.state))),
     #("worktree_path", json.string(task.worktree_path)),
     #("branch_name", json.string(task.branch_name)),
@@ -824,7 +825,9 @@ fn task_parallel_safe_decoder() -> decode.Decoder(types.ExecutionMode) {
   }
 }
 
-fn optional_decision_requests_decoder() -> decode.Decoder(List(types.DecisionRequest)) {
+fn optional_decision_requests_decoder() -> decode.Decoder(
+  List(types.DecisionRequest),
+) {
   decode.one_of(
     {
       use requests <- decode.field(
@@ -837,10 +840,15 @@ fn optional_decision_requests_decoder() -> decode.Decoder(List(types.DecisionReq
   )
 }
 
-fn optional_decision_options_decoder() -> decode.Decoder(List(types.DecisionOption)) {
+fn optional_decision_options_decoder() -> decode.Decoder(
+  List(types.DecisionOption),
+) {
   decode.one_of(
     {
-      use options <- decode.field("options", decode.list(decision_option_decoder()))
+      use options <- decode.field(
+        "options",
+        decode.list(decision_option_decoder()),
+      )
       decode.success(options)
     },
     or: [decode.success([])],

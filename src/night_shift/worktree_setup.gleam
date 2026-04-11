@@ -3,6 +3,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
+import night_shift/codec/shared
 import night_shift/shell
 import night_shift/system
 import simplifile
@@ -52,19 +53,15 @@ pub type WorktreeSetupConfig {
 }
 
 pub fn default_config() -> WorktreeSetupConfig {
-  WorktreeSetupConfig(
-    version: 1,
-    default_environment: "default",
-    environments: [
-      WorktreeEnvironment(
-        name: "default",
-        env_vars: [],
-        preflight: empty_command_set(),
-        setup: empty_command_set(),
-        maintenance: empty_command_set(),
-      ),
-    ],
-  )
+  WorktreeSetupConfig(version: 1, default_environment: "default", environments: [
+    WorktreeEnvironment(
+      name: "default",
+      env_vars: [],
+      preflight: empty_command_set(),
+      setup: empty_command_set(),
+      maintenance: empty_command_set(),
+    ),
+  ])
 }
 
 pub fn default_template() -> String {
@@ -96,7 +93,7 @@ pub fn parse(contents: String) -> Result(WorktreeSetupConfig, String) {
 pub fn render(config: WorktreeSetupConfig) -> String {
   let root_lines = [
     "version = " <> int.to_string(config.version),
-    "default_environment = " <> render_string(config.default_environment),
+    "default_environment = " <> shared.render_string(config.default_environment),
     "",
   ]
 
@@ -105,9 +102,7 @@ pub fn render(config: WorktreeSetupConfig) -> String {
     |> list.map(render_environment)
     |> string.join(with: "\n\n")
 
-  string.join(root_lines, with: "\n")
-  <> environment_lines
-  <> "\n"
+  string.join(root_lines, with: "\n") <> environment_lines <> "\n"
 }
 
 pub fn choose_environment(
@@ -205,22 +200,28 @@ pub fn prepare_worktree(
 
   use _ <- result.try(write_log(
     log_path,
-    string.join([
-      "[environment]",
-      "phase=" <> phase_name,
-      "repo_root=" <> repo_root,
-      "pwd=" <> worktree_path,
-      "worktree=" <> worktree_path,
-      "branch=" <> branch_name,
-      "environment=" <> environment_label,
-      "env_vars=" <> redacted_env_names(selected),
-      "",
-    ], with: "\n"),
+    string.join(
+      [
+        "[environment]",
+        "phase=" <> phase_name,
+        "repo_root=" <> repo_root,
+        "pwd=" <> worktree_path,
+        "worktree=" <> worktree_path,
+        "branch=" <> branch_name,
+        "environment=" <> environment_label,
+        "env_vars=" <> redacted_env_names(selected),
+        "",
+      ],
+      with: "\n",
+    ),
   ))
 
   case selected {
     None ->
-      append_log(log_path, "[environment] no worktree setup configuration selected\n")
+      append_log(
+        log_path,
+        "[environment] no worktree setup configuration selected\n",
+      )
     Some(environment) ->
       run_environment_commands(
         commands_for_phase(environment, phase),
@@ -257,22 +258,27 @@ pub fn preflight_environment(
       let required_executables = preflight_requirements_for(environment)
       use _ <- result.try(write_log(
         log_path,
-        string.join([
-          "[environment-preflight]",
-          "repo_root=" <> repo_root,
-          "environment=" <> environment.name,
-          "env_vars=" <> redacted_env_names(Some(environment)),
-          "path=" <> system.get_env("PATH"),
-          "",
-        ], with: "\n"),
+        string.join(
+          [
+            "[environment-preflight]",
+            "repo_root=" <> repo_root,
+            "environment=" <> environment.name,
+            "env_vars=" <> redacted_env_names(Some(environment)),
+            "path=" <> system.get_env("PATH"),
+            "",
+          ],
+          with: "\n",
+        ),
       ))
-      use missing <- result.try(preflight_required_executables(
-        required_executables,
-        environment.env_vars,
-        repo_root,
-        log_path,
-        [],
-      ))
+      use missing <- result.try(
+        preflight_required_executables(
+          required_executables,
+          environment.env_vars,
+          repo_root,
+          log_path,
+          [],
+        ),
+      )
       case missing {
         [] -> Ok(Nil)
         _ ->
@@ -305,19 +311,18 @@ fn collapse_multiline_values(
     [], None -> list.reverse(acc)
     [], Some(current) -> list.reverse([current, ..acc])
     [line, ..rest], None -> {
-      let cleaned = strip_comments(line) |> string.trim
+      let cleaned = shared.strip_comments(line) |> string.trim
       case begins_multiline_list(cleaned) {
         True -> collapse_multiline_values(rest, acc, Some(cleaned))
         False -> collapse_multiline_values(rest, [cleaned, ..acc], None)
       }
     }
     [line, ..rest], Some(current) -> {
-      let cleaned = strip_comments(line) |> string.trim
-      let next =
-        case cleaned {
-          "" -> current
-          _ -> current <> " " <> cleaned
-        }
+      let cleaned = shared.strip_comments(line) |> string.trim
+      let next = case cleaned {
+        "" -> current
+        _ -> current <> " " <> cleaned
+      }
       case string.ends_with(cleaned, "]") {
         True -> collapse_multiline_values(rest, [next, ..acc], None)
         False -> collapse_multiline_values(rest, acc, Some(next))
@@ -353,7 +358,7 @@ fn parse_lines(
 fn parse_line(line: String, state: ParseState) -> Result(ParseState, String) {
   let cleaned =
     line
-    |> strip_comments
+    |> shared.strip_comments
     |> string.trim
 
   case cleaned {
@@ -403,7 +408,7 @@ fn apply_value(
 
   case state.section, key {
     RootSection, "version" -> {
-      use version <- result.try(parse_int(raw_value))
+      use version <- result.try(shared.parse_int(raw_value, "worktree setup"))
       Ok(ParseState(
         WorktreeSetupConfig(..config, version: version),
         state.section,
@@ -414,7 +419,7 @@ fn apply_value(
       Ok(ParseState(
         WorktreeSetupConfig(
           ..config,
-          default_environment: parse_string(raw_value),
+          default_environment: shared.parse_string(raw_value),
         ),
         state.section,
       ))
@@ -427,7 +432,7 @@ fn apply_value(
             env_vars: upsert_env_var(
               environment.env_vars,
               env_key,
-              parse_string(raw_value),
+              shared.parse_string(raw_value),
             ),
           )
         }),
@@ -469,7 +474,7 @@ fn update_command_set(
   section_name: String,
   state: ParseState,
 ) -> Result(ParseState, String) {
-  let commands = parse_string_list(raw_value)
+  let commands = shared.parse_string_list(raw_value)
   let update = fn(command_set: CommandSet) {
     case script_key {
       "default" -> CommandSet(..command_set, default: commands)
@@ -585,7 +590,7 @@ fn render_environment(environment: WorktreeEnvironment) -> String {
 
 fn render_env_vars(env_vars: List(#(String, String))) -> String {
   env_vars
-  |> list.map(fn(entry) { entry.0 <> " = " <> render_string(entry.1) })
+  |> list.map(fn(entry) { entry.0 <> " = " <> shared.render_string(entry.1) })
   |> string.join(with: "\n")
 }
 
@@ -599,67 +604,8 @@ fn render_command_set(command_set: CommandSet) -> String {
   |> string.join(with: "\n")
 }
 
-fn strip_comments(line: String) -> String {
-  case string.split(line, "#") {
-    [first, ..] -> first
-    [] -> line
-  }
-}
-
-fn parse_int(raw_value: String) -> Result(Int, String) {
-  case int.parse(string.trim(raw_value)) {
-    Ok(value) -> Ok(value)
-    Error(_) -> Error("Invalid integer in worktree setup: " <> raw_value)
-  }
-}
-
-fn parse_string(raw_value: String) -> String {
-  let trimmed = string.trim(raw_value)
-  case
-    string.starts_with(trimmed, "\""), string.ends_with(trimmed, "\"")
-  {
-    True, True ->
-      trimmed
-      |> string.drop_start(1)
-      |> string.drop_end(1)
-    _, _ -> trimmed
-  }
-}
-
-fn parse_string_list(raw_value: String) -> List(String) {
-  let trimmed = string.trim(raw_value)
-  case trimmed {
-    "[]" -> []
-    _ ->
-      trimmed
-      |> string.drop_start(1)
-      |> string.drop_end(1)
-      |> string.split(",")
-      |> list.filter_map(fn(item) {
-        case string.trim(item) {
-          "" -> Error(Nil)
-          value -> Ok(parse_string(value))
-        }
-      })
-  }
-}
-
-fn render_string(value: String) -> String {
-  "\"" <> string.replace(in: value, each: "\"", with: "\\\"") <> "\""
-}
-
 fn render_string_list(values: List(String)) -> String {
-  case values {
-    [] -> "[]"
-    _ ->
-      "["
-      <> {
-        values
-        |> list.map(render_string)
-        |> string.join(with: ", ")
-      }
-      <> "]"
-  }
+  shared.render_string_list(values)
 }
 
 fn current_platform() -> String {
@@ -718,8 +664,7 @@ fn run_environment_commands(
   case commands {
     [] -> Ok(Nil)
     [command, ..rest] -> {
-      let step_log =
-        log_path <> ".step-" <> int.to_string(index) <> ".log"
+      let step_log = log_path <> ".step-" <> int.to_string(index) <> ".log"
       let command_result =
         shell.run(shell.with_env(command, env_vars), cwd, step_log)
       use _ <- result.try(append_log(
@@ -765,7 +710,9 @@ fn preflight_requirements_for(environment: WorktreeEnvironment) -> List(String) 
   }
 }
 
-fn default_preflight_requirements(environment: WorktreeEnvironment) -> List(String) {
+fn default_preflight_requirements(
+  environment: WorktreeEnvironment,
+) -> List(String) {
   let from_setup =
     commands_for_phase(environment, SetupPhase)
     |> first_detected_executable
@@ -818,15 +765,14 @@ fn preflight_required_executables(
       Ok(missing)
     }
     [executable, ..rest] -> {
-      let next_missing =
-        case list.contains(missing, executable) {
-          True -> missing
-          False ->
-            case executable_exists(executable, env_vars, cwd, log_path) {
-              True -> missing
-              False -> [executable, ..missing]
-            }
-        }
+      let next_missing = case list.contains(missing, executable) {
+        True -> missing
+        False ->
+          case executable_exists(executable, env_vars, cwd, log_path) {
+            True -> missing
+            False -> [executable, ..missing]
+          }
+      }
 
       use _ <- result.try(append_log(
         log_path,
@@ -872,7 +818,9 @@ fn skip_env_assignments(tokens: List(String)) -> Option(String) {
       case string.trim(token) {
         "" -> skip_env_assignments(rest)
         value ->
-          case looks_like_env_assignment(value) || starts_with_shell_meta(value) {
+          case
+            looks_like_env_assignment(value) || starts_with_shell_meta(value)
+          {
             True -> skip_env_assignments(rest)
             False -> Some(value)
           }
@@ -902,7 +850,9 @@ fn write_log(path: String, contents: String) -> Result(Nil, String) {
   case simplifile.write(contents, to: path) {
     Ok(Nil) -> Ok(Nil)
     Error(error) ->
-      Error("Unable to write " <> path <> ": " <> simplifile.describe_error(error))
+      Error(
+        "Unable to write " <> path <> ": " <> simplifile.describe_error(error),
+      )
   }
 }
 
