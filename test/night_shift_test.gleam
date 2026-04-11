@@ -14,6 +14,7 @@ import night_shift/provider
 import night_shift/shell
 import night_shift/system
 import night_shift/types
+import night_shift/worktree_setup
 import simplifile
 
 pub fn main() -> Nil {
@@ -198,6 +199,11 @@ pub fn parse_default_config_values_test() {
   assert parsed.base_branch == "develop"
   assert parsed.max_workers == 2
   assert parsed.default_profile == "default"
+}
+
+pub fn parse_empty_worktree_setup_rejected_test() {
+  let assert Error(message) = worktree_setup.parse("")
+  assert string.contains(does: message, contain: "empty")
 }
 
 pub fn parse_profile_config_test() {
@@ -1021,6 +1027,58 @@ pub fn plan_document_reports_empty_payload_test() {
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
 
+pub fn generate_worktree_setup_reports_empty_payload_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-worktree-setup-empty-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let fake_codex = filepath.join(bin_dir, "codex")
+  let output_path =
+    filepath.join(repo_root, ".night-shift/worktree-setup.toml")
+  let state_home = filepath.join(base_dir, "state")
+  let old_path = system.get_env("PATH")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
+  let old_state_home = system.get_env("XDG_STATE_HOME")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = write_empty_worktree_setup_codex(fake_codex)
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_codex),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+
+  system.unset_env("NIGHT_SHIFT_FAKE_PROVIDER")
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("XDG_STATE_HOME", state_home)
+
+  let result =
+    provider.generate_worktree_setup(
+      agent_for(types.Codex),
+      repo_root,
+      output_path,
+    )
+
+  system.set_env("PATH", old_path)
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
+  system.set_env("XDG_STATE_HOME", old_state_home)
+
+  let assert Error(message) = result
+  assert string.contains(
+    does: message,
+    contain: "empty file",
+  )
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
 pub fn codex_plan_document_reads_prompt_from_stdin_test() {
   let unique = system.unique_id()
   let base_dir =
@@ -1690,6 +1748,20 @@ fn write_committing_fake_provider(
       <> "  git add IMPLEMENTED.md && git commit -m 'feat: provider created commit' >/dev/null 2>&1 || exit 1\n"
       <> "  printf 'execution\\nNIGHT_SHIFT_RESULT_START\\n{\"status\":\"completed\",\"summary\":\"Implemented demo task\",\"files_touched\":[\"IMPLEMENTED.md\"],\"demo_evidence\":[\"IMPLEMENTED.md created\"],\"pr\":{\"title\":\"[night-shift] Implement demo task\",\"summary\":\"Implemented the fake provider task.\",\"demo\":[\"IMPLEMENTED.md created\"],\"risks\":[]},\"follow_up_tasks\":[]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
       <> "fi\n",
+    to: path,
+  )
+}
+
+fn write_empty_worktree_setup_codex(
+  path: String,
+) -> Result(Nil, simplifile.FileError) {
+  simplifile.write(
+    "#!/bin/sh\n"
+      <> "if [ \"$1\" != \"exec\" ]; then\n"
+      <> "  printf 'unexpected codex subcommand: %s\\n' \"$1\" >&2\n"
+      <> "  exit 1\n"
+      <> "fi\n"
+      <> "printf 'planning\\nNIGHT_SHIFT_RESULT_START\\n\\nNIGHT_SHIFT_RESULT_END\\n'\n",
     to: path,
   )
 }

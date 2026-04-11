@@ -83,6 +83,8 @@ pub fn generate_worktree_setup(
   let artifact_path = planning_artifact_path(repo_root)
   let prompt_path = filepath.join(artifact_path, "worktree-setup.prompt.md")
   let log_path = filepath.join(artifact_path, "worktree-setup.log")
+  let generated_path =
+    filepath.join(artifact_path, "worktree-setup.generated.toml")
   use _ <- result.try(create_directory(artifact_path))
   use _ <- result.try(write_file(
     prompt_path,
@@ -105,13 +107,22 @@ pub fn generate_worktree_setup(
   case shell.succeeded(command_result) {
     True -> {
       use document <- result.try(extract_payload(command_result.output))
+      let trimmed_document = string.trim(document)
+      use _ <- result.try(case trimmed_document {
+        "" ->
+          Error(
+            "Worktree setup provider returned an empty file. See " <> log_path,
+          )
+        _ -> Ok(Nil)
+      })
       use _ <- result.try(
-        worktree_setup.parse(document)
+        worktree_setup.parse(trimmed_document)
         |> result.map_error(fn(message) {
           "Generated worktree setup was invalid: " <> message <> ". See " <> log_path
         }),
       )
-      Ok(#(document, artifact_path))
+      use _ <- result.try(write_file(generated_path, trimmed_document))
+      Ok(#(trimmed_document, artifact_path))
     }
     False -> Error("Worktree setup generation failed. See " <> log_path)
   }

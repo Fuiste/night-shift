@@ -76,12 +76,17 @@ pub fn load(path: String) -> Result(Option(WorktreeSetupConfig), String) {
 }
 
 pub fn parse(contents: String) -> Result(WorktreeSetupConfig, String) {
-  let initial = ParseState(default_config(), RootSection)
+  case string.trim(contents) {
+    "" -> Error("Worktree setup file is empty.")
+    _ -> {
+      let initial = ParseState(default_config(), RootSection)
 
-  contents
-  |> string.split("\n")
-  |> parse_lines(initial)
-  |> result.map(fn(state) { state.config })
+      contents
+      |> string.split("\n")
+      |> parse_lines(initial)
+      |> result.map(fn(state) { state.config })
+    }
+  }
 }
 
 pub fn render(config: WorktreeSetupConfig) -> String {

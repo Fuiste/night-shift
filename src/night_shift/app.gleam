@@ -346,6 +346,29 @@ fn write_string(path: String, contents: String) -> Result(Nil, String) {
   }
 }
 
+fn write_and_verify_string(path: String, contents: String) -> Result(Nil, String) {
+  use _ <- result.try(write_string(path, contents))
+  case simplifile.read(path) {
+    Ok(saved_contents) ->
+      case saved_contents == contents {
+        True -> Ok(Nil)
+        False ->
+          Error(
+            "Night Shift wrote "
+            <> path
+            <> " but the saved contents did not match the generated result. Remove the file and retry `night-shift init`.",
+          )
+      }
+    Error(error) ->
+      Error(
+        "Night Shift generated "
+        <> path
+        <> " but could not read it back after writing: "
+        <> simplifile.describe_error(error),
+      )
+  }
+}
+
 fn init_project_home(repo_root: String) -> Result(Nil, String) {
   use _ <- result.try(create_directory(project.home(repo_root)))
   use _ <- result.try(create_directory(project.runs_root(repo_root)))
@@ -377,16 +400,22 @@ fn ensure_worktree_setup_file(
             Ok(agent) ->
               case provider.generate_worktree_setup(agent, repo_root, path) {
                 Ok(#(contents, artifact_path)) ->
-                  write_string(path, contents)
+                  write_and_verify_string(path, contents)
                   |> result.map(fn(_) {
                     "generated " <> path <> " from " <> artifact_path
                   })
-                Error(message) -> Error(message)
+                Error(message) ->
+                  Error(
+                    message
+                    <> "\nA generated copy is kept under "
+                    <> project.planning_root(repo_root)
+                    <> ".",
+                  )
               }
             Error(message) -> Error(message)
           }
         False ->
-          write_string(path, worktree_setup.default_template())
+          write_and_verify_string(path, worktree_setup.default_template())
           |> result.map(fn(_) { "created " <> path })
       }
   }
