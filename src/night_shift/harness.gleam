@@ -46,7 +46,18 @@ pub fn plan_document(
     ),
   ))
   let command = plan_document_command(harness, repo_root, prompt_path)
-  let result = run_planner_command(command, repo_root, log_path)
+  let result =
+    run_planner_command(
+      command,
+      repo_root,
+      log_path,
+      shell.stream_metadata(
+        label: "brief",
+        prompt_path: prompt_path,
+        harness: types.harness_to_string(harness),
+        phase: "plan_document",
+      ),
+    )
 
   case shell.succeeded(result) {
     True -> {
@@ -72,7 +83,18 @@ pub fn plan_tasks(
   use brief_contents <- result.try(read_file(brief_path))
   use _ <- result.try(write_file(prompt_path, planner_prompt(brief_contents)))
   let command = planner_command(harness, repo_root, prompt_path)
-  let result = run_planner_command(command, repo_root, log_path)
+  let result =
+    run_planner_command(
+      command,
+      repo_root,
+      log_path,
+      shell.stream_metadata(
+        label: "planner",
+        prompt_path: prompt_path,
+        harness: types.harness_to_string(harness),
+        phase: "plan_tasks",
+      ),
+    )
 
   case shell.succeeded(result) {
     True -> {
@@ -96,12 +118,18 @@ pub fn start_task(
   let prompt_path = filepath.join(run_path, "logs/" <> task.id <> ".prompt.md")
   let log_path = filepath.join(run_path, "logs/" <> task.id <> ".log")
   use _ <- result.try(write_file(prompt_path, execution_prompt(task)))
-  let handle = start_harness_command(
-    executor_command(harness, repo_root, worktree_path, prompt_path),
-    worktree_path,
-    log_path,
-    task.id,
-  )
+  let handle =
+    start_harness_command(
+      executor_command(harness, repo_root, worktree_path, prompt_path),
+      worktree_path,
+      log_path,
+      shell.stream_metadata(
+        label: task.id,
+        prompt_path: prompt_path,
+        harness: types.harness_to_string(harness),
+        phase: "execute",
+      ),
+    )
 
   Ok(TaskRun(
     task: task,
@@ -153,7 +181,12 @@ pub fn repair_task(
       executor_command(harness, repo_root, worktree_path, prompt_path),
       worktree_path,
       log_path,
-      task.id <> " repair",
+      shell.stream_metadata(
+        label: task.id <> " repair",
+        prompt_path: prompt_path,
+        harness: types.harness_to_string(harness),
+        phase: "repair",
+      ),
     )
 
   case shell.succeeded(result) {
@@ -199,9 +232,10 @@ fn run_planner_command(
   command: String,
   cwd: String,
   log_path: String,
+  metadata: shell.StreamMetadata,
 ) -> shell.CommandResult {
   case system.get_env("NIGHT_SHIFT_FAKE_HARNESS") {
-    "" -> shell.run_streaming(command, cwd, log_path)
+    "" -> shell.run_streaming(command, cwd, log_path, metadata)
     _ -> shell.run(command, cwd, log_path)
   }
 }
@@ -210,10 +244,10 @@ fn start_harness_command(
   command: String,
   cwd: String,
   log_path: String,
-  prefix: String,
+  metadata: shell.StreamMetadata,
 ) -> shell.JobHandle {
   case system.get_env("NIGHT_SHIFT_FAKE_HARNESS") {
-    "" -> shell.start_streaming(command, cwd, log_path, prefix)
+    "" -> shell.start_streaming(command, cwd, log_path, metadata)
     _ -> shell.start(command, cwd, log_path)
   }
 }
@@ -222,10 +256,10 @@ fn run_harness_command(
   command: String,
   cwd: String,
   log_path: String,
-  prefix: String,
+  metadata: shell.StreamMetadata,
 ) -> shell.CommandResult {
   case system.get_env("NIGHT_SHIFT_FAKE_HARNESS") {
-    "" -> shell.run_streaming_prefixed(command, cwd, log_path, prefix)
+    "" -> shell.run_streaming(command, cwd, log_path, metadata)
     _ -> shell.run(command, cwd, log_path)
   }
 }
@@ -240,14 +274,15 @@ fn executor_command(
   case fake_harness {
     "" ->
       case harness {
-        types.Codex -> codex_exec_command(
-          "--skip-git-repo-check --dangerously-bypass-approvals-and-sandbox",
-          prompt_path,
-        )
+        types.Codex ->
+          codex_exec_command(
+            "--json --color never --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox",
+            prompt_path,
+          )
         types.Cursor ->
           "PROMPT=$(cat "
           <> shell.quote(prompt_path)
-          <> "); cursor-agent --print --output-format text --force --trust --workspace "
+          <> "); cursor-agent --print --output-format stream-json --stream-partial-output --force --trust --workspace "
           <> shell.quote(worktree_path)
           <> " \"$PROMPT\""
       }
@@ -268,15 +303,16 @@ fn planning_command(
   prompt_path: String,
 ) -> String {
   case harness {
-    types.Codex -> codex_exec_command(
-      "--skip-git-repo-check --sandbox read-only -C "
-        <> shell.quote(repo_root),
-      prompt_path,
-    )
+    types.Codex ->
+      codex_exec_command(
+        "--json --color never --skip-git-repo-check --sandbox read-only -C "
+          <> shell.quote(repo_root),
+        prompt_path,
+      )
     types.Cursor ->
       "PROMPT=$(cat "
       <> shell.quote(prompt_path)
-      <> "); cursor-agent --print --output-format text --force --trust --workspace "
+      <> "); cursor-agent --print --output-format stream-json --stream-partial-output --force --trust --workspace "
       <> shell.quote(repo_root)
       <> " \"$PROMPT\""
   }
@@ -403,14 +439,24 @@ fn render_lines(lines: List(String)) -> String {
 }
 
 pub fn extract_payload(output: String) -> Result(String, String) {
+  case extract_structured_output(output) {
+    Ok(structured_output) -> extract_marker_payload(structured_output)
+    Error(_) -> extract_marker_payload(output)
+  }
+}
+
+pub fn extract_json_payload(output: String) -> Result(String, String) {
+  extract_payload(output)
+}
+
+fn extract_marker_payload(output: String) -> Result(String, String) {
   let sections =
     output
     |> string.split(start_marker)
     |> list.reverse
 
   use after_start <- result.try(case sections {
-    [_] ->
-      Error("Harness output did not contain the start marker.")
+    [_] -> Error("Harness output did not contain the start marker.")
     [last_payload, ..] -> Ok(last_payload)
     [] -> Error("Harness output did not contain the start marker.")
   })
@@ -425,8 +471,58 @@ pub fn extract_payload(output: String) -> Result(String, String) {
   Ok(string.trim(payload))
 }
 
-pub fn extract_json_payload(output: String) -> Result(String, String) {
-  extract_payload(output)
+fn extract_structured_output(output: String) -> Result(String, String) {
+  let messages =
+    output
+    |> string.split("\n")
+    |> list.filter_map(fn(line) {
+      case string.trim(line) {
+        "" -> Error(Nil)
+        trimmed ->
+          case json.parse(trimmed, structured_output_decoder()) {
+            Ok(text) -> Ok(text)
+            Error(_) -> Error(Nil)
+          }
+      }
+    })
+
+  case messages {
+    [] -> Error("Harness output did not contain a structured assistant result.")
+    _ -> Ok(string.join(messages, with: "\n"))
+  }
+}
+
+fn structured_output_decoder() -> decode.Decoder(String) {
+  decode.one_of(cursor_result_decoder(), or: [codex_agent_message_decoder()])
+}
+
+fn codex_agent_message_decoder() -> decode.Decoder(String) {
+  use event_type <- decode.field("type", decode.string)
+  case event_type {
+    "item.completed" -> {
+      use item <- decode.field("item", {
+        use item_type <- decode.field("type", decode.string)
+        use text <- decode.field("text", decode.string)
+        case item_type {
+          "agent_message" -> decode.success(text)
+          _ -> decode.failure("", "CodexAgentMessage")
+        }
+      })
+      decode.success(item)
+    }
+    _ -> decode.failure("", "CodexAgentMessage")
+  }
+}
+
+fn cursor_result_decoder() -> decode.Decoder(String) {
+  use event_type <- decode.field("type", decode.string)
+  case event_type {
+    "result" -> {
+      use result <- decode.field("result", decode.string)
+      decode.success(result)
+    }
+    _ -> decode.failure("", "CursorResult")
+  }
 }
 
 fn planner_decoder() -> decode.Decoder(List(types.Task)) {

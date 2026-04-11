@@ -307,6 +307,90 @@ pub fn extract_json_payload_uses_last_result_block_test() {
   assert payload == "{\"tasks\":[{\"id\":\"real-task\"}]}"
 }
 
+pub fn extract_payload_from_codex_json_stream_test() {
+  let output =
+    "{\"type\":\"thread.started\",\"thread_id\":\"demo\"}\n"
+    <> "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"Running a quick check before returning the result.\"}}\n"
+    <> "{\"type\":\"item.started\",\"item\":{\"id\":\"item_1\",\"type\":\"command_execution\",\"command\":\"/bin/zsh -lc pwd\",\"aggregated_output\":\"\",\"exit_code\":null,\"status\":\"in_progress\"}}\n"
+    <> "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"command_execution\",\"command\":\"/bin/zsh -lc pwd\",\"aggregated_output\":\"/tmp/demo\\n\",\"exit_code\":0,\"status\":\"completed\"}}\n"
+    <> "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_2\",\"type\":\"agent_message\",\"text\":\"NIGHT_SHIFT_RESULT_START\\n{\\\"status\\\":\\\"completed\\\",\\\"summary\\\":\\\"ok\\\",\\\"files_touched\\\":[],\\\"demo_evidence\\\":[],\\\"pr\\\":{\\\"title\\\":\\\"t\\\",\\\"summary\\\":\\\"s\\\",\\\"demo\\\":[],\\\"risks\\\":[]},\\\"follow_up_tasks\\\":[]}\\nNIGHT_SHIFT_RESULT_END\"}}\n"
+
+  let assert Ok(payload) = harness.extract_payload(output)
+  assert string.contains(does: payload, contain: "\"status\":\"completed\"")
+  assert string.contains(does: payload, contain: "\"summary\":\"ok\"")
+}
+
+pub fn extract_payload_from_cursor_stream_json_test() {
+  let output =
+    "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"demo\"}\n"
+    <> "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Working...\"}]},\"session_id\":\"demo\",\"timestamp_ms\":1}\n"
+    <> "{\"type\":\"tool_call\",\"subtype\":\"started\",\"call_id\":\"tool_1\",\"tool_call\":{\"shellToolCall\":{\"args\":{\"command\":\"pwd\"},\"description\":\"Print current working directory\"}},\"session_id\":\"demo\"}\n"
+    <> "{\"type\":\"tool_call\",\"subtype\":\"completed\",\"call_id\":\"tool_1\",\"tool_call\":{\"shellToolCall\":{\"args\":{\"command\":\"pwd\"},\"result\":{\"success\":{\"exitCode\":0,\"interleavedOutput\":\"/tmp/demo\\n\"}},\"description\":\"Print current working directory\"}},\"session_id\":\"demo\"}\n"
+    <> "{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"`pwd` returned `/tmp/demo`.\\n\\nNIGHT_SHIFT_RESULT_START {\\\"status\\\":\\\"completed\\\",\\\"summary\\\":\\\"ok\\\",\\\"files_touched\\\":[],\\\"demo_evidence\\\":[],\\\"pr\\\":{\\\"title\\\":\\\"t\\\",\\\"summary\\\":\\\"s\\\",\\\"demo\\\":[],\\\"risks\\\":[]},\\\"follow_up_tasks\\\":[]} NIGHT_SHIFT_RESULT_END\",\"session_id\":\"demo\"}\n"
+
+  let assert Ok(payload) = harness.extract_payload(output)
+  assert string.contains(does: payload, contain: "\"status\":\"completed\"")
+  assert string.contains(does: payload, contain: "\"summary\":\"ok\"")
+}
+
+pub fn plan_command_non_tty_streaming_stays_plain_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-plain-stream-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let notes_path = filepath.join(base_dir, "notes.md")
+  let fake_codex = filepath.join(bin_dir, "codex")
+  let state_home = filepath.join(base_dir, "state")
+  let old_path = system.get_env("PATH")
+  let old_state_home = system.get_env("XDG_STATE_HOME")
+  let old_stream_ui = system.get_env("NIGHT_SHIFT_STREAM_UI")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = write_fake_streaming_codex(fake_codex)
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_codex),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+  let assert Ok(_) =
+    simplifile.write("# Notes\n- polish the stream UI\n", to: notes_path)
+
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("XDG_STATE_HOME", state_home)
+  system.set_env("NIGHT_SHIFT_STREAM_UI", "auto")
+
+  let result =
+    run_local_cli_command(
+      ["plan", "--notes", notes_path, "--harness", "codex"],
+      repo_root,
+      filepath.join(base_dir, "plan.log"),
+    )
+
+  system.set_env("PATH", old_path)
+  restore_env("XDG_STATE_HOME", old_state_home)
+  restore_env("NIGHT_SHIFT_STREAM_UI", old_stream_ui)
+
+  let assert Ok(output) = result
+  assert !string.contains(does: output, contain: "\u{001b}")
+  assert string.contains(does: output, contain: "[brief] prompt hidden; see ")
+  assert string.contains(does: output, contain: "Updated planning brief:")
+  assert !string.contains(
+    does: output,
+    contain: "You are Night Shift's planning harness.",
+  )
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
 pub fn start_without_brief_requires_default_doc_test() {
   let unique = system.unique_id()
   let base_dir =
@@ -617,7 +701,8 @@ pub fn codex_plan_document_reads_prompt_from_stdin_test() {
       base_dir,
       filepath.join(base_dir, "chmod.log"),
     )
-  let assert Ok(_) = simplifile.write("# Notes\n- add a hello script\n", to: notes_path)
+  let assert Ok(_) =
+    simplifile.write("# Notes\n- add a hello script\n", to: notes_path)
 
   system.unset_env("NIGHT_SHIFT_FAKE_HARNESS")
   system.set_env("PATH", bin_dir <> ":" <> old_path)
@@ -1021,8 +1106,11 @@ fn write_fake_codex(path: String) -> Result(Nil, simplifile.FileError) {
       <> "shift\n"
       <> "while [ $# -gt 0 ]; do\n"
       <> "  case \"$1\" in\n"
-      <> "    --skip-git-repo-check|--dangerously-bypass-approvals-and-sandbox)\n"
+      <> "    --skip-git-repo-check|--dangerously-bypass-approvals-and-sandbox|--json)\n"
       <> "      shift\n"
+      <> "      ;;\n"
+      <> "    --color)\n"
+      <> "      shift 2\n"
       <> "      ;;\n"
       <> "    --sandbox)\n"
       <> "      shift 2\n"
@@ -1039,6 +1127,68 @@ fn write_fake_codex(path: String) -> Result(Nil, simplifile.FileError) {
       <> "        printf 'Missing notes.\\n'\n"
       <> "      fi\n"
       <> "      printf '## Scope\\n- Add a hello script.\\n## Constraints\\n- Keep scope tight.\\n## Deliverables\\n- hello script\\n## Acceptance Criteria\\n- script exists\\n## Risks and Open Questions\\n- None.\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "      exit 0\n"
+      <> "      ;;\n"
+      <> "    *)\n"
+      <> "      printf 'expected prompt on stdin, got positional argument: %s\\n' \"$1\" >&2\n"
+      <> "      exit 7\n"
+      <> "      ;;\n"
+      <> "  esac\n"
+      <> "done\n"
+      <> "printf 'missing stdin prompt sentinel\\n' >&2\n"
+      <> "exit 8\n",
+    to: path,
+  )
+}
+
+fn write_fake_streaming_codex(path: String) -> Result(Nil, simplifile.FileError) {
+  simplifile.write(
+    "#!/bin/sh\n"
+      <> "if [ \"$1\" != \"exec\" ]; then\n"
+      <> "  printf 'unexpected codex subcommand: %s\\n' \"$1\" >&2\n"
+      <> "  exit 1\n"
+      <> "fi\n"
+      <> "shift\n"
+      <> "while [ $# -gt 0 ]; do\n"
+      <> "  case \"$1\" in\n"
+      <> "    --skip-git-repo-check|--dangerously-bypass-approvals-and-sandbox|--json)\n"
+      <> "      shift\n"
+      <> "      ;;\n"
+      <> "    --color|--sandbox|-C)\n"
+      <> "      shift 2\n"
+      <> "      ;;\n"
+      <> "    -)\n"
+      <> "      INPUT=$(cat)\n"
+      <> "      if printf '%s' \"$INPUT\" | grep -q 'Update the repository''s cumulative Night Shift brief'; then\n"
+      <> "        printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"brief\"}'\n"
+      <> "        printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"NIGHT_SHIFT_RESULT_START\\n# Night Shift Brief\\n## Objective\\nPolish the harness streaming UI.\\n## Scope\\n- Replace raw line dumps with formatted stream output.\\n## Constraints\\n- Keep raw artifacts for debugging.\\n## Deliverables\\n- Improved stream presentation\\n## Acceptance Criteria\\n- Prompt is hidden in the live stream.\\n## Risks and Open Questions\\n- None.\\nNIGHT_SHIFT_RESULT_END\"}}'\n"
+      <> "        exit 0\n"
+      <> "      fi\n"
+      <> "      if printf '%s' \"$INPUT\" | grep -q 'Break the supplied brief into a task DAG.'; then\n"
+      <> "        printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"planner\"}'\n"
+      <> "        printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"NIGHT_SHIFT_RESULT_START\\n{\\\"tasks\\\":[{\\\"id\\\":\\\"alpha\\\",\\\"title\\\":\\\"Alpha task\\\",\\\"description\\\":\\\"Create alpha proof\\\",\\\"dependencies\\\":[],\\\"acceptance\\\":[\\\"Create ALPHA.txt\\\"],\\\"demo_plan\\\":[\\\"Show ALPHA.txt\\\"],\\\"parallel_safe\\\":true},{\\\"id\\\":\\\"beta\\\",\\\"title\\\":\\\"Beta task\\\",\\\"description\\\":\\\"Create beta proof\\\",\\\"dependencies\\\":[],\\\"acceptance\\\":[\\\"Create BETA.txt\\\"],\\\"demo_plan\\\":[\\\"Show BETA.txt\\\"],\\\"parallel_safe\\\":true}]}\\nNIGHT_SHIFT_RESULT_END\"}}'\n"
+      <> "        exit 0\n"
+      <> "      fi\n"
+      <> "      if printf '%s' \"$INPUT\" | grep -q 'ID: alpha'; then\n"
+      <> "        printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"alpha\"}'\n"
+      <> "        printf '%s\\n' '{\"type\":\"item.started\",\"item\":{\"id\":\"item_1\",\"type\":\"command_execution\",\"command\":\"echo alpha > ALPHA.txt\",\"aggregated_output\":\"\",\"exit_code\":null,\"status\":\"in_progress\"}}'\n"
+      <> "        sleep 0.1\n"
+      <> "        printf 'alpha\\n' > ALPHA.txt\n"
+      <> "        printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"command_execution\",\"command\":\"echo alpha > ALPHA.txt\",\"aggregated_output\":\"alpha\\n\",\"exit_code\":0,\"status\":\"completed\"}}'\n"
+      <> "        printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_2\",\"type\":\"agent_message\",\"text\":\"NIGHT_SHIFT_RESULT_START\\n{\\\"status\\\":\\\"completed\\\",\\\"summary\\\":\\\"alpha ok\\\",\\\"files_touched\\\":[\\\"ALPHA.txt\\\"],\\\"demo_evidence\\\":[\\\"ALPHA.txt created\\\"],\\\"pr\\\":{\\\"title\\\":\\\"alpha\\\",\\\"summary\\\":\\\"alpha\\\",\\\"demo\\\":[\\\"ALPHA.txt created\\\"],\\\"risks\\\":[]},\\\"follow_up_tasks\\\":[]}\\nNIGHT_SHIFT_RESULT_END\"}}'\n"
+      <> "        exit 0\n"
+      <> "      fi\n"
+      <> "      if printf '%s' \"$INPUT\" | grep -q 'ID: beta'; then\n"
+      <> "        printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"beta\"}'\n"
+      <> "        printf '%s\\n' '{\"type\":\"item.started\",\"item\":{\"id\":\"item_1\",\"type\":\"command_execution\",\"command\":\"echo beta > BETA.txt\",\"aggregated_output\":\"\",\"exit_code\":null,\"status\":\"in_progress\"}}'\n"
+      <> "        sleep 0.1\n"
+      <> "        printf 'beta\\n' > BETA.txt\n"
+      <> "        printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"command_execution\",\"command\":\"echo beta > BETA.txt\",\"aggregated_output\":\"beta\\n\",\"exit_code\":0,\"status\":\"completed\"}}'\n"
+      <> "        printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_2\",\"type\":\"agent_message\",\"text\":\"NIGHT_SHIFT_RESULT_START\\n{\\\"status\\\":\\\"completed\\\",\\\"summary\\\":\\\"beta ok\\\",\\\"files_touched\\\":[\\\"BETA.txt\\\"],\\\"demo_evidence\\\":[\\\"BETA.txt created\\\"],\\\"pr\\\":{\\\"title\\\":\\\"beta\\\",\\\"summary\\\":\\\"beta\\\",\\\"demo\\\":[\\\"BETA.txt created\\\"],\\\"risks\\\":[]},\\\"follow_up_tasks\\\":[]}\\nNIGHT_SHIFT_RESULT_END\"}}'\n"
+      <> "        exit 0\n"
+      <> "      fi\n"
+      <> "      printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"fallback\"}'\n"
+      <> "      printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"NIGHT_SHIFT_RESULT_START\\n{\\\"status\\\":\\\"completed\\\",\\\"summary\\\":\\\"ok\\\",\\\"files_touched\\\":[],\\\"demo_evidence\\\":[],\\\"pr\\\":{\\\"title\\\":\\\"t\\\",\\\"summary\\\":\\\"s\\\",\\\"demo\\\":[],\\\"risks\\\":[]},\\\"follow_up_tasks\\\":[]}\\nNIGHT_SHIFT_RESULT_END\"}}'\n"
       <> "      exit 0\n"
       <> "      ;;\n"
       <> "    *)\n"
