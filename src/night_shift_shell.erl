@@ -892,11 +892,7 @@ print_finished_summary(State) ->
 ui_mode() ->
     case os:getenv("NIGHT_SHIFT_STREAM_UI") of
         "plain" -> plain;
-        "tui" ->
-            case stdout_is_tty() of
-                true -> tui;
-                false -> plain
-            end;
+        "tui" -> tui;
         _ ->
             case stdout_is_tty() of
                 true -> tui;
