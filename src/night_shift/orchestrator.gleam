@@ -209,12 +209,14 @@ fn launch_batch_loop(
             updated_run,
             event,
           ))
+          use start_head <- result.try(git.head_commit(worktree_path, git_log))
           use task_run <- result.try(provider.start_task(
             persisted_run.execution_agent,
             persisted_run.repo_root,
             persisted_run.run_path,
             running_task,
             worktree_path,
+            start_head,
             branch_name,
             base_ref,
           ))
@@ -351,13 +353,39 @@ fn finalize_success(
           run.run_path,
           "logs/" <> task_run.task.id <> ".deliver.log",
         )
-      case git.has_changes(task_run.worktree_path, git_log) {
-        False -> {
+      let had_worktree_changes =
+        git.has_changes(task_run.worktree_path, git_log)
+
+      let delivery_result = case had_worktree_changes {
+        True ->
+          git.commit_all(
+            task_run.worktree_path,
+            "feat(night-shift): " <> task_run.task.title,
+            git_log,
+          )
+        False -> Ok(Nil)
+      }
+
+      use _ <- result.try(delivery_result)
+      use delivered_head <- result.try(git.head_commit(
+        task_run.worktree_path,
+        git_log,
+      ))
+      let delivered_files =
+        git.changed_files_between(
+          task_run.worktree_path,
+          task_run.start_head,
+          "HEAD",
+          git_log,
+        )
+
+      case delivered_head == task_run.start_head {
+        True -> {
           let task =
             types.Task(
               ..task_run.task,
               state: types.ManualAttention,
-              summary: "Provider reported completion but produced no changes.",
+              summary: "Provider reported completion but the task worktree produced no committed or uncommitted changes.",
             )
           let updated_run =
             types.RunRecord(..run, tasks: replace_task(run.tasks, task))
@@ -371,13 +399,7 @@ fn finalize_success(
             ),
           )
         }
-        True -> {
-          let changed_files = git.changed_files(task_run.worktree_path, git_log)
-          use _ <- result.try(git.commit_all(
-            task_run.worktree_path,
-            "feat(night-shift): " <> task_run.task.title,
-            git_log,
-          ))
+        False -> {
           use _ <- result.try(git.push_branch(
             task_run.worktree_path,
             task_run.branch_name,
@@ -436,7 +458,7 @@ fn finalize_success(
                   ..completed_task,
                   summary: final_execution.summary
                     <> " Changed files: "
-                    <> string.join(changed_files, ", "),
+                    <> string.join(delivered_files, ", "),
                 ),
               ),
             ),

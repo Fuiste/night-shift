@@ -3,7 +3,6 @@ import gleam/list
 import gleam/option.{None, Some}
 import gleam/result
 import gleam/string
-import gleeunit
 import night_shift/agent_config
 import night_shift/cli
 import night_shift/config
@@ -18,7 +17,73 @@ import night_shift/types
 import simplifile
 
 pub fn main() -> Nil {
-  gleeunit.main()
+  let options = [
+    Verbose,
+    NoTty,
+    Report(#(GleeunitProgress, [Colored(True)])),
+    ScaleTimeouts(30),
+  ]
+
+  let result =
+    find_test_files(matching: "**/*.{erl,gleam}", in: "test")
+    |> list.map(gleam_to_erlang_module_name)
+    |> list.map(dangerously_convert_string_to_atom(_, Utf8))
+    |> run_eunit(options)
+
+  let code = case result {
+    Ok(_) -> 0
+    Error(_) -> 1
+  }
+  halt(code)
+}
+
+type Atom
+
+type Encoding {
+  Utf8
+}
+
+type ReportModuleName {
+  GleeunitProgress
+}
+
+type GleeunitProgressOption {
+  Colored(Bool)
+}
+
+type EunitOption {
+  Verbose
+  NoTty
+  Report(#(ReportModuleName, List(GleeunitProgressOption)))
+  ScaleTimeouts(Int)
+}
+
+@external(erlang, "erlang", "halt")
+fn halt(code: Int) -> Nil
+
+@external(erlang, "erlang", "binary_to_atom")
+fn dangerously_convert_string_to_atom(value: String, encoding: Encoding) -> Atom
+
+@external(erlang, "gleeunit_ffi", "find_files")
+fn find_test_files(matching matching: String, in in: String) -> List(String)
+
+@external(erlang, "gleeunit_ffi", "run_eunit")
+fn run_eunit(modules: List(Atom), options: List(EunitOption)) -> Result(Nil, a)
+
+fn gleam_to_erlang_module_name(path: String) -> String {
+  case string.ends_with(path, ".gleam") {
+    True ->
+      path
+      |> string.replace(".gleam", "")
+      |> string.replace("/", "@")
+
+    False ->
+      path
+      |> string.split("/")
+      |> list.last
+      |> result.unwrap(path)
+      |> string.replace(".erl", "")
+  }
 }
 
 pub fn parse_start_command_test() {
@@ -602,6 +667,82 @@ pub fn start_without_brief_requires_default_doc_test() {
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
 
+pub fn start_rejects_dirty_source_repo_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-start-dirty-source-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let state_home = filepath.join(base_dir, "state")
+  let old_demo_command = system.get_env("NIGHT_SHIFT_DEMO_COMMAND")
+  let old_state_home = system.get_env("XDG_STATE_HOME")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) =
+    simplifile.write("", to: filepath.join(repo_root, ".night-shift.toml"))
+  let assert Ok(_) =
+    simplifile.write(
+      "# Brief\n",
+      to: filepath.join(repo_root, "night-shift.md"),
+    )
+  let assert Ok(_) =
+    simplifile.write("# Demo\n", to: filepath.join(repo_root, "README.md"))
+  let _ =
+    shell.run(
+      "git init --initial-branch=main " <> shell.quote(repo_root),
+      base_dir,
+      filepath.join(base_dir, "repo-init.log"),
+    )
+  let _ =
+    shell.run(
+      "git config user.name 'Night Shift Test'",
+      repo_root,
+      filepath.join(base_dir, "git-user.log"),
+    )
+  let _ =
+    shell.run(
+      "git config user.email 'night-shift@example.com'",
+      repo_root,
+      filepath.join(base_dir, "git-email.log"),
+    )
+  let _ =
+    shell.run(
+      "git add .night-shift.toml night-shift.md README.md && git commit -m 'chore: seed repo'",
+      repo_root,
+      filepath.join(base_dir, "seed.log"),
+    )
+  let assert Ok(_) =
+    simplifile.write(
+      "# Demo\nDirty\n",
+      to: filepath.join(repo_root, "README.md"),
+    )
+
+  system.set_env("NIGHT_SHIFT_DEMO_COMMAND", local_demo_command())
+  system.set_env("XDG_STATE_HOME", state_home)
+
+  let output =
+    run_local_cli_command(
+      ["start"],
+      repo_root,
+      filepath.join(base_dir, "start.log"),
+    )
+
+  system.set_env("NIGHT_SHIFT_DEMO_COMMAND", old_demo_command)
+  system.set_env("XDG_STATE_HOME", old_state_home)
+
+  let assert Ok(message) = output
+  assert string.contains(
+    does: message,
+    contain: "Night Shift start requires a clean source repository",
+  )
+  assert string.contains(does: message, contain: repo_root)
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
 pub fn plan_command_creates_and_updates_default_brief_test() {
   let unique = system.unique_id()
   let base_dir =
@@ -1025,6 +1166,199 @@ pub fn orchestrator_start_runs_fake_provider_test() {
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
 
+pub fn orchestrator_start_delivers_provider_created_commit_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-provider-commit-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let remote_root = filepath.join(base_dir, "remote.git")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let brief_path = filepath.join(base_dir, "brief.md")
+  let fake_provider = filepath.join(bin_dir, "fake-provider")
+  let fake_gh = filepath.join(bin_dir, "gh")
+  let state_home = filepath.join(base_dir, "state")
+  let old_path = system.get_env("PATH")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
+  let old_state_home = system.get_env("XDG_STATE_HOME")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
+  let assert Ok(_) = write_committing_fake_provider(fake_provider)
+  let assert Ok(_) = write_fake_gh(fake_gh)
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_provider) <> " " <> shell.quote(fake_gh),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+  let _ =
+    shell.run(
+      "git init --bare " <> shell.quote(remote_root),
+      base_dir,
+      filepath.join(base_dir, "remote.log"),
+    )
+  let _ =
+    shell.run(
+      "git init --initial-branch=main " <> shell.quote(repo_root),
+      base_dir,
+      filepath.join(base_dir, "repo-init.log"),
+    )
+  let _ =
+    shell.run(
+      "git config user.name 'Night Shift Test'",
+      repo_root,
+      filepath.join(base_dir, "git-user.log"),
+    )
+  let _ =
+    shell.run(
+      "git config user.email 'night-shift@example.com'",
+      repo_root,
+      filepath.join(base_dir, "git-email.log"),
+    )
+  let assert Ok(_) =
+    simplifile.write("# Demo\n", to: filepath.join(repo_root, "README.md"))
+  let _ =
+    shell.run(
+      "git add README.md && git commit -m 'chore: seed repo'",
+      repo_root,
+      filepath.join(base_dir, "seed.log"),
+    )
+  let _ =
+    shell.run(
+      "git remote add origin " <> shell.quote(remote_root),
+      repo_root,
+      filepath.join(base_dir, "remote-add.log"),
+    )
+  let _ =
+    shell.run(
+      "git push -u origin main",
+      repo_root,
+      filepath.join(base_dir, "push-main.log"),
+    )
+
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("XDG_STATE_HOME", state_home)
+
+  let config =
+    types.Config(
+      ..types.default_config(),
+      verification_commands: [],
+      max_workers: 1,
+    )
+
+  let assert Ok(run) = start_run(repo_root, brief_path, types.Codex, 1)
+  let assert Ok(completed_run) = orchestrator.start(run, config)
+
+  system.set_env("PATH", old_path)
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
+  system.set_env("XDG_STATE_HOME", old_state_home)
+
+  let completed_task =
+    completed_run.tasks
+    |> list.find(fn(task) { task.state == types.Completed })
+    |> result.unwrap(or: types.Task(
+      id: "missing",
+      title: "missing",
+      description: "",
+      dependencies: [],
+      acceptance: [],
+      demo_plan: [],
+      parallel_safe: False,
+      state: types.Failed,
+      worktree_path: "",
+      branch_name: "",
+      pr_number: "",
+      summary: "",
+    ))
+
+  assert completed_run.status == types.RunCompleted
+  assert completed_task.pr_number == "1"
+  assert string.contains(
+    does: completed_task.summary,
+    contain: "IMPLEMENTED.md",
+  )
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn start_task_runs_codex_execution_in_worktree_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-codex-worktree-" <> unique,
+    ))
+  let bin_dir = filepath.join(base_dir, "bin")
+  let fake_codex = filepath.join(bin_dir, "codex")
+  let run_path = filepath.join(base_dir, "run")
+  let worktree_path = filepath.join(base_dir, "worktree")
+  let old_path = system.get_env("PATH")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) =
+    simplifile.create_directory_all(filepath.join(run_path, "logs"))
+  let assert Ok(_) = simplifile.create_directory_all(worktree_path)
+  let assert Ok(_) = write_worktree_execution_codex(fake_codex)
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_codex),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+
+  system.unset_env("NIGHT_SHIFT_FAKE_PROVIDER")
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+
+  let task =
+    types.Task(
+      id: "demo-task",
+      title: "Demo task",
+      description: "Create a proof file in the task worktree.",
+      dependencies: [],
+      acceptance: ["Create EXECUTED.txt in the task worktree."],
+      demo_plan: ["Show EXECUTED.txt."],
+      parallel_safe: False,
+      state: types.Ready,
+      worktree_path: worktree_path,
+      branch_name: "night-shift/demo",
+      pr_number: "",
+      summary: "",
+    )
+
+  let assert Ok(task_run) =
+    provider.start_task(
+      types.resolved_agent_from_provider(types.Codex),
+      base_dir,
+      run_path,
+      task,
+      worktree_path,
+      "seed-head",
+      "night-shift/demo",
+      "main",
+    )
+  let assert Ok(result) = provider.await_task(task_run)
+
+  system.set_env("PATH", old_path)
+  restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
+
+  let assert Ok(contents) =
+    simplifile.read(filepath.join(worktree_path, "EXECUTED.txt"))
+  assert result.status == types.Completed
+  assert string.contains(does: contents, contain: "executed in worktree")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
 pub fn dashboard_start_session_tracks_completed_run_test() {
   let unique = system.unique_id()
   let base_dir =
@@ -1299,6 +1633,29 @@ fn write_fake_provider(path: String) -> Result(Nil, simplifile.FileError) {
   )
 }
 
+fn write_committing_fake_provider(
+  path: String,
+) -> Result(Nil, simplifile.FileError) {
+  simplifile.write(
+    "#!/bin/sh\n"
+      <> "MODE=$1\n"
+      <> "PROMPT_FILE=$2\n"
+      <> "WORKTREE=$3\n"
+      <> "if [ \"$MODE\" = \"plan\" ]; then\n"
+      <> "  printf 'planning\\nNIGHT_SHIFT_RESULT_START\\n{\"tasks\":[{\"id\":\"demo-task\",\"title\":\"Implement demo task\",\"description\":\"Create a file to prove execution\",\"dependencies\":[],\"acceptance\":[\"Create IMPLEMENTED.md\"],\"demo_plan\":[\"Show the new file\"],\"parallel_safe\":false}]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "elif [ \"$MODE\" = \"plan-doc\" ]; then\n"
+      <> "  printf 'planning-doc\\nNIGHT_SHIFT_RESULT_START\\n# Night Shift Brief\\n## Objective\\nPrepare the first work item for execution.\\n## Scope\\n- Alpha task\\n## Constraints\\n- Keep the brief cumulative.\\n## Deliverables\\n- Alpha implementation plan\\n## Acceptance Criteria\\n- Alpha task documented\\n## Risks and Open Questions\\n- None.\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "  exit 0\n"
+      <> "else\n"
+      <> "  cd \"$WORKTREE\" || exit 1\n"
+      <> "  echo 'completed by fake provider' > IMPLEMENTED.md\n"
+      <> "  git add IMPLEMENTED.md && git commit -m 'feat: provider created commit' >/dev/null 2>&1 || exit 1\n"
+      <> "  printf 'execution\\nNIGHT_SHIFT_RESULT_START\\n{\"status\":\"completed\",\"summary\":\"Implemented demo task\",\"files_touched\":[\"IMPLEMENTED.md\"],\"demo_evidence\":[\"IMPLEMENTED.md created\"],\"pr\":{\"title\":\"[night-shift] Implement demo task\",\"summary\":\"Implemented the fake provider task.\",\"demo\":[\"IMPLEMENTED.md created\"],\"risks\":[]},\"follow_up_tasks\":[]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "fi\n",
+    to: path,
+  )
+}
+
 fn write_fake_codex(path: String) -> Result(Nil, simplifile.FileError) {
   simplifile.write(
     "#!/bin/sh\n"
@@ -1403,6 +1760,54 @@ fn write_fake_streaming_codex(path: String) -> Result(Nil, simplifile.FileError)
       <> "    *)\n"
       <> "      printf 'expected prompt on stdin, got positional argument: %s\\n' \"$1\" >&2\n"
       <> "      exit 7\n"
+      <> "      ;;\n"
+      <> "  esac\n"
+      <> "done\n"
+      <> "printf 'missing stdin prompt sentinel\\n' >&2\n"
+      <> "exit 8\n",
+    to: path,
+  )
+}
+
+fn write_worktree_execution_codex(
+  path: String,
+) -> Result(Nil, simplifile.FileError) {
+  simplifile.write(
+    "#!/bin/sh\n"
+      <> "if [ \"$1\" != \"exec\" ]; then\n"
+      <> "  printf 'unexpected codex subcommand: %s\\n' \"$1\" >&2\n"
+      <> "  exit 1\n"
+      <> "fi\n"
+      <> "shift\n"
+      <> "TARGET_DIR=''\n"
+      <> "while [ $# -gt 0 ]; do\n"
+      <> "  case \"$1\" in\n"
+      <> "    --skip-git-repo-check|--dangerously-bypass-approvals-and-sandbox|--json)\n"
+      <> "      shift\n"
+      <> "      ;;\n"
+      <> "    --color|-m)\n"
+      <> "      shift 2\n"
+      <> "      ;;\n"
+      <> "    -c)\n"
+      <> "      shift 2\n"
+      <> "      ;;\n"
+      <> "    -C)\n"
+      <> "      TARGET_DIR=$2\n"
+      <> "      shift 2\n"
+      <> "      ;;\n"
+      <> "    -)\n"
+      <> "      INPUT=$(cat)\n"
+      <> "      cd /tmp || exit 1\n"
+      <> "      if [ -n \"$TARGET_DIR\" ]; then\n"
+      <> "        cd \"$TARGET_DIR\" || exit 1\n"
+      <> "      fi\n"
+      <> "      printf 'executed in worktree\\n' > EXECUTED.txt\n"
+      <> "      printf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"exec\"}'\n"
+      <> "      printf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"NIGHT_SHIFT_RESULT_START\\n{\\\"status\\\":\\\"completed\\\",\\\"summary\\\":\\\"ok\\\",\\\"files_touched\\\":[\\\"EXECUTED.txt\\\"],\\\"demo_evidence\\\":[\\\"EXECUTED.txt created\\\"],\\\"pr\\\":{\\\"title\\\":\\\"t\\\",\\\"summary\\\":\\\"s\\\",\\\"demo\\\":[],\\\"risks\\\":[]},\\\"follow_up_tasks\\\":[]}\\nNIGHT_SHIFT_RESULT_END\"}}'\n"
+      <> "      exit 0\n"
+      <> "      ;;\n"
+      <> "    *)\n"
+      <> "      shift\n"
       <> "      ;;\n"
       <> "  esac\n"
       <> "done\n"

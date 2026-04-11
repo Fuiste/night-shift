@@ -20,6 +20,7 @@ pub type TaskRun {
     task: types.Task,
     handle: shell.JobHandle,
     worktree_path: String,
+    start_head: String,
     log_path: String,
     branch_name: String,
     base_ref: String,
@@ -113,6 +114,7 @@ pub fn start_task(
   run_path: String,
   task: types.Task,
   worktree_path: String,
+  start_head: String,
   branch_name: String,
   base_ref: String,
 ) -> Result(TaskRun, String) {
@@ -142,6 +144,7 @@ pub fn start_task(
     task: task,
     handle: handle,
     worktree_path: worktree_path,
+    start_head: start_head,
     log_path: log_path,
     branch_name: branch_name,
     base_ref: base_ref,
@@ -304,7 +307,8 @@ fn executor_command(
         types.Codex ->
           codex_exec_command(
             agent,
-            "--skip-git-repo-check --dangerously-bypass-approvals-and-sandbox",
+            "--skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -C "
+              <> shell.quote(worktree_path),
             prompt_path,
           )
         types.Cursor ->

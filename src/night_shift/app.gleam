@@ -46,9 +46,10 @@ pub fn run(command: types.Command) -> Nil {
           io.println(
             case
               resolved_brief,
+              ensure_clean_repo_for_start(repo_root),
               agent_config.resolve_start_agents(config, agent_overrides)
             {
-              Ok(path), Ok(#(planning_agent, execution_agent)) ->
+              Ok(path), Ok(Nil), Ok(#(planning_agent, execution_agent)) ->
                 start(
                   repo_root,
                   path,
@@ -57,8 +58,9 @@ pub fn run(command: types.Command) -> Nil {
                   resolved_workers,
                   config,
                 )
-              Error(message), _ -> message
-              _, Error(message) -> message
+              Error(message), _, _ -> message
+              _, Error(message), _ -> message
+              _, _, Error(message) -> message
             },
           )
         }
@@ -68,9 +70,10 @@ pub fn run(command: types.Command) -> Nil {
 
           case
             resolved_brief,
+            ensure_clean_repo_for_start(repo_root),
             agent_config.resolve_start_agents(config, agent_overrides)
           {
-            Ok(path), Ok(#(planning_agent, execution_agent)) ->
+            Ok(path), Ok(Nil), Ok(#(planning_agent, execution_agent)) ->
               case
                 journal.start_run(
                   repo_root,
@@ -103,8 +106,9 @@ pub fn run(command: types.Command) -> Nil {
                   }
                 Error(message) -> io.println(message)
               }
-            Error(message), _ -> io.println(message)
-            _, Error(message) -> io.println(message)
+            Error(message), _, _ -> io.println(message)
+            _, Error(message), _ -> io.println(message)
+            _, _, Error(message) -> io.println(message)
           }
         }
         types.Status(run) -> io.println(status(repo_root, run))
@@ -206,6 +210,20 @@ fn resolve_doc_path(repo_root: String, doc_path: Option(String)) -> String {
   case doc_path {
     Some(path) -> path
     None -> default_brief_path(repo_root)
+  }
+}
+
+fn ensure_clean_repo_for_start(repo_root: String) -> Result(Nil, String) {
+  let log_path =
+    filepath.join(system.state_directory(), "night-shift/start-clean.log")
+  case git.has_changes(repo_root, log_path) {
+    True ->
+      Error(
+        "Night Shift start requires a clean source repository so execution worktrees and delivery stay aligned. Commit, stash, or move the existing changes out of "
+        <> repo_root
+        <> " and rerun `night-shift start`.",
+      )
+    False -> Ok(Nil)
   }
 }
 

@@ -84,6 +84,45 @@ pub fn changed_files(cwd: String, log_path: String) -> List(String) {
   }
 }
 
+pub fn changed_files_between(
+  cwd: String,
+  from_ref: String,
+  to_ref: String,
+  log_path: String,
+) -> List(String) {
+  let result =
+    shell.run(
+      "git diff --name-only "
+        <> shell.quote(from_ref)
+        <> " "
+        <> shell.quote(to_ref),
+      cwd,
+      log_path,
+    )
+
+  case shell.succeeded(result) {
+    True ->
+      result.output
+      |> string.trim
+      |> string.split("\n")
+      |> list.filter_map(fn(line) {
+        case string.trim(line) {
+          "" -> Error(Nil)
+          file -> Ok(file)
+        }
+      })
+    False -> []
+  }
+}
+
+pub fn head_commit(cwd: String, log_path: String) -> Result(String, String) {
+  let result = shell.run("git rev-parse HEAD", cwd, log_path)
+  case shell.succeeded(result) {
+    True -> Ok(string.trim(result.output))
+    False -> Error("Git command failed: " <> string.trim(result.output))
+  }
+}
+
 pub fn commit_all(
   cwd: String,
   message: String,

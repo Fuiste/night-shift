@@ -235,7 +235,9 @@ fn setup_demo_environment(
     "# Demo\n",
   ))
   use _ <- result.try(run_checked(
-    "git add README.md .night-shift.toml && git commit -m 'chore: seed demo repo'",
+    "git add README.md .night-shift.toml "
+      <> shell.quote(types.default_brief_filename)
+      <> " && git commit -m 'chore: seed demo repo'",
     repo_root,
     filepath.join(demo_root, "seed.log"),
     "Unable to create the demo seed commit.",
