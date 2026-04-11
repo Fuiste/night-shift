@@ -2,6 +2,7 @@ import filepath
 import gleam/dynamic/decode
 import gleam/json
 import gleam/list
+import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import night_shift/journal
@@ -26,7 +27,7 @@ pub type TaskRun {
 }
 
 pub fn plan_document(
-  harness: types.Harness,
+  agent: types.ResolvedAgentConfig,
   repo_root: String,
   notes_path: String,
   doc_path: String,
@@ -45,24 +46,23 @@ pub fn plan_document(
       doc_path: doc_path,
     ),
   ))
-  let command = plan_document_command(harness, repo_root, prompt_path)
-  let result = run_planner_command(command, repo_root, log_path)
+  use command <- result.try(plan_document_command(agent, repo_root, prompt_path))
+  let command_result = run_planner_command(command, repo_root, log_path)
 
-  case shell.succeeded(result) {
+  case shell.succeeded(command_result) {
     True -> {
-      use document <- result.try(extract_payload(result.output))
+      use document <- result.try(extract_payload(command_result.output))
       case string.trim(document) {
-        "" ->
-          Error("Planning harness returned an empty brief. See " <> log_path)
+        "" -> Error("Planning provider returned an empty brief. See " <> log_path)
         trimmed -> Ok(#(trimmed, artifact_path))
       }
     }
-    False -> Error("Planning harness failed. See " <> log_path)
+    False -> Error("Planning provider failed. See " <> log_path)
   }
 }
 
 pub fn plan_tasks(
-  harness: types.Harness,
+  agent: types.ResolvedAgentConfig,
   repo_root: String,
   brief_path: String,
   run_path: String,
@@ -71,21 +71,21 @@ pub fn plan_tasks(
   let log_path = filepath.join(run_path, "logs/planner.log")
   use brief_contents <- result.try(read_file(brief_path))
   use _ <- result.try(write_file(prompt_path, planner_prompt(brief_contents)))
-  let command = planner_command(harness, repo_root, prompt_path)
-  let result = run_planner_command(command, repo_root, log_path)
+  use command <- result.try(planner_command(agent, repo_root, prompt_path))
+  let command_result = run_planner_command(command, repo_root, log_path)
 
-  case shell.succeeded(result) {
+  case shell.succeeded(command_result) {
     True -> {
-      use payload <- result.try(extract_json_payload(result.output))
+      use payload <- result.try(extract_json_payload(command_result.output))
       json.parse(payload, planner_decoder())
       |> result.map_error(fn(_) { "Unable to decode planner output." })
     }
-    False -> Error("Planner harness failed. See " <> log_path)
+    False -> Error("Planner provider failed. See " <> log_path)
   }
 }
 
 pub fn start_task(
-  harness: types.Harness,
+  agent: types.ResolvedAgentConfig,
   repo_root: String,
   run_path: String,
   task: types.Task,
@@ -96,12 +96,13 @@ pub fn start_task(
   let prompt_path = filepath.join(run_path, "logs/" <> task.id <> ".prompt.md")
   let log_path = filepath.join(run_path, "logs/" <> task.id <> ".log")
   use _ <- result.try(write_file(prompt_path, execution_prompt(task)))
-  let handle = start_harness_command(
-    executor_command(harness, repo_root, worktree_path, prompt_path),
+  use command <- result.try(executor_command(
+    agent,
+    repo_root,
     worktree_path,
-    log_path,
-    task.id,
-  )
+    prompt_path,
+  ))
+  let handle = start_provider_command(command, worktree_path, log_path, task.id)
 
   Ok(TaskRun(
     task: task,
@@ -114,10 +115,10 @@ pub fn start_task(
 }
 
 pub fn await_task(run: TaskRun) -> Result(types.ExecutionResult, String) {
-  let result = shell.wait(run.handle)
-  case shell.succeeded(result) {
+  let command_result = shell.wait(run.handle)
+  case shell.succeeded(command_result) {
     True -> {
-      use payload <- result.try(extract_json_payload(result.output))
+      use payload <- result.try(extract_json_payload(command_result.output))
       json.parse(payload, execution_decoder())
       |> result.map_error(fn(_) {
         "Unable to decode execution output for task " <> run.task.id <> "."
@@ -125,7 +126,7 @@ pub fn await_task(run: TaskRun) -> Result(types.ExecutionResult, String) {
     }
     False ->
       Error(
-        "Harness execution failed for task "
+        "Provider execution failed for task "
         <> run.task.id
         <> ". See "
         <> run.log_path,
@@ -134,7 +135,7 @@ pub fn await_task(run: TaskRun) -> Result(types.ExecutionResult, String) {
 }
 
 pub fn repair_task(
-  harness: types.Harness,
+  agent: types.ResolvedAgentConfig,
   repo_root: String,
   worktree_path: String,
   run_path: String,
@@ -148,17 +149,18 @@ pub fn repair_task(
     prompt_path,
     repair_prompt(task, verification_output),
   ))
-  let result =
-    run_harness_command(
-      executor_command(harness, repo_root, worktree_path, prompt_path),
-      worktree_path,
-      log_path,
-      task.id <> " repair",
-    )
+  use command <- result.try(executor_command(
+    agent,
+    repo_root,
+    worktree_path,
+    prompt_path,
+  ))
+  let command_result =
+    run_provider_command(command, worktree_path, log_path, task.id <> " repair")
 
-  case shell.succeeded(result) {
+  case shell.succeeded(command_result) {
     True -> {
-      use payload <- result.try(extract_json_payload(result.output))
+      use payload <- result.try(extract_json_payload(command_result.output))
       json.parse(payload, execution_decoder())
       |> result.map_error(fn(_) {
         "Unable to decode repair output for task " <> task.id <> "."
@@ -166,32 +168,30 @@ pub fn repair_task(
     }
     False ->
       Error(
-        "Repair harness failed for task " <> task.id <> ". See " <> log_path,
+        "Repair provider failed for task " <> task.id <> ". See " <> log_path,
       )
   }
 }
 
 fn planner_command(
-  harness: types.Harness,
+  agent: types.ResolvedAgentConfig,
   repo_root: String,
   prompt_path: String,
-) -> String {
-  let fake_harness = system.get_env("NIGHT_SHIFT_FAKE_HARNESS")
-  case fake_harness {
-    "" -> planning_command(harness, repo_root, prompt_path)
-    command -> command <> " plan " <> shell.quote(prompt_path)
+) -> Result(String, String) {
+  case fake_provider_command() {
+    Some(command) -> Ok(command <> " plan " <> shell.quote(prompt_path))
+    None -> planning_command(agent, repo_root, prompt_path)
   }
 }
 
 fn plan_document_command(
-  harness: types.Harness,
+  agent: types.ResolvedAgentConfig,
   repo_root: String,
   prompt_path: String,
-) -> String {
-  let fake_harness = system.get_env("NIGHT_SHIFT_FAKE_HARNESS")
-  case fake_harness {
-    "" -> planning_command(harness, repo_root, prompt_path)
-    command -> command <> " plan-doc " <> shell.quote(prompt_path)
+) -> Result(String, String) {
+  case fake_provider_command() {
+    Some(command) -> Ok(command <> " plan-doc " <> shell.quote(prompt_path))
+    None -> planning_command(agent, repo_root, prompt_path)
   }
 }
 
@@ -200,94 +200,231 @@ fn run_planner_command(
   cwd: String,
   log_path: String,
 ) -> shell.CommandResult {
-  case system.get_env("NIGHT_SHIFT_FAKE_HARNESS") {
-    "" -> shell.run_streaming(command, cwd, log_path)
-    _ -> shell.run(command, cwd, log_path)
+  case fake_provider_command() {
+    Some(_) -> shell.run(command, cwd, log_path)
+    None -> shell.run_streaming(command, cwd, log_path)
   }
 }
 
-fn start_harness_command(
+fn start_provider_command(
   command: String,
   cwd: String,
   log_path: String,
   prefix: String,
 ) -> shell.JobHandle {
-  case system.get_env("NIGHT_SHIFT_FAKE_HARNESS") {
-    "" -> shell.start_streaming(command, cwd, log_path, prefix)
-    _ -> shell.start(command, cwd, log_path)
+  case fake_provider_command() {
+    Some(_) -> shell.start(command, cwd, log_path)
+    None -> shell.start_streaming(command, cwd, log_path, prefix)
   }
 }
 
-fn run_harness_command(
+fn run_provider_command(
   command: String,
   cwd: String,
   log_path: String,
   prefix: String,
 ) -> shell.CommandResult {
-  case system.get_env("NIGHT_SHIFT_FAKE_HARNESS") {
-    "" -> shell.run_streaming_prefixed(command, cwd, log_path, prefix)
-    _ -> shell.run(command, cwd, log_path)
+  case fake_provider_command() {
+    Some(_) -> shell.run(command, cwd, log_path)
+    None -> shell.run_streaming_prefixed(command, cwd, log_path, prefix)
+  }
+}
+
+fn fake_provider_command() -> Option(String) {
+  case system.get_env("NIGHT_SHIFT_FAKE_PROVIDER") {
+    "" -> None
+    command -> Some(command)
   }
 }
 
 fn executor_command(
-  harness: types.Harness,
+  agent: types.ResolvedAgentConfig,
   repo_root: String,
   worktree_path: String,
   prompt_path: String,
-) -> String {
-  let fake_harness = system.get_env("NIGHT_SHIFT_FAKE_HARNESS")
-  case fake_harness {
-    "" ->
-      case harness {
-        types.Codex -> codex_exec_command(
-          "--skip-git-repo-check --dangerously-bypass-approvals-and-sandbox",
-          prompt_path,
-        )
-        types.Cursor ->
-          "PROMPT=$(cat "
-          <> shell.quote(prompt_path)
-          <> "); cursor-agent --print --output-format text --force --trust --workspace "
-          <> shell.quote(worktree_path)
-          <> " \"$PROMPT\""
+) -> Result(String, String) {
+  case fake_provider_command() {
+    Some(command) ->
+      Ok(
+        command
+        <> " execute "
+        <> shell.quote(prompt_path)
+        <> " "
+        <> shell.quote(worktree_path)
+        <> " "
+        <> shell.quote(repo_root),
+      )
+    None ->
+      case agent.provider {
+        types.Codex ->
+          codex_exec_command(
+            agent,
+            "--skip-git-repo-check --dangerously-bypass-approvals-and-sandbox",
+            prompt_path,
+          )
+        types.Cursor -> cursor_execute_command(agent, worktree_path, prompt_path)
       }
-    command ->
-      command
-      <> " execute "
-      <> shell.quote(prompt_path)
-      <> " "
-      <> shell.quote(worktree_path)
-      <> " "
-      <> shell.quote(repo_root)
   }
 }
 
 fn planning_command(
-  harness: types.Harness,
+  agent: types.ResolvedAgentConfig,
   repo_root: String,
   prompt_path: String,
-) -> String {
-  case harness {
-    types.Codex -> codex_exec_command(
-      "--skip-git-repo-check --sandbox read-only -C "
-        <> shell.quote(repo_root),
-      prompt_path,
-    )
-    types.Cursor ->
-      "PROMPT=$(cat "
-      <> shell.quote(prompt_path)
-      <> "); cursor-agent --print --output-format text --force --trust --workspace "
-      <> shell.quote(repo_root)
-      <> " \"$PROMPT\""
+) -> Result(String, String) {
+  case agent.provider {
+    types.Codex ->
+      codex_exec_command(
+        agent,
+        "--skip-git-repo-check --sandbox read-only -C " <> shell.quote(repo_root),
+        prompt_path,
+      )
+    types.Cursor -> cursor_plan_command(agent, repo_root, prompt_path)
   }
 }
 
-fn codex_exec_command(arguments: String, prompt_path: String) -> String {
-  "codex exec " <> arguments <> " - < " <> shell.quote(prompt_path)
+fn codex_exec_command(
+  agent: types.ResolvedAgentConfig,
+  base_arguments: String,
+  prompt_path: String,
+) -> Result(String, String) {
+  use extra_arguments <- result.try(codex_extra_arguments(agent))
+  Ok(
+    "codex exec "
+    <> base_arguments
+    <> extra_arguments
+    <> " - < "
+    <> shell.quote(prompt_path),
+  )
+}
+
+fn codex_extra_arguments(agent: types.ResolvedAgentConfig) -> Result(String, String) {
+  case agent.provider_overrides {
+    [] -> Ok(codex_model_argument(agent.model) <> codex_reasoning_argument(agent.reasoning))
+    _ ->
+      Error(
+        "Codex does not support `provider_overrides` in Night Shift yet. Remove the overrides from profile "
+        <> agent.profile_name
+        <> ".",
+      )
+  }
+}
+
+fn codex_model_argument(model: Option(String)) -> String {
+  case model {
+    Some(value) -> " -m " <> shell.quote(value)
+    None -> ""
+  }
+}
+
+fn codex_reasoning_argument(
+  reasoning: Option(types.ReasoningLevel),
+) -> String {
+  case reasoning {
+    Some(value) ->
+      " -c "
+      <> shell.quote(
+        "model_reasoning_effort=\"" <> types.reasoning_to_string(value) <> "\"",
+      )
+    None -> ""
+  }
+}
+
+fn cursor_plan_command(
+  agent: types.ResolvedAgentConfig,
+  repo_root: String,
+  prompt_path: String,
+) -> Result(String, String) {
+  use flags <- result.try(cursor_shared_arguments(agent, repo_root, Some("plan")))
+  Ok(
+    "PROMPT=$(cat "
+    <> shell.quote(prompt_path)
+    <> "); cursor-agent --print --output-format text --force --trust"
+    <> flags
+    <> " \"$PROMPT\"",
+  )
+}
+
+fn cursor_execute_command(
+  agent: types.ResolvedAgentConfig,
+  worktree_path: String,
+  prompt_path: String,
+) -> Result(String, String) {
+  use flags <- result.try(cursor_shared_arguments(agent, worktree_path, None))
+  Ok(
+    "PROMPT=$(cat "
+    <> shell.quote(prompt_path)
+    <> "); cursor-agent --print --output-format text --force --trust"
+    <> flags
+    <> " \"$PROMPT\"",
+  )
+}
+
+fn cursor_shared_arguments(
+  agent: types.ResolvedAgentConfig,
+  workspace: String,
+  default_mode: Option(String),
+) -> Result(String, String) {
+  use _ <- result.try(case agent.reasoning {
+    Some(_) ->
+      Error(
+        "Cursor does not support Night Shift's normalized `reasoning` control. Remove `reasoning` from profile "
+        <> agent.profile_name
+        <> " or express provider-specific behavior with `[profiles."
+        <> agent.profile_name
+        <> ".provider_overrides]`.",
+      )
+    None -> Ok(Nil)
+  })
+  use mode <- result.try(cursor_mode(agent.provider_overrides, default_mode))
+
+  let model_argument = case agent.model {
+    Some(model) -> " --model " <> shell.quote(model)
+    None -> ""
+  }
+  let mode_argument = case mode {
+    Some(value) -> " --mode " <> shell.quote(value)
+    None -> ""
+  }
+
+  Ok(
+    model_argument
+    <> mode_argument
+    <> " --workspace "
+    <> shell.quote(workspace),
+  )
+}
+
+fn cursor_mode(
+  overrides: List(types.ProviderOverride),
+  default_mode: Option(String),
+) -> Result(Option(String), String) {
+  case overrides {
+    [] -> Ok(default_mode)
+    [override] if override.key == "mode" ->
+      case override.value {
+        "plan" -> Ok(Some("plan"))
+        "ask" -> Ok(Some("ask"))
+        value ->
+          Error(
+            "Unsupported Cursor override `mode = \""
+            <> value
+            <> "\"`. Expected `plan` or `ask`.",
+          )
+      }
+    [override] ->
+      Error(
+        "Unsupported Cursor provider override: "
+        <> override.key
+        <> ". Supported keys: mode.",
+      )
+    _ ->
+      Error("Cursor accepts only a single `mode` provider override in Night Shift.")
+  }
 }
 
 fn planner_prompt(brief_contents: String) -> String {
-  "You are Night Shift's planning harness.\n"
+  "You are Night Shift's planning provider.\n"
   <> "Break the supplied brief into a task DAG.\n"
   <> "Do not write files, apply patches, or make any repository changes.\n"
   <> "Read only the files you need to plan the work.\n"
@@ -312,7 +449,7 @@ fn planning_document_prompt(
   existing_doc_contents existing_doc_contents: String,
   doc_path doc_path: String,
 ) -> String {
-  "You are Night Shift's planning harness.\n"
+  "You are Night Shift's planning provider.\n"
   <> "Update the repository's cumulative Night Shift brief.\n"
   <> "Do not write files, apply patches, or make any repository changes.\n"
   <> "Read only the files needed to ground the brief.\n"
@@ -355,7 +492,7 @@ fn planning_document_prompt(
 }
 
 fn execution_prompt(task: types.Task) -> String {
-  "You are Night Shift's execution harness.\n"
+  "You are Night Shift's execution provider.\n"
   <> "Implement the task in the current git worktree.\n"
   <> "Run your own validation before responding.\n"
   <> "Do not exceed the task scope.\n"
@@ -409,16 +546,15 @@ pub fn extract_payload(output: String) -> Result(String, String) {
     |> list.reverse
 
   use after_start <- result.try(case sections {
-    [_] ->
-      Error("Harness output did not contain the start marker.")
+    [_] -> Error("Provider output did not contain the start marker.")
     [last_payload, ..] -> Ok(last_payload)
-    [] -> Error("Harness output did not contain the start marker.")
+    [] -> Error("Provider output did not contain the start marker.")
   })
 
   use #(payload, _) <- result.try(
     string.split_once(after_start, end_marker)
     |> result.map_error(fn(_) {
-      "Harness output did not contain the end marker."
+      "Provider output did not contain the end marker."
     }),
   )
 
@@ -521,14 +657,8 @@ fn execution_status_decoder() -> decode.Decoder(types.TaskState) {
   }
 }
 
-fn write_file(path: String, contents: String) -> Result(Nil, String) {
-  case simplifile.write(contents, to: path) {
-    Ok(Nil) -> Ok(Nil)
-    Error(error) ->
-      Error(
-        "Unable to write " <> path <> ": " <> simplifile.describe_error(error),
-      )
-  }
+fn planning_artifact_path(repo_root: String) -> String {
+  filepath.join(journal.repo_state_path_for(repo_root), "planning")
 }
 
 fn create_directory(path: String) -> Result(Nil, String) {
@@ -561,15 +691,12 @@ fn read_existing_file_or_empty(path: String) -> String {
   }
 }
 
-fn planning_artifact_path(repo_root: String) -> String {
-  filepath.join(
-    filepath.join(journal.repo_state_path_for(repo_root), "plans"),
-    system.timestamp()
-      |> string.replace(each: ":", with: "-")
-      |> string.replace(each: "T", with: "_")
-      |> string.replace(each: "+", with: "_")
-      |> string.replace(each: "Z", with: "")
-      |> string.append("-")
-      |> string.append(system.unique_id()),
-  )
+fn write_file(path: String, contents: String) -> Result(Nil, String) {
+  case simplifile.write(contents, to: path) {
+    Ok(Nil) -> Ok(Nil)
+    Error(error) ->
+      Error(
+        "Unable to write " <> path <> ": " <> simplifile.describe_error(error),
+      )
+  }
 }

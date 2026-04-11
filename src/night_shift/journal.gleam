@@ -13,7 +13,8 @@ import simplifile
 pub fn start_run(
   repo_root: String,
   brief_path: String,
-  harness: types.Harness,
+  planning_agent: types.ResolvedAgentConfig,
+  execution_agent: types.ResolvedAgentConfig,
   max_workers: Int,
 ) -> Result(types.RunRecord, String) {
   let run_id = make_run_id()
@@ -40,7 +41,8 @@ pub fn start_run(
       events_path: events_path,
       report_path: report_path,
       lock_path: lock_path,
-      harness: harness,
+      planning_agent: planning_agent,
+      execution_agent: execution_agent,
       max_workers: max_workers,
       status: types.RunActive,
       created_at: timestamp,
@@ -288,7 +290,12 @@ fn list_run_ids(repo_path: String) -> Result(List(String), String) {
 
 fn read_run(path: String) -> Result(types.RunRecord, String) {
   use contents <- result.try(read_string(path))
-  json.parse(contents, run_decoder())
+  let decoder = case string.contains(does: contents, contain: "\"planning_agent\"") {
+    True -> run_decoder()
+    False -> legacy_run_decoder()
+  }
+
+  json.parse(contents, decoder)
   |> result.map_error(fn(_) { "Unable to decode stored run state." })
 }
 
@@ -333,7 +340,8 @@ fn encode_run(run: types.RunRecord) -> String {
     #("events_path", json.string(run.events_path)),
     #("report_path", json.string(run.report_path)),
     #("lock_path", json.string(run.lock_path)),
-    #("harness", json.string(types.harness_to_string(run.harness))),
+    #("planning_agent", encode_resolved_agent(run.planning_agent)),
+    #("execution_agent", encode_resolved_agent(run.execution_agent)),
     #("max_workers", json.int(run.max_workers)),
     #("status", json.string(types.run_status_to_string(run.status))),
     #("created_at", json.string(run.created_at)),
@@ -341,6 +349,31 @@ fn encode_run(run: types.RunRecord) -> String {
     #("tasks", json.array(run.tasks, encode_task)),
   ])
   |> json.to_string
+}
+
+fn encode_resolved_agent(agent: types.ResolvedAgentConfig) -> json.Json {
+  json.object([
+    #("profile_name", json.string(agent.profile_name)),
+    #("provider", json.string(types.provider_to_string(agent.provider))),
+    #("model", json.nullable(from: agent.model, of: json.string)),
+    #(
+      "reasoning",
+      json.nullable(from: agent.reasoning, of: fn(level) {
+        json.string(types.reasoning_to_string(level))
+      }),
+    ),
+    #(
+      "provider_overrides",
+      json.array(agent.provider_overrides, encode_provider_override),
+    ),
+  ])
+}
+
+fn encode_provider_override(override: types.ProviderOverride) -> json.Json {
+  json.object([
+    #("key", json.string(override.key)),
+    #("value", json.string(override.value)),
+  ])
 }
 
 fn encode_task(task: types.Task) -> json.Json {
@@ -379,7 +412,8 @@ fn run_decoder() -> decode.Decoder(types.RunRecord) {
   use events_path <- decode.field("events_path", decode.string)
   use report_path <- decode.field("report_path", decode.string)
   use lock_path <- decode.field("lock_path", decode.string)
-  use harness <- decode.field("harness", harness_decoder())
+  use planning_agent <- decode.field("planning_agent", resolved_agent_decoder())
+  use execution_agent <- decode.field("execution_agent", resolved_agent_decoder())
   use max_workers <- decode.field("max_workers", decode.int)
   use status <- decode.field("status", run_status_decoder())
   use created_at <- decode.field("created_at", decode.string)
@@ -394,13 +428,97 @@ fn run_decoder() -> decode.Decoder(types.RunRecord) {
     events_path: events_path,
     report_path: report_path,
     lock_path: lock_path,
-    harness: harness,
+    planning_agent: planning_agent,
+    execution_agent: execution_agent,
     max_workers: max_workers,
     status: status,
     created_at: created_at,
     updated_at: updated_at,
     tasks: tasks,
   ))
+}
+
+fn legacy_run_decoder() -> decode.Decoder(types.RunRecord) {
+  use run_id <- decode.field("run_id", decode.string)
+  use repo_root <- decode.field("repo_root", decode.string)
+  use run_path <- decode.field("run_path", decode.string)
+  use brief_path <- decode.field("brief_path", decode.string)
+  use state_path <- decode.field("state_path", decode.string)
+  use events_path <- decode.field("events_path", decode.string)
+  use report_path <- decode.field("report_path", decode.string)
+  use lock_path <- decode.field("lock_path", decode.string)
+  use provider <- decode.field("harness", legacy_provider_decoder())
+  use max_workers <- decode.field("max_workers", decode.int)
+  use status <- decode.field("status", run_status_decoder())
+  use created_at <- decode.field("created_at", decode.string)
+  use updated_at <- decode.field("updated_at", decode.string)
+  use tasks <- decode.field("tasks", decode.list(task_decoder()))
+  let resolved_agent = types.resolved_agent_from_provider(provider)
+  decode.success(types.RunRecord(
+    run_id: run_id,
+    repo_root: repo_root,
+    run_path: run_path,
+    brief_path: brief_path,
+    state_path: state_path,
+    events_path: events_path,
+    report_path: report_path,
+    lock_path: lock_path,
+    planning_agent: resolved_agent,
+    execution_agent: resolved_agent,
+    max_workers: max_workers,
+    status: status,
+    created_at: created_at,
+    updated_at: updated_at,
+    tasks: tasks,
+  ))
+}
+
+fn resolved_agent_decoder() -> decode.Decoder(types.ResolvedAgentConfig) {
+  use profile_name <- decode.field("profile_name", decode.string)
+  use provider <- decode.field("provider", provider_decoder())
+  use model <- decode.field("model", decode.optional(decode.string))
+  use reasoning <- decode.field("reasoning", decode.optional(reasoning_decoder()))
+  use provider_overrides <- decode.field(
+    "provider_overrides",
+    decode.list(provider_override_decoder()),
+  )
+  decode.success(types.ResolvedAgentConfig(
+    profile_name: profile_name,
+    provider: provider,
+    model: model,
+    reasoning: reasoning,
+    provider_overrides: provider_overrides,
+  ))
+}
+
+fn provider_override_decoder() -> decode.Decoder(types.ProviderOverride) {
+  use key <- decode.field("key", decode.string)
+  use value <- decode.field("value", decode.string)
+  decode.success(types.ProviderOverride(key: key, value: value))
+}
+
+fn provider_decoder() -> decode.Decoder(types.Provider) {
+  use raw <- decode.then(decode.string)
+  case types.provider_from_string(raw) {
+    Ok(provider) -> decode.success(provider)
+    Error(_) -> decode.failure(types.Codex, "Provider")
+  }
+}
+
+fn legacy_provider_decoder() -> decode.Decoder(types.Provider) {
+  use raw <- decode.then(decode.string)
+  case types.provider_from_string(raw) {
+    Ok(provider) -> decode.success(provider)
+    Error(_) -> decode.failure(types.Codex, "Provider")
+  }
+}
+
+fn reasoning_decoder() -> decode.Decoder(types.ReasoningLevel) {
+  use raw <- decode.then(decode.string)
+  case types.reasoning_from_string(raw) {
+    Ok(reasoning) -> decode.success(reasoning)
+    Error(_) -> decode.failure(types.Medium, "ReasoningLevel")
+  }
 }
 
 fn task_decoder() -> decode.Decoder(types.Task) {
@@ -448,14 +566,6 @@ fn event_decoder() -> decode.Decoder(types.RunEvent) {
     message: message,
     task_id: task_id,
   ))
-}
-
-fn harness_decoder() -> decode.Decoder(types.Harness) {
-  use raw <- decode.then(decode.string)
-  case types.harness_from_string(raw) {
-    Ok(harness) -> decode.success(harness)
-    Error(_) -> decode.failure(types.Codex, "Harness")
-  }
 }
 
 fn run_status_decoder() -> decode.Decoder(types.RunStatus) {
