@@ -5,6 +5,7 @@ import gleam/option.{None, Some}
 import gleam/result
 import gleam/string
 import night_shift/domain/decisions as decision_domain
+import night_shift/domain/pull_request as pull_request_domain
 import night_shift/domain/run_state
 import night_shift/domain/summary as domain_summary
 import night_shift/domain/task_graph
@@ -20,6 +21,13 @@ import night_shift/worktree_setup
 import night_shift/worktree_setup_model
 
 pub fn start(
+  run: types.RunRecord,
+  config: types.Config,
+) -> Result(types.RunRecord, String) {
+  continue_run(run, config)
+}
+
+pub fn continue_run(
   run: types.RunRecord,
   config: types.Config,
 ) -> Result(types.RunRecord, String) {
@@ -57,58 +65,7 @@ pub fn resume(
     )
 
   use persisted_run <- result.try(journal.append_event(resumed_run, event))
-  use #(prepared_run, proceed) <- result.try(prepare_run_for_execution(
-    persisted_run,
-  ))
-  case proceed {
-    True -> scheduler_loop(config, prepared_run)
-    False -> Ok(prepared_run)
-  }
-}
-
-pub fn review(
-  run: types.RunRecord,
-  config: types.Config,
-) -> Result(types.RunRecord, String) {
-  let log_path = filepath.join(run.run_path, "logs/review.log")
-  use prs <- result.try(github.list_night_shift_prs(
-    run.repo_root,
-    config.branch_prefix,
-    log_path,
-  ))
-
-  let review_tasks =
-    prs
-    |> list.try_map(fn(pr) {
-      use details <- result.try(github.review_item(
-        run.repo_root,
-        pr.number,
-        log_path,
-      ))
-      Ok(review_task_from_pr(details))
-    })
-
-  use tasks <- result.try(review_tasks)
-  let seeded_run =
-    types.RunRecord(..run, tasks: task_graph.normalize_tasks(tasks))
-  let event =
-    types.RunEvent(
-      kind: "task_progress",
-      at: system.timestamp(),
-      message: "Review mode loaded "
-        <> int.to_string(list.length(tasks))
-        <> " stabilization tasks.",
-      task_id: None,
-    )
-
-  use persisted_run <- result.try(journal.append_event(seeded_run, event))
-  use #(prepared_run, proceed) <- result.try(prepare_run_for_execution(
-    persisted_run,
-  ))
-  case proceed {
-    True -> scheduler_loop(config, prepared_run)
-    False -> Ok(prepared_run)
-  }
+  continue_run(persisted_run, config)
 }
 
 fn plan_with_event(
@@ -603,7 +560,7 @@ fn finalize_success(
                       ))
                     Ok(_) -> {
                       let pr_body =
-                        build_pr_body(
+                        pull_request_domain.render_body(
                           run,
                           task_run.task,
                           final_execution,
@@ -831,73 +788,6 @@ fn recover_task(task: types.Task) -> types.Task {
       }
     _ -> task
   }
-}
-
-fn build_pr_body(
-  run: types.RunRecord,
-  task: types.Task,
-  execution_result: types.ExecutionResult,
-  verification_output: String,
-) -> String {
-  "## Summary\n"
-  <> execution_result.pr.summary
-  <> "\n\n## Demo\n"
-  <> bullet_list(execution_result.pr.demo)
-  <> "\n\n## Verification\n```\n"
-  <> verification_output
-  <> "\n```\n\n## Known Risks\n"
-  <> bullet_list(execution_result.pr.risks)
-  <> "\n\n<!-- night-shift:run="
-  <> run.run_id
-  <> ";task="
-  <> task.id
-  <> ";brief="
-  <> run.brief_path
-  <> " -->"
-}
-
-fn bullet_list(items: List(String)) -> String {
-  case items {
-    [] -> "- None"
-    _ ->
-      items
-      |> list.map(fn(item) { "- " <> item })
-      |> string.join(with: "\n")
-  }
-}
-
-fn review_task_from_pr(pr: github.ReviewWorkItem) -> types.Task {
-  let description =
-    "Stabilize PR #"
-    <> int.to_string(pr.number)
-    <> " ("
-    <> pr.url
-    <> ") by addressing review comments and failing checks.\n\n"
-    <> pr.body
-    <> "\n\nReview notes:\n"
-    <> bullet_list(pr.review_comments)
-    <> "\n\nFailing checks:\n"
-    <> bullet_list(pr.failing_checks)
-
-  types.Task(
-    id: "review-pr-" <> int.to_string(pr.number),
-    title: "Stabilize PR #" <> int.to_string(pr.number),
-    description: description,
-    dependencies: [],
-    acceptance: [
-      "Resolve requested review feedback when possible.",
-      "Leave the PR in a green or clearly blocked state.",
-    ],
-    demo_plan: ["Summarize the fixes and checks in the PR body."],
-    decision_requests: [],
-    kind: types.ImplementationTask,
-    execution_mode: types.Exclusive,
-    state: types.Ready,
-    worktree_path: "",
-    branch_name: pr.head_ref_name,
-    pr_number: int.to_string(pr.number),
-    summary: "",
-  )
 }
 
 fn start_task_run(
