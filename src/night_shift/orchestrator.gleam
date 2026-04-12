@@ -131,42 +131,48 @@ fn load_planned_tasks(
       maybe_retry_planned_tasks(run, attempt, retry_feedback, message)
     Ok(planned_tasks) ->
       case validate_planned_tasks(run, planned_tasks) {
-    Ok(_) ->
-      case
-        decision_contract.reconcile_decision_requests(
-          run.decisions,
-          planned_tasks,
-        )
-      {
-        Ok(#(reconciled_tasks, warnings)) ->
-          case plan_hygiene.normalize_planned_tasks(reconciled_tasks) {
-            Ok(normalized_tasks) ->
-              Ok(#(
-                normalized_tasks,
-                warnings,
-                retry_events(attempt, retry_feedback),
-              ))
+        Ok(_) ->
+          case
+            decision_contract.reconcile_decision_requests(
+              run.decisions,
+              planned_tasks,
+            )
+          {
+            Ok(#(reconciled_tasks, warnings)) ->
+              case plan_hygiene.normalize_planned_tasks(reconciled_tasks) {
+                Ok(normalized_tasks) ->
+                  Ok(#(
+                    normalized_tasks,
+                    warnings,
+                    retry_events(attempt, retry_feedback),
+                  ))
+                Error(message) ->
+                  maybe_retry_planned_tasks(
+                    run,
+                    attempt,
+                    retry_feedback,
+                    message,
+                  )
+              }
             Error(message) ->
               maybe_retry_planned_tasks(run, attempt, retry_feedback, message)
           }
-        Error(message) ->
-          maybe_retry_planned_tasks(run, attempt, retry_feedback, message)
-      }
-    Error(issues) -> {
-      let message = domain_summary.planning_validation_summary(issues)
-      case attempt < 2 && retryable_planning_issue(message) {
-        True ->
-          load_planned_tasks(
-            run,
-            attempt + 1,
-            Some(corrective_retry_feedback(message, retry_feedback)),
-          )
-        False -> {
-          use _ <- result.try(reject_invalid_plan(run, issues))
-          Error(message)
+        Error(issues) -> {
+          let message = domain_summary.planning_validation_summary(issues)
+          case attempt < 2 && retryable_planning_issue(message) {
+            True ->
+              load_planned_tasks(
+                run,
+                attempt + 1,
+                Some(corrective_retry_feedback(message, retry_feedback)),
+              )
+            False -> {
+              use _ <- result.try(reject_invalid_plan(run, issues))
+              Error(message)
+            }
+          }
         }
       }
-    }}
   }
 }
 
