@@ -19,6 +19,7 @@ pub fn run(ui_enabled: Bool) -> Result(String, String) {
   let fake_gh = filepath.join(bin_dir, "gh")
   let demo_state_home = filepath.join(demo_root, "state")
   let old_path = system.get_env("PATH")
+  let old_gh_bin = system.get_env("NIGHT_SHIFT_GH_BIN")
   let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
   let old_demo_command = system.get_env("NIGHT_SHIFT_DEMO_COMMAND")
   let old_state_home = system.get_env("XDG_STATE_HOME")
@@ -39,6 +40,7 @@ pub fn run(ui_enabled: Bool) -> Result(String, String) {
 
   system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
   system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("NIGHT_SHIFT_GH_BIN", fake_gh)
   system.set_env("XDG_STATE_HOME", demo_state_home)
   system.set_env("NIGHT_SHIFT_REPO_ROOT", repo_root)
 
@@ -48,6 +50,7 @@ pub fn run(ui_enabled: Bool) -> Result(String, String) {
   }
 
   restore_env("PATH", old_path)
+  restore_env("NIGHT_SHIFT_GH_BIN", old_gh_bin)
   restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
   restore_env("NIGHT_SHIFT_DEMO_COMMAND", old_demo_command)
   restore_env("XDG_STATE_HOME", old_state_home)

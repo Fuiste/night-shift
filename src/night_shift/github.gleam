@@ -93,7 +93,7 @@ pub fn review_item(
   log_path: String,
 ) -> Result(ReviewWorkItem, String) {
   let command =
-    "gh pr view "
+    gh_pr_command("view ")
     <> int.to_string(pr_number)
     <> " --json number,title,body,headRefName,baseRefName,url,reviewDecision,statusCheckRollup,reviews,comments"
 
@@ -117,7 +117,7 @@ fn list_pull_requests(
   }
   let result =
     shell.run(
-      "gh pr list --state open --limit 100"
+      gh_pr_command("list --state open --limit 100")
         <> head_fragment
         <> " --json number,url,headRefName,title",
       cwd,
@@ -154,7 +154,7 @@ fn create_pull_request(
   log_path: String,
 ) -> Result(String, String) {
   let command =
-    "gh pr create --title "
+    gh_pr_command("create --title ")
     <> shell.quote(title)
     <> " --body-file "
     <> shell.quote(body_path)
@@ -178,7 +178,7 @@ fn edit_pull_request(
   log_path: String,
 ) -> Result(Nil, String) {
   let command =
-    "gh pr edit "
+    gh_pr_command("edit ")
     <> int.to_string(pr_number)
     <> " --title "
     <> shell.quote(title)
@@ -193,6 +193,17 @@ fn run_gh(command: String, cwd: String, log_path: String) -> Result(Nil, String)
   case shell.succeeded(result) {
     True -> Ok(Nil)
     False -> Error(string.trim(result.output))
+  }
+}
+
+fn gh_pr_command(args: String) -> String {
+  gh_executable() <> " pr " <> args
+}
+
+fn gh_executable() -> String {
+  case system.get_env("NIGHT_SHIFT_GH_BIN") {
+    "" -> "gh"
+    path -> shell.quote(path)
   }
 }
 

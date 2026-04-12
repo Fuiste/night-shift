@@ -449,6 +449,10 @@ implements:
 - `fake-provider plan-doc <prompt-file>`
 - `fake-provider execute <prompt-file> <worktree> <repo-root>`
 
+If you also need deterministic PR fixture behavior, set
+`NIGHT_SHIFT_GH_BIN` to the `gh`-compatible executable Night Shift should use
+for pull request delivery and review commands.
+
 ## Delivery Model
 
 - Each completed task is delivered as a pull request.

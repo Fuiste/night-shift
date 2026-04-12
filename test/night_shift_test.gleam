@@ -1022,6 +1022,7 @@ pub fn review_command_reuses_existing_worktree_for_open_pr_branch_test() {
   let fake_gh = filepath.join(bin_dir, "gh")
   let existing_worktree = filepath.join(base_dir, "existing-review-worktree")
   let old_path = system.get_env("PATH")
+  let old_gh_bin = system.get_env("NIGHT_SHIFT_GH_BIN")
   let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
@@ -1082,6 +1083,7 @@ pub fn review_command_reuses_existing_worktree_for_open_pr_branch_test() {
     )
 
   system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("NIGHT_SHIFT_GH_BIN", fake_gh)
   system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
 
   let result =
@@ -1092,6 +1094,7 @@ pub fn review_command_reuses_existing_worktree_for_open_pr_branch_test() {
     )
 
   system.set_env("PATH", old_path)
+  restore_env("NIGHT_SHIFT_GH_BIN", old_gh_bin)
   restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
 
   let assert Ok(output) = result
@@ -2079,6 +2082,7 @@ pub fn github_open_or_update_pr_uses_create_output_when_listing_lags_test() {
   let bin_dir = filepath.join(base_dir, "bin")
   let fake_gh = filepath.join(bin_dir, "gh")
   let old_path = system.get_env("PATH")
+  let old_gh_bin = system.get_env("NIGHT_SHIFT_GH_BIN")
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
   let assert Ok(_) = simplifile.create_directory_all(repo_root)
@@ -2094,6 +2098,7 @@ pub fn github_open_or_update_pr_uses_create_output_when_listing_lags_test() {
     )
 
   system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("NIGHT_SHIFT_GH_BIN", fake_gh)
 
   let result =
     github.open_or_update_pr(
@@ -2107,6 +2112,7 @@ pub fn github_open_or_update_pr_uses_create_output_when_listing_lags_test() {
     )
 
   system.set_env("PATH", old_path)
+  restore_env("NIGHT_SHIFT_GH_BIN", old_gh_bin)
 
   let assert Ok(pr) = result
   assert pr.number == 42
@@ -2132,6 +2138,7 @@ pub fn orchestrator_start_runs_fake_provider_test() {
   let fake_gh = filepath.join(bin_dir, "gh")
   let state_home = filepath.join(base_dir, "state")
   let old_path = system.get_env("PATH")
+  let old_gh_bin = system.get_env("NIGHT_SHIFT_GH_BIN")
   let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
   let old_state_home = system.get_env("XDG_STATE_HOME")
 
@@ -2196,6 +2203,7 @@ pub fn orchestrator_start_runs_fake_provider_test() {
 
   system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
   system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("NIGHT_SHIFT_GH_BIN", fake_gh)
   system.set_env("XDG_STATE_HOME", state_home)
 
   let config =
@@ -2209,6 +2217,7 @@ pub fn orchestrator_start_runs_fake_provider_test() {
   let assert Ok(completed_run) = orchestrator.start(run, config)
 
   system.set_env("PATH", old_path)
+  restore_env("NIGHT_SHIFT_GH_BIN", old_gh_bin)
   system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
   system.set_env("XDG_STATE_HOME", old_state_home)
 
@@ -2254,6 +2263,7 @@ pub fn orchestrator_start_preserves_partial_success_after_delivery_failure_test(
   let fake_gh = filepath.join(bin_dir, "gh")
   let state_home = filepath.join(base_dir, "state")
   let old_path = system.get_env("PATH")
+  let old_gh_bin = system.get_env("NIGHT_SHIFT_GH_BIN")
   let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
   let old_state_home = system.get_env("XDG_STATE_HOME")
 
@@ -2293,6 +2303,7 @@ pub fn orchestrator_start_preserves_partial_success_after_delivery_failure_test(
 
   system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
   system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("NIGHT_SHIFT_GH_BIN", fake_gh)
   system.set_env("XDG_STATE_HOME", state_home)
 
   let config =
@@ -2306,6 +2317,7 @@ pub fn orchestrator_start_preserves_partial_success_after_delivery_failure_test(
   let assert Ok(failed_run) = orchestrator.start(run, config)
 
   system.set_env("PATH", old_path)
+  restore_env("NIGHT_SHIFT_GH_BIN", old_gh_bin)
   restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
   restore_env("XDG_STATE_HOME", old_state_home)
 
@@ -2386,6 +2398,7 @@ pub fn orchestrator_start_delivers_provider_created_commit_test() {
   let fake_gh = filepath.join(bin_dir, "gh")
   let state_home = filepath.join(base_dir, "state")
   let old_path = system.get_env("PATH")
+  let old_gh_bin = system.get_env("NIGHT_SHIFT_GH_BIN")
   let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
   let old_state_home = system.get_env("XDG_STATE_HOME")
 
@@ -2450,6 +2463,7 @@ pub fn orchestrator_start_delivers_provider_created_commit_test() {
 
   system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
   system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("NIGHT_SHIFT_GH_BIN", fake_gh)
   system.set_env("XDG_STATE_HOME", state_home)
 
   let config =
@@ -2463,6 +2477,7 @@ pub fn orchestrator_start_delivers_provider_created_commit_test() {
   let assert Ok(completed_run) = orchestrator.start(run, config)
 
   system.set_env("PATH", old_path)
+  restore_env("NIGHT_SHIFT_GH_BIN", old_gh_bin)
   system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
   system.set_env("XDG_STATE_HOME", old_state_home)
 
@@ -3028,6 +3043,7 @@ pub fn orchestrator_start_uses_setup_phase_for_new_worktrees_test() {
   let fake_gh = filepath.join(bin_dir, "gh")
   let state_home = filepath.join(base_dir, "state")
   let old_path = system.get_env("PATH")
+  let old_gh_bin = system.get_env("NIGHT_SHIFT_GH_BIN")
   let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
   let old_state_home = system.get_env("XDG_STATE_HOME")
 
@@ -3074,6 +3090,7 @@ pub fn orchestrator_start_uses_setup_phase_for_new_worktrees_test() {
 
   system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
   system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("NIGHT_SHIFT_GH_BIN", fake_gh)
   system.set_env("XDG_STATE_HOME", state_home)
 
   let config =
@@ -3088,6 +3105,7 @@ pub fn orchestrator_start_uses_setup_phase_for_new_worktrees_test() {
   let assert Ok(completed_run) = orchestrator.start(run, config)
 
   system.set_env("PATH", old_path)
+  restore_env("NIGHT_SHIFT_GH_BIN", old_gh_bin)
   restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
   restore_env("XDG_STATE_HOME", old_state_home)
 
@@ -3575,6 +3593,7 @@ pub fn dashboard_start_session_tracks_completed_run_test() {
   let fake_gh = filepath.join(bin_dir, "gh")
   let state_home = filepath.join(base_dir, "state")
   let old_path = system.get_env("PATH")
+  let old_gh_bin = system.get_env("NIGHT_SHIFT_GH_BIN")
   let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
   let old_state_home = system.get_env("XDG_STATE_HOME")
 
@@ -3639,6 +3658,7 @@ pub fn dashboard_start_session_tracks_completed_run_test() {
 
   system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
   system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("NIGHT_SHIFT_GH_BIN", fake_gh)
   system.set_env("XDG_STATE_HOME", state_home)
 
   let config =
@@ -3654,6 +3674,7 @@ pub fn dashboard_start_session_tracks_completed_run_test() {
   let final_payload = wait_for_run_payload(session.url, run.run_id, 20)
 
   system.set_env("PATH", old_path)
+  restore_env("NIGHT_SHIFT_GH_BIN", old_gh_bin)
   system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
   system.set_env("XDG_STATE_HOME", old_state_home)
 
