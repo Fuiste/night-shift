@@ -1,8 +1,10 @@
+//// Agent profile resolution for planning, execution, and review phases.
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import night_shift/types
 
+/// Resolve the provider config used for the planning phase.
 pub fn resolve_plan_agent(
   config: types.Config,
   overrides: types.AgentOverrides,
@@ -14,6 +16,7 @@ pub fn resolve_plan_agent(
   )
 }
 
+/// Resolve the planning and execution provider configs for a run.
 pub fn resolve_start_agents(
   config: types.Config,
   overrides: types.AgentOverrides,
@@ -31,6 +34,7 @@ pub fn resolve_start_agents(
   Ok(#(planning_agent, execution_agent))
 }
 
+/// Resolve the provider config used for the review phase.
 pub fn resolve_review_agent(
   config: types.Config,
   overrides: types.AgentOverrides,
@@ -42,6 +46,8 @@ pub fn resolve_review_agent(
   )
 }
 
+/// Return the effective profile name for a phase, falling back to the default
+/// profile when the phase-specific name is blank.
 pub fn effective_phase_profile_name(
   phase_profile_name: String,
   config: types.Config,
@@ -49,6 +55,7 @@ pub fn effective_phase_profile_name(
   fallback_phase_profile(phase_profile_name, config)
 }
 
+/// Render a short operator-facing summary of a resolved agent config.
 pub fn summary(agent: types.ResolvedAgentConfig) -> String {
   let model = case agent.model {
     Some(model) -> model

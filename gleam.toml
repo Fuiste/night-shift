@@ -4,6 +4,25 @@ description = "Autonomous agent orchestration for overnight software work."
 licences = ["Apache-2.0"]
 repository = { type = "github", user = "Fuiste", repo = "night-shift" }
 target = "erlang"
+internal_modules = [
+  "night_shift/codec",
+  "night_shift/codec/*",
+  "night_shift/domain",
+  "night_shift/domain/*",
+  "night_shift/infra",
+  "night_shift/infra/*",
+  "night_shift/usecase",
+  "night_shift/usecase/*",
+  "night_shift/usecase/support",
+  "night_shift/usecase/support/*",
+  "night_shift/demo",
+  "night_shift/provider_command",
+  "night_shift/provider_prompt",
+  "night_shift/shell",
+  "night_shift/system",
+  "night_shift/worktree_setup_model",
+  "night_shift/worktree_setup_runtime",
+]
 
 [dependencies]
 gleam_stdlib = ">= 0.44.0 and < 2.0.0"

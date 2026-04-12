@@ -1,3 +1,7 @@
+//// Top-level command dispatcher for Night Shift.
+////
+//// This module is where parsed CLI commands meet repo-local configuration and
+//// the usecase layer.
 import gleam/int
 import gleam/io
 import gleam/list
@@ -29,6 +33,7 @@ import night_shift/usecase/start as start_usecase
 import night_shift/usecase/status as status_usecase
 import simplifile
 
+/// Execute a parsed CLI command against the current repository.
 pub fn run(command: types.Command) -> Nil {
   let repo_root = current_repo_root()
 

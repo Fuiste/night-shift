@@ -1,7 +1,9 @@
+//// Public journal facade over Night Shift persistence.
 import gleam/option.{type Option}
 import night_shift/infra/run_store
 import night_shift/types
 
+/// Create and persist a new active run.
 pub fn start_run(
   repo_root: String,
   brief_path: String,
@@ -20,6 +22,7 @@ pub fn start_run(
   )
 }
 
+/// Create a pending run that can later be activated or reused.
 pub fn create_pending_run(
   repo_root: String,
   brief_path: String,
@@ -54,6 +57,7 @@ pub fn latest_reusable_run(
   run_store.latest_reusable_run(repo_root)
 }
 
+/// Load a run and its recorded events.
 pub fn load(
   repo_root: String,
   selector: types.RunSelector,
@@ -61,6 +65,7 @@ pub fn load(
   run_store.load(repo_root, selector)
 }
 
+/// List all persisted runs for this repository.
 pub fn list_runs(repo_root: String) -> Result(List(types.RunRecord), String) {
   run_store.list_runs(repo_root)
 }
@@ -87,6 +92,7 @@ pub fn mark_status(
   run_store.mark_status(run, status, message)
 }
 
+/// Read the rendered operator report for a run.
 pub fn read_report(
   repo_root: String,
   selector: types.RunSelector,
@@ -94,6 +100,7 @@ pub fn read_report(
   run_store.read_report(repo_root, selector)
 }
 
+/// Return the current active run id for the repository.
 pub fn active_run_id(repo_root: String) -> Result(String, String) {
   run_store.active_run_id(repo_root)
 }

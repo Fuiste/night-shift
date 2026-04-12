@@ -1,7 +1,9 @@
+//// CLI parsing and operator-facing help text for Night Shift.
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import night_shift/types
 
+/// Render the CLI usage text shown for `help` and parse failures.
 pub fn usage() -> String {
   "Night Shift\n"
   <> "\n"
@@ -19,6 +21,19 @@ pub fn usage() -> String {
   <> "  review [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>] [--environment <name>]\n"
 }
 
+/// Parse raw command-line arguments into a `Command`.
+///
+/// ## Examples
+///
+/// ```gleam
+/// > parse(["start", "--run", "latest"])
+/// Ok(types.Start(types.LatestRun, False))
+/// ```
+///
+/// ```gleam
+/// > parse(["plan"])
+/// Error("The plan command requires --notes <file-or-inline-text>.")
+/// ```
 pub fn parse(args: List(String)) -> Result(types.Command, String) {
   case contains_demo_flag(args) {
     True -> parse_demo(args, False)

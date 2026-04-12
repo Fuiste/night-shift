@@ -1,3 +1,4 @@
+//// Minimal local dashboard surface for inspecting Night Shift runs.
 import gleam/json
 import gleam/list
 import gleam/option.{None, Some}
@@ -5,17 +6,20 @@ import gleam/result
 import night_shift/journal
 import night_shift/types
 
+/// A running local dashboard session.
 pub type Session {
   Session(url: String, handle: String)
 }
 
 @external(erlang, "night_shift_dashboard_server", "start_view_session")
+/// Start a read-only dashboard session for an existing run.
 pub fn start_view_session(
   repo_root: String,
   initial_run_id: String,
 ) -> Result(Session, String)
 
 @external(erlang, "night_shift_dashboard_server", "start_start_session")
+/// Start a dashboard session that owns a live `start` invocation.
 pub fn start_start_session(
   repo_root: String,
   initial_run_id: String,
@@ -24,6 +28,7 @@ pub fn start_start_session(
 ) -> Result(Session, String)
 
 @external(erlang, "night_shift_dashboard_server", "start_resume_session")
+/// Start a dashboard session that owns a live `resume` invocation.
 pub fn start_resume_session(
   repo_root: String,
   initial_run_id: String,
@@ -32,11 +37,14 @@ pub fn start_resume_session(
 ) -> Result(Session, String)
 
 @external(erlang, "night_shift_dashboard_server", "stop_session")
+/// Stop a running dashboard session.
 pub fn stop_session(session: Session) -> Nil
 
 @external(erlang, "night_shift_dashboard_server", "http_get")
+/// Fetch a dashboard URL from the local server.
 pub fn http_get(url: String) -> Result(String, String)
 
+/// Render the self-contained dashboard HTML shell.
 pub fn index_html(initial_run_id: String) -> String {
   let initial_run_json = json.string(initial_run_id) |> json.to_string
 
@@ -191,6 +199,7 @@ pub fn index_html(initial_run_id: String) -> String {
   <> "</html>\n"
 }
 
+/// Encode the repository's run history as dashboard JSON.
 pub fn runs_json(repo_root: String) -> Result(String, String) {
   use runs <- result.try(journal.list_runs(repo_root))
   Ok(
@@ -201,6 +210,7 @@ pub fn runs_json(repo_root: String) -> Result(String, String) {
   )
 }
 
+/// Encode one run, its events, and its report as dashboard JSON.
 pub fn run_json(repo_root: String, run_id: String) -> Result(String, String) {
   use #(run, events) <- result.try(journal.load(repo_root, types.RunId(run_id)))
   use report <- result.try(journal.read_report(repo_root, types.RunId(run_id)))
