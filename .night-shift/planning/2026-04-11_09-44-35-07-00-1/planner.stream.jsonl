@@ -1,2 +1,0 @@
-{"type":"thread.started","thread_id":"fallback"}
-{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"NIGHT_SHIFT_RESULT_START\n{\"status\":\"completed\",\"summary\":\"ok\",\"files_touched\":[],\"demo_evidence\":[],\"pr\":{\"title\":\"t\",\"summary\":\"s\",\"demo\":[],\"risks\":[]},\"follow_up_tasks\":[]}\nNIGHT_SHIFT_RESULT_END"}}
