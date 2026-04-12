@@ -46,28 +46,6 @@ pub fn replan(run: types.RunRecord) -> Result(types.RunRecord, String) {
   plan_with_event(run, "run_replanned", "Replanner produced ")
 }
 
-pub fn resume(
-  run: types.RunRecord,
-  config: types.Config,
-) -> Result(types.RunRecord, String) {
-  let resumed_tasks =
-    run.tasks
-    |> list.map(fn(task) { recover_task(task) })
-    |> task_graph.refresh_ready_states
-
-  let resumed_run = types.RunRecord(..run, tasks: resumed_tasks)
-  let event =
-    types.RunEvent(
-      kind: "task_progress",
-      at: system.timestamp(),
-      message: "Run resumed; interrupted workers were requeued or marked for manual attention.",
-      task_id: None,
-    )
-
-  use persisted_run <- result.try(journal.append_event(resumed_run, event))
-  continue_run(persisted_run, config)
-}
-
 fn plan_with_event(
   run: types.RunRecord,
   event_kind: String,
@@ -762,31 +740,6 @@ fn append_manual_attention_events_for_tasks(
       ))
       append_manual_attention_events_for_tasks(rest, updated_run)
     }
-  }
-}
-
-fn recover_task(task: types.Task) -> types.Task {
-  case task.state {
-    types.Running ->
-      case task.worktree_path {
-        "" -> types.Task(..task, state: types.Queued)
-        _ ->
-          case
-            git.has_changes(
-              task.worktree_path,
-              filepath.join(task.worktree_path, ".night-shift-recover.log"),
-            )
-          {
-            True ->
-              types.Task(
-                ..task,
-                state: types.ManualAttention,
-                summary: "Interrupted run left changes in the worktree.",
-              )
-            False -> types.Task(..task, state: types.Queued)
-          }
-      }
-    _ -> task
   }
 }
 
