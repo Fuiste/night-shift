@@ -1,0 +1,12 @@
+title: Night Shift
+description: Repo-local operator docs for planning, executing, and reviewing autonomous coding work.
+url: "https://fuiste.github.io"
+baseurl: "/night-shift"
+markdown: kramdown
+permalink: pretty
+theme: null
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default
