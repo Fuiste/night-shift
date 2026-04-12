@@ -4,9 +4,9 @@ import gleam/json
 import gleam/list
 import gleam/result
 import gleam/string
+import night_shift/codec/artifact_path
 import night_shift/journal
 import night_shift/shell
-import night_shift/system
 import night_shift/types
 import simplifile
 
@@ -28,9 +28,7 @@ pub fn list_models(
   case shell.succeeded(command_result) {
     True ->
       parse_models(provider_name, command_result.output)
-      |> result.map_error(fn(message) {
-        message <> " See " <> log_path
-      })
+      |> result.map_error(fn(message) { message <> " See " <> log_path })
     False ->
       Error(
         "Unable to list models for provider "
@@ -170,16 +168,7 @@ fn codex_model_command() -> String {
 }
 
 fn model_artifact_path(repo_root: String) -> String {
-  filepath.join(
-    journal.planning_root_for(repo_root),
-    system.timestamp()
-      |> string.replace(each: ":", with: "-")
-      |> string.replace(each: "T", with: "_")
-      |> string.replace(each: "+", with: "_")
-      |> string.replace(each: "Z", with: "")
-      |> string.append("-")
-      |> string.append(system.unique_id()),
-  )
+  artifact_path.timestamped_directory(journal.planning_root_for(repo_root))
 }
 
 fn create_directory(path: String) -> Result(Nil, String) {

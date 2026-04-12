@@ -3,6 +3,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
+import night_shift/codec/shared
 import night_shift/types
 import simplifile
 
@@ -26,16 +27,17 @@ pub fn load(path: String) -> Result(types.Config, String) {
 
 pub fn render(config: types.Config) -> String {
   let root_lines = [
-    "default_profile = " <> render_string(config.default_profile),
-    "planning_profile = " <> render_string(config.planning_profile),
-    "execution_profile = " <> render_string(config.execution_profile),
-    "review_profile = " <> render_string(config.review_profile),
+    "default_profile = " <> shared.render_string(config.default_profile),
+    "planning_profile = " <> shared.render_string(config.planning_profile),
+    "execution_profile = " <> shared.render_string(config.execution_profile),
+    "review_profile = " <> shared.render_string(config.review_profile),
     "",
-    "base_branch = " <> render_string(config.base_branch),
+    "base_branch = " <> shared.render_string(config.base_branch),
     "max_workers = " <> int.to_string(config.max_workers),
-    "branch_prefix = " <> render_string(config.branch_prefix),
-    "pr_title_prefix = " <> render_string(config.pr_title_prefix),
-    "notifiers = " <> render_string_list(
+    "branch_prefix = " <> shared.render_string(config.branch_prefix),
+    "pr_title_prefix = " <> shared.render_string(config.pr_title_prefix),
+    "notifiers = "
+      <> shared.render_string_list(
       config.notifiers |> list.map(types.notifier_to_string),
     ),
   ]
@@ -49,7 +51,7 @@ pub fn render(config: types.Config) -> String {
     [] -> ""
     _ ->
       "\n\n[verification]\ncommands = "
-      <> render_string_list(config.verification_commands)
+      <> shared.render_string_list(config.verification_commands)
   }
 
   string.join(root_lines, with: "\n")
@@ -84,7 +86,7 @@ fn parse_lines(
 fn parse_line(line: String, state: ParseState) -> Result(ParseState, String) {
   let cleaned =
     line
-    |> strip_comments
+    |> shared.strip_comments
     |> string.trim
 
   case cleaned {
@@ -117,13 +119,6 @@ fn parse_section(section: String) -> Result(Section, String) {
   }
 }
 
-fn strip_comments(line: String) -> String {
-  case string.split(line, "#") {
-    [first, ..] -> first
-    [] -> line
-  }
-}
-
 fn parse_assignment(
   assignment: String,
   state: ParseState,
@@ -145,36 +140,39 @@ fn apply_value(
   case state.section, key {
     RootSection, "base_branch" ->
       Ok(ParseState(
-        types.Config(..config, base_branch: parse_string(raw_value)),
+        types.Config(..config, base_branch: shared.parse_string(raw_value)),
         state.section,
       ))
 
     RootSection, "default_profile" ->
       Ok(ParseState(
-        types.Config(..config, default_profile: parse_string(raw_value)),
+        types.Config(..config, default_profile: shared.parse_string(raw_value)),
         state.section,
       ))
 
     RootSection, "planning_profile" ->
       Ok(ParseState(
-        types.Config(..config, planning_profile: parse_string(raw_value)),
+        types.Config(..config, planning_profile: shared.parse_string(raw_value)),
         state.section,
       ))
 
     RootSection, "execution_profile" ->
       Ok(ParseState(
-        types.Config(..config, execution_profile: parse_string(raw_value)),
+        types.Config(
+          ..config,
+          execution_profile: shared.parse_string(raw_value),
+        ),
         state.section,
       ))
 
     RootSection, "review_profile" ->
       Ok(ParseState(
-        types.Config(..config, review_profile: parse_string(raw_value)),
+        types.Config(..config, review_profile: shared.parse_string(raw_value)),
         state.section,
       ))
 
     RootSection, "max_workers" -> {
-      use worker_count <- result.try(parse_int(raw_value))
+      use worker_count <- result.try(shared.parse_int(raw_value, "config"))
       Ok(ParseState(
         types.Config(..config, max_workers: worker_count),
         state.section,
@@ -183,13 +181,13 @@ fn apply_value(
 
     RootSection, "branch_prefix" ->
       Ok(ParseState(
-        types.Config(..config, branch_prefix: parse_string(raw_value)),
+        types.Config(..config, branch_prefix: shared.parse_string(raw_value)),
         state.section,
       ))
 
     RootSection, "pr_title_prefix" ->
       Ok(ParseState(
-        types.Config(..config, pr_title_prefix: parse_string(raw_value)),
+        types.Config(..config, pr_title_prefix: shared.parse_string(raw_value)),
         state.section,
       ))
 
@@ -202,14 +200,14 @@ fn apply_value(
       Ok(ParseState(
         types.Config(
           ..config,
-          verification_commands: parse_string_list(raw_value),
+          verification_commands: shared.parse_string_list(raw_value),
         ),
         state.section,
       ))
 
     ProfileSection(profile_name), "provider" -> {
       use provider <- result.try(
-        parse_string(raw_value)
+        shared.parse_string(raw_value)
         |> types.provider_from_string,
       )
       Ok(ParseState(
@@ -223,7 +221,10 @@ fn apply_value(
     ProfileSection(profile_name), "model" ->
       Ok(ParseState(
         upsert_profile(state.config, profile_name, fn(profile) {
-          types.AgentProfile(..profile, model: parse_optional_string(raw_value))
+          types.AgentProfile(
+            ..profile,
+            model: shared.parse_optional_string(raw_value),
+          )
         }),
         state.section,
       ))
@@ -246,7 +247,7 @@ fn apply_value(
             provider_overrides: upsert_provider_override(
               profile.provider_overrides,
               override_key,
-              parse_string(raw_value),
+              shared.parse_string(raw_value),
             ),
           )
         }),
@@ -311,7 +312,7 @@ fn parse_notifiers(
   raw_value: String,
 ) -> Result(List(types.NotifierName), String) {
   raw_value
-  |> parse_string_list
+  |> shared.parse_string_list
   |> parse_notifier_values([])
 }
 
@@ -331,7 +332,7 @@ fn parse_notifier_values(
 fn parse_optional_reasoning(
   raw_value: String,
 ) -> Result(Option(types.ReasoningLevel), String) {
-  case parse_string(raw_value) {
+  case shared.parse_string(raw_value) {
     "" -> Ok(None)
     value ->
       types.reasoning_from_string(value)
@@ -339,34 +340,23 @@ fn parse_optional_reasoning(
   }
 }
 
-fn parse_int(raw_value: String) -> Result(Int, String) {
-  case int.parse(raw_value) {
-    Ok(value) -> Ok(value)
-    Error(Nil) -> Error("Expected integer but received: " <> raw_value)
-  }
-}
-
-fn parse_optional_string(raw_value: String) -> Option(String) {
-  case parse_string(raw_value) {
-    "" -> None
-    value -> Some(value)
-  }
-}
-
 fn render_profile(profile: types.AgentProfile) -> String {
   let base_lines = [
     "[profiles." <> profile.name <> "]",
-    "provider = " <> render_string(types.provider_to_string(profile.provider)),
+    "provider = "
+      <> shared.render_string(types.provider_to_string(profile.provider)),
   ]
 
   let model_lines = case profile.model {
-    Some(model) -> ["model = " <> render_string(model)]
+    Some(model) -> ["model = " <> shared.render_string(model)]
     None -> []
   }
 
   let reasoning_lines = case profile.reasoning {
-    Some(reasoning) ->
-      ["reasoning = " <> render_string(types.reasoning_to_string(reasoning))]
+    Some(reasoning) -> [
+      "reasoning = "
+      <> shared.render_string(types.reasoning_to_string(reasoning)),
+    ]
     None -> []
   }
 
@@ -376,9 +366,9 @@ fn render_profile(profile: types.AgentProfile) -> String {
       list.append(
         ["", "[profiles." <> profile.name <> ".provider_overrides]"],
         overrides
-        |> list.map(fn(override) {
-          override.key <> " = " <> render_string(override.value)
-        }),
+          |> list.map(fn(override) {
+            override.key <> " = " <> shared.render_string(override.value)
+          }),
       )
   }
 
@@ -386,58 +376,4 @@ fn render_profile(profile: types.AgentProfile) -> String {
     list.flatten([base_lines, model_lines, reasoning_lines, override_lines]),
     with: "\n",
   )
-}
-
-fn render_string(value: String) -> String {
-  "\"" <> string.replace(in: value, each: "\"", with: "\\\"") <> "\""
-}
-
-fn render_string_list(values: List(String)) -> String {
-  case values {
-    [] -> "[]"
-    _ ->
-      "["
-      <> {
-        values
-        |> list.map(render_string)
-        |> string.join(with: ", ")
-      }
-      <> "]"
-  }
-}
-
-fn parse_string(raw_value: String) -> String {
-  let trimmed = raw_value |> string.trim
-  let without_prefix = case string.starts_with(trimmed, "\"") {
-    True -> string.drop_start(trimmed, 1)
-    False -> trimmed
-  }
-
-  case string.ends_with(without_prefix, "\"") {
-    True -> string.drop_end(without_prefix, 1)
-    False -> without_prefix
-  }
-}
-
-fn parse_string_list(raw_value: String) -> List(String) {
-  let trimmed = raw_value |> string.trim
-  let without_prefix = case string.starts_with(trimmed, "[") {
-    True -> string.drop_start(trimmed, 1)
-    False -> trimmed
-  }
-
-  let inner =
-    case string.ends_with(without_prefix, "]") {
-      True -> string.drop_end(without_prefix, 1)
-      False -> without_prefix
-    }
-    |> string.trim
-
-  case inner {
-    "" -> []
-    _ ->
-      inner
-      |> string.split(",")
-      |> list.map(fn(item) { parse_string(item) })
-  }
 }

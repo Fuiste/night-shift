@@ -56,7 +56,8 @@ pub fn attach_worktree(
 }
 
 pub fn has_changes(cwd: String, log_path: String) -> Bool {
-  let result = shell.run("git status --short --untracked-files=all", cwd, log_path)
+  let result =
+    shell.run("git status --short --untracked-files=all", cwd, log_path)
   shell.succeeded(result) && string.trim(result.output) != ""
 }
 
@@ -97,7 +98,10 @@ pub fn remove_worktree(
   )
 }
 
-pub fn prune_worktrees(repo_root: String, log_path: String) -> Result(Nil, String) {
+pub fn prune_worktrees(
+  repo_root: String,
+  log_path: String,
+) -> Result(Nil, String) {
   run_git("git worktree prune", repo_root, log_path)
 }
 

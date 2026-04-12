@@ -66,13 +66,8 @@ pub fn open_or_update_pr(
       ))
       case pull_request_from_create_output(create_output, branch_name, title) {
         Ok(pull_request) -> Ok(pull_request)
-        Error(_) -> find_pull_request_after_create(
-          cwd,
-          branch_name,
-          title,
-          log_path,
-          5,
-        )
+        Error(_) ->
+          find_pull_request_after_create(cwd, branch_name, title, log_path, 5)
       }
     }
   }
@@ -123,8 +118,8 @@ fn list_pull_requests(
   let result =
     shell.run(
       "gh pr list --state open --limit 100"
-      <> head_fragment
-      <> " --json number,url,headRefName,title",
+        <> head_fragment
+        <> " --json number,url,headRefName,title",
       cwd,
       log_path,
     )
@@ -250,7 +245,9 @@ fn first_pull_request_url(output: String) -> Result(String, String) {
     string.starts_with(line, "https://") || string.starts_with(line, "http://")
   })
   |> list.first
-  |> result.map_error(fn(_) { "No pull request URL was returned by gh pr create." })
+  |> result.map_error(fn(_) {
+    "No pull request URL was returned by gh pr create."
+  })
 }
 
 fn parse_pull_request_number(url: String) -> Result(Int, String) {

@@ -62,7 +62,8 @@ fn parse_plan_flags(
     [] ->
       case notes_path {
         Ok(path) -> Ok(types.Plan(path, doc_path, agent_overrides))
-        Error(Nil) -> Error("The plan command requires --notes <file-or-inline-text>.")
+        Error(Nil) ->
+          Error("The plan command requires --notes <file-or-inline-text>.")
       }
 
     ["--notes", path, ..rest] ->
@@ -208,8 +209,7 @@ fn parse_start_flags(
       parse_start_flags(rest, types.LatestRun, ui_enabled)
     ["--run", run_id, ..rest] ->
       parse_start_flags(rest, types.RunId(run_id), ui_enabled)
-    ["--ui", ..rest] ->
-      parse_start_flags(rest, run, True)
+    ["--ui", ..rest] -> parse_start_flags(rest, run, True)
     [flag, ..] -> Error("Unsupported start flag: " <> flag)
   }
 }

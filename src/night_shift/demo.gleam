@@ -2,8 +2,8 @@ import filepath
 import gleam/list
 import gleam/result
 import gleam/string
-import night_shift/project
 import night_shift/dashboard
+import night_shift/project
 import night_shift/shell
 import night_shift/system
 import simplifile
@@ -246,10 +246,7 @@ fn setup_demo_environment(
   ))
   use _ <- result.try(create_directory(project.home(repo_root)))
   use _ <- result.try(write_file(brief_path, "# Demo\n"))
-  use _ <- result.try(write_file(
-    project.config_path(repo_root),
-    "",
-  ))
+  use _ <- result.try(write_file(project.config_path(repo_root), ""))
   use _ <- result.try(write_file(
     project.gitignore_path(repo_root),
     "*\n!config.toml\n!worktree-setup.toml\n!.gitignore\n",
@@ -487,8 +484,8 @@ fn reset_demo_root(
 
 fn write_fake_provider(path: String) -> Result(Nil, String) {
   write_file(
-      path,
-      "#!/bin/sh\n"
+    path,
+    "#!/bin/sh\n"
       <> "MODE=$1\n"
       <> "PROMPT_FILE=$2\n"
       <> "if [ \"$MODE\" = \"plan\" ]; then\n"

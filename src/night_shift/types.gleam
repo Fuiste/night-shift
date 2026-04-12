@@ -154,7 +154,9 @@ pub type ExecutionMode {
   Exclusive
 }
 
-pub fn execution_mode_from_string(value: String) -> Result(ExecutionMode, String) {
+pub fn execution_mode_from_string(
+  value: String,
+) -> Result(ExecutionMode, String) {
   case value {
     "parallel" -> Ok(Parallel)
     "serial" -> Ok(Serial)
@@ -271,10 +273,7 @@ pub fn is_task_ready(task: Task, completed_ids: List(String)) -> Bool {
   }
 }
 
-pub fn decision_recorded(
-  decisions: List(RecordedDecision),
-  key: String,
-) -> Bool {
+pub fn decision_recorded(decisions: List(RecordedDecision), key: String) -> Bool {
   list.any(decisions, fn(decision) { decision.key == key })
 }
 
@@ -283,17 +282,16 @@ pub fn unresolved_decision_requests(
   task: Task,
 ) -> List(DecisionRequest) {
   case task.decision_requests {
-    [] ->
-      [
-        DecisionRequest(
-          key: "task:" <> task.id,
-          question: task.title,
-          rationale: task.description,
-          options: [],
-          recommended_option: None,
-          allow_freeform: True,
-        ),
-      ]
+    [] -> [
+      DecisionRequest(
+        key: "task:" <> task.id,
+        question: task.title,
+        rationale: task.description,
+        options: [],
+        recommended_option: None,
+        allow_freeform: True,
+      ),
+    ]
     requests ->
       requests
       |> list.filter(fn(request) { !decision_recorded(decisions, request.key) })
@@ -413,11 +411,7 @@ pub fn default_config() -> Config {
 
 pub type Command {
   Start(run: RunSelector, ui_enabled: Bool)
-  Init(
-    agent_overrides: AgentOverrides,
-    generate_setup: Bool,
-    assume_yes: Bool,
-  )
+  Init(agent_overrides: AgentOverrides, generate_setup: Bool, assume_yes: Bool)
   Reset(assume_yes: Bool, force: Bool)
   Plan(
     notes_value: String,

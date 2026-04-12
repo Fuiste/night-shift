@@ -11,8 +11,8 @@ import night_shift/demo
 import night_shift/github
 import night_shift/journal
 import night_shift/orchestrator
-import night_shift/provider
 import night_shift/project
+import night_shift/provider
 import night_shift/shell
 import night_shift/system
 import night_shift/types
@@ -161,8 +161,7 @@ pub fn parse_resume_command_with_ui_test() {
 }
 
 pub fn parse_resume_rejects_environment_flag_test() {
-  let assert Error(message) =
-    cli.parse(["resume", "--environment", "dev"])
+  let assert Error(message) = cli.parse(["resume", "--environment", "dev"])
   assert message == "Unsupported flag: --environment"
 }
 
@@ -216,12 +215,12 @@ pub fn parse_multiline_worktree_command_lists_test() {
     <> "windows = []\n"
 
   let assert Ok(parsed) = worktree_setup.parse(source)
-  let assert Ok(environment) = worktree_setup.find_environment(parsed, "default")
+  let assert Ok(environment) =
+    worktree_setup.find_environment(parsed, "default")
 
   assert environment.env_vars == [#("HUSKY", "0")]
   assert environment.setup.default == ["pnpm install --frozen-lockfile"]
-  assert environment.maintenance.default
-    == ["pnpm run lint", "pnpm run test"]
+  assert environment.maintenance.default == ["pnpm run lint", "pnpm run test"]
 }
 
 pub fn parse_profile_config_test() {
@@ -788,10 +787,7 @@ pub fn start_without_brief_requires_default_doc_test() {
     does: message,
     contain: "No open Night Shift run was found.",
   )
-  assert string.contains(
-    does: message,
-    contain: "night-shift plan --notes",
-  )
+  assert string.contains(does: message, contain: "night-shift plan --notes")
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
@@ -866,10 +862,14 @@ pub fn init_writes_selected_provider_and_model_test() {
     )
 
   let assert Ok(message) = output
-  let assert Ok(config_contents) = simplifile.read(project.config_path(repo_root))
+  let assert Ok(config_contents) =
+    simplifile.read(project.config_path(repo_root))
 
   assert string.contains(does: message, contain: "Initialized")
-  assert string.contains(does: config_contents, contain: "provider = \"cursor\"")
+  assert string.contains(
+    does: config_contents,
+    contain: "provider = \"cursor\"",
+  )
   assert string.contains(
     does: config_contents,
     contain: "model = \"composer-2-fast\"",
@@ -1105,10 +1105,7 @@ pub fn plan_command_creates_and_updates_default_brief_test() {
   let assert Ok(document) = simplifile.read(default_doc)
 
   assert string.contains(does: first_output, contain: "Planned run ")
-  assert string.contains(
-    does: second_output,
-    contain: "Planned run ",
-  )
+  assert string.contains(does: second_output, contain: "Planned run ")
   assert string.contains(does: document, contain: "Alpha task")
   assert string.contains(does: document, contain: "Beta task")
 
@@ -1173,12 +1170,18 @@ pub fn blocked_plan_status_and_report_show_decisions_test() {
   assert string.contains(does: plan_output, contain: "Planned run ")
   assert string.contains(does: status_output, contain: "is blocked")
   assert string.contains(does: status_output, contain: "Blocked tasks: 1")
-  assert string.contains(does: status_output, contain: "Outstanding decisions: 1")
+  assert string.contains(
+    does: status_output,
+    contain: "Outstanding decisions: 1",
+  )
   assert string.contains(
     does: status_output,
     contain: "Ready implementation tasks: 0",
   )
-  assert string.contains(does: status_output, contain: "Next action: night-shift resolve")
+  assert string.contains(
+    does: status_output,
+    contain: "Next action: night-shift resolve",
+  )
   assert string.contains(
     does: report_contents,
     contain: "- Manual-attention tasks: 1",
@@ -1348,7 +1351,8 @@ pub fn resolve_command_recovers_from_planning_sync_pending_test() {
       repo_root,
       filepath.join(base_dir, "resolve.log"),
     )
-  let assert Ok(#(updated_run, _events)) = journal.load(repo_root, types.LatestRun)
+  let assert Ok(#(updated_run, _events)) =
+    journal.load(repo_root, types.LatestRun)
 
   restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
   restore_env("XDG_STATE_HOME", old_state_home)
@@ -1445,9 +1449,18 @@ pub fn stale_blocked_run_status_and_start_guidance_test() {
   let assert Ok(start_output) = start_result
 
   assert string.contains(does: status_output, contain: "Blocked tasks: 1")
-  assert string.contains(does: status_output, contain: "Outstanding decisions: 0")
-  assert string.contains(does: status_output, contain: "Planning sync pending: yes")
-  assert string.contains(does: status_output, contain: "Next action: night-shift resolve")
+  assert string.contains(
+    does: status_output,
+    contain: "Outstanding decisions: 0",
+  )
+  assert string.contains(
+    does: status_output,
+    contain: "Planning sync pending: yes",
+  )
+  assert string.contains(
+    does: status_output,
+    contain: "Next action: night-shift resolve",
+  )
   assert string.contains(
     does: start_output,
     contain: "recorded new planning answers or notes but has not been replanned yet",
@@ -1495,8 +1508,7 @@ pub fn start_dirty_night_shift_control_files_do_not_block_test() {
       filepath.join(base_dir, "chmod.log"),
     )
   seed_git_repo(repo_root, base_dir)
-  let assert Ok(_) =
-    simplifile.write("Add a docs page.\n", to: notes_path)
+  let assert Ok(_) = simplifile.write("Add a docs page.\n", to: notes_path)
 
   system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
   system.set_env("XDG_STATE_HOME", state_home)
@@ -1507,10 +1519,11 @@ pub fn start_dirty_night_shift_control_files_do_not_block_test() {
       repo_root,
       filepath.join(base_dir, "plan.log"),
     )
-  let assert Ok(_) = simplifile.write(
-    worktree_setup.default_template(),
-    to: project.worktree_setup_path(repo_root),
-  )
+  let assert Ok(_) =
+    simplifile.write(
+      worktree_setup.default_template(),
+      to: project.worktree_setup_path(repo_root),
+    )
   let start_result =
     run_local_cli_command(
       ["start"],
@@ -1581,27 +1594,24 @@ pub fn reset_command_removes_project_home_and_worktrees_test() {
       None,
     )
   let run_with_worktree =
-    types.RunRecord(
-      ..run,
-      tasks: [
-        types.Task(
-          id: "demo-task",
-          title: "Demo task",
-          description: "Demo",
-          dependencies: [],
-          acceptance: [],
-          demo_plan: [],
-          decision_requests: [],
-          kind: types.ImplementationTask,
-          execution_mode: types.Serial,
-          state: types.Ready,
-          worktree_path: worktree_path,
-          branch_name: "night-shift/reset-demo",
-          pr_number: "",
-          summary: "",
-        ),
-      ],
-    )
+    types.RunRecord(..run, tasks: [
+      types.Task(
+        id: "demo-task",
+        title: "Demo task",
+        description: "Demo",
+        dependencies: [],
+        acceptance: [],
+        demo_plan: [],
+        decision_requests: [],
+        kind: types.ImplementationTask,
+        execution_mode: types.Serial,
+        state: types.Ready,
+        worktree_path: worktree_path,
+        branch_name: "night-shift/reset-demo",
+        pr_number: "",
+        summary: "",
+      ),
+    ])
   let assert Ok(_) = journal.rewrite_run(run_with_worktree)
 
   system.set_env("NIGHT_SHIFT_DEMO_COMMAND", local_demo_command())
@@ -1619,7 +1629,10 @@ pub fn reset_command_removes_project_home_and_worktrees_test() {
 
   let assert Ok(reset_output) = reset_result
 
-  assert string.contains(does: reset_output, contain: "Night Shift reset complete")
+  assert string.contains(
+    does: reset_output,
+    contain: "Night Shift reset complete",
+  )
   assert simplifile.read_directory(at: project.home(repo_root))
     |> result.is_error
   assert simplifile.read_directory(at: worktree_path)
@@ -1802,8 +1815,7 @@ pub fn generate_worktree_setup_reports_empty_payload_test() {
   let repo_root = filepath.join(base_dir, "repo")
   let bin_dir = filepath.join(base_dir, "bin")
   let fake_codex = filepath.join(bin_dir, "codex")
-  let output_path =
-    filepath.join(repo_root, ".night-shift/worktree-setup.toml")
+  let output_path = filepath.join(repo_root, ".night-shift/worktree-setup.toml")
   let state_home = filepath.join(base_dir, "state")
   let old_path = system.get_env("PATH")
   let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
@@ -1836,10 +1848,7 @@ pub fn generate_worktree_setup_reports_empty_payload_test() {
   system.set_env("XDG_STATE_HOME", old_state_home)
 
   let assert Error(message) = result
-  assert string.contains(
-    does: message,
-    contain: "empty file",
-  )
+  assert string.contains(does: message, contain: "empty file")
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
@@ -1920,7 +1929,8 @@ pub fn github_open_or_update_pr_uses_create_output_when_listing_lags_test() {
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
   let assert Ok(_) = simplifile.create_directory_all(repo_root)
-  let assert Ok(_) = simplifile.create_directory_all(filepath.join(run_path, "logs"))
+  let assert Ok(_) =
+    simplifile.create_directory_all(filepath.join(run_path, "logs"))
   let assert Ok(_) = simplifile.create_directory_all(bin_dir)
   let assert Ok(_) = write_delayed_listing_fake_gh(fake_gh)
   let _ =
@@ -2198,7 +2208,10 @@ pub fn orchestrator_start_preserves_partial_success_after_delivery_failure_test(
   assert string.contains(does: report_contents, contain: "- Completed tasks: 1")
   assert string.contains(does: report_contents, contain: "- Opened PRs: 1")
   assert string.contains(does: report_contents, contain: "- Failed tasks: 1")
-  assert string.contains(does: report_contents, contain: "- Type: partial success")
+  assert string.contains(
+    does: report_contents,
+    contain: "- Type: partial success",
+  )
   assert string.contains(does: events, contain: "\"kind\":\"pr_opened\"")
   let assert Error(_) = simplifile.read(project.active_lock_path(repo_root))
 
@@ -2418,7 +2431,8 @@ pub fn provider_await_task_recovers_trailing_junk_test() {
   let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
-  let assert Ok(_) = simplifile.create_directory_all(filepath.join(run_path, "logs"))
+  let assert Ok(_) =
+    simplifile.create_directory_all(filepath.join(run_path, "logs"))
   let assert Ok(_) = simplifile.create_directory_all(worktree_path)
   let assert Ok(_) = simplifile.create_directory_all(bin_dir)
   let assert Ok(_) = write_recoverable_execution_fake_provider(fake_provider)
@@ -2468,10 +2482,7 @@ pub fn provider_await_task_recovers_trailing_junk_test() {
   restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
 
   let assert Ok(raw_payload) =
-    simplifile.read(filepath.join(
-      run_path,
-      "logs/demo-task.result.raw.jsonish",
-    ))
+    simplifile.read(filepath.join(run_path, "logs/demo-task.result.raw.jsonish"))
   let assert Ok(sanitized_payload) =
     simplifile.read(filepath.join(
       run_path,
@@ -2512,11 +2523,12 @@ pub fn orchestrator_start_blocks_manual_attention_before_bootstrap_test() {
   let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
   let assert Ok(_) = initialize_project_home(repo_root)
   let assert Ok(_) = write_manual_attention_fake_provider(fake_provider)
-  let assert Ok(_) = write_test_worktree_setup(
-    project.worktree_setup_path(repo_root),
-    ["missing-tool setup"],
-    ["missing-tool maintenance"],
-  )
+  let assert Ok(_) =
+    write_test_worktree_setup(
+      project.worktree_setup_path(repo_root),
+      ["missing-tool setup"],
+      ["missing-tool maintenance"],
+    )
   let _ =
     shell.run(
       "chmod +x " <> shell.quote(fake_provider),
@@ -2537,13 +2549,7 @@ pub fn orchestrator_start_blocks_manual_attention_before_bootstrap_test() {
     )
 
   let assert Ok(run) =
-    planned_run_in_environment(
-      repo_root,
-      brief_path,
-      types.Codex,
-      "default",
-      1,
-    )
+    planned_run_in_environment(repo_root, brief_path, types.Codex, "default", 1)
   let assert Ok(blocked_run) = orchestrator.start(run, config)
 
   system.set_env("PATH", old_path)
@@ -2576,12 +2582,16 @@ pub fn orchestrator_start_blocks_manual_attention_before_bootstrap_test() {
     does: blocked_task.summary,
     contain: "no worktree bootstrap or provider execution started",
   )
-  assert string.contains(does: events, contain: "\"kind\":\"task_manual_attention\"")
+  assert string.contains(
+    does: events,
+    contain: "\"kind\":\"task_manual_attention\"",
+  )
   assert string.contains(does: events, contain: "\"kind\":\"task_started\"")
     == False
-  assert simplifile.read(
-    filepath.join(blocked_run.run_path, "logs/" <> blocked_task.id <> ".env.log"),
-  )
+  assert simplifile.read(filepath.join(
+      blocked_run.run_path,
+      "logs/" <> blocked_task.id <> ".env.log",
+    ))
     |> result.is_error
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
@@ -2611,11 +2621,12 @@ pub fn orchestrator_start_fails_environment_preflight_before_task_launch_test() 
   let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
   let assert Ok(_) = initialize_project_home(repo_root)
   let assert Ok(_) = write_fake_provider(fake_provider)
-  let assert Ok(_) = write_test_worktree_setup(
-    project.worktree_setup_path(repo_root),
-    ["missing-tool setup"],
-    ["missing-tool maintenance"],
-  )
+  let assert Ok(_) =
+    write_test_worktree_setup(
+      project.worktree_setup_path(repo_root),
+      ["missing-tool setup"],
+      ["missing-tool maintenance"],
+    )
   let _ =
     shell.run(
       "chmod +x " <> shell.quote(fake_provider),
@@ -2636,13 +2647,7 @@ pub fn orchestrator_start_fails_environment_preflight_before_task_launch_test() 
     )
 
   let assert Ok(run) =
-    planned_run_in_environment(
-      repo_root,
-      brief_path,
-      types.Codex,
-      "default",
-      1,
-    )
+    planned_run_in_environment(repo_root, brief_path, types.Codex, "default", 1)
   let assert Ok(failed_run) = orchestrator.start(run, config)
 
   system.set_env("PATH", old_path)
@@ -2667,10 +2672,7 @@ pub fn orchestrator_start_fails_environment_preflight_before_task_launch_test() 
     does: report_contents,
     contain: "- Run-level failures: 1",
   )
-  assert string.contains(
-    does: report_contents,
-    contain: "## Failure",
-  )
+  assert string.contains(does: report_contents, contain: "## Failure")
   assert string.contains(
     does: report_contents,
     contain: "environment bootstrap",
@@ -2693,12 +2695,13 @@ pub fn environment_preflight_uses_explicit_bootstrap_requirements_test() {
   let _ = simplifile.delete(file_or_dir_at: base_dir)
   let assert Ok(_) = simplifile.create_directory_all(repo_root)
   let assert Ok(_) = initialize_project_home(repo_root)
-  let assert Ok(_) = write_test_worktree_setup_with_preflight(
-    setup_path,
-    ["sh"],
-    ["sh -c 'echo bootstrap >/dev/null'", "missing-tool install"],
-    ["missing-tool verify"],
-  )
+  let assert Ok(_) =
+    write_test_worktree_setup_with_preflight(
+      setup_path,
+      ["sh"],
+      ["sh -c 'echo bootstrap >/dev/null'", "missing-tool install"],
+      ["missing-tool verify"],
+    )
 
   let result =
     worktree_setup.preflight_environment(
@@ -2710,8 +2713,12 @@ pub fn environment_preflight_uses_explicit_bootstrap_requirements_test() {
   let assert Ok(preflight_contents) = simplifile.read(log_path)
 
   let assert Ok(_) = result
-  assert string.contains(does: preflight_contents, contain: "[preflight] executable=sh")
-  assert string.contains(does: preflight_contents, contain: "missing-tool") == False
+  assert string.contains(
+    does: preflight_contents,
+    contain: "[preflight] executable=sh",
+  )
+  assert string.contains(does: preflight_contents, contain: "missing-tool")
+    == False
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
@@ -2730,11 +2737,12 @@ pub fn environment_preflight_defaults_to_first_setup_executable_test() {
   let _ = simplifile.delete(file_or_dir_at: base_dir)
   let assert Ok(_) = simplifile.create_directory_all(repo_root)
   let assert Ok(_) = initialize_project_home(repo_root)
-  let assert Ok(_) = write_test_worktree_setup(
-    setup_path,
-    ["sh -c 'echo bootstrap >/dev/null'", "missing-tool install"],
-    ["missing-tool verify"],
-  )
+  let assert Ok(_) =
+    write_test_worktree_setup(
+      setup_path,
+      ["sh -c 'echo bootstrap >/dev/null'", "missing-tool install"],
+      ["missing-tool verify"],
+    )
 
   let result =
     worktree_setup.preflight_environment(
@@ -2746,8 +2754,12 @@ pub fn environment_preflight_defaults_to_first_setup_executable_test() {
   let assert Ok(preflight_contents) = simplifile.read(log_path)
 
   let assert Ok(_) = result
-  assert string.contains(does: preflight_contents, contain: "[preflight] executable=sh")
-  assert string.contains(does: preflight_contents, contain: "missing-tool") == False
+  assert string.contains(
+    does: preflight_contents,
+    contain: "[preflight] executable=sh",
+  )
+  assert string.contains(does: preflight_contents, contain: "missing-tool")
+    == False
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
@@ -2776,12 +2788,13 @@ pub fn orchestrator_start_reports_setup_phase_failures_after_preflight_test() {
   let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
   let assert Ok(_) = initialize_project_home(repo_root)
   let assert Ok(_) = write_fake_provider(fake_provider)
-  let assert Ok(_) = write_test_worktree_setup_with_preflight(
-    project.worktree_setup_path(repo_root),
-    ["sh"],
-    ["sh -c 'echo bootstrap >/dev/null'", "missing-tool install"],
-    [],
-  )
+  let assert Ok(_) =
+    write_test_worktree_setup_with_preflight(
+      project.worktree_setup_path(repo_root),
+      ["sh"],
+      ["sh -c 'echo bootstrap >/dev/null'", "missing-tool install"],
+      [],
+    )
   let _ =
     shell.run(
       "chmod +x " <> shell.quote(fake_provider),
@@ -2802,13 +2815,7 @@ pub fn orchestrator_start_reports_setup_phase_failures_after_preflight_test() {
     )
 
   let assert Ok(run) =
-    planned_run_in_environment(
-      repo_root,
-      brief_path,
-      types.Codex,
-      "default",
-      1,
-    )
+    planned_run_in_environment(repo_root, brief_path, types.Codex, "default", 1)
   let assert Ok(failed_run) = orchestrator.start(run, config)
 
   system.set_env("PATH", old_path)
@@ -2816,8 +2823,7 @@ pub fn orchestrator_start_reports_setup_phase_failures_after_preflight_test() {
   restore_env("XDG_STATE_HOME", old_state_home)
 
   let assert Ok(events) = simplifile.read(failed_run.events_path)
-  let env_log =
-    filepath.join(failed_run.run_path, "logs/demo-task.env.log")
+  let env_log = filepath.join(failed_run.run_path, "logs/demo-task.env.log")
   let assert Ok(env_contents) = simplifile.read(env_log)
   let failed_task =
     failed_run.tasks
@@ -2842,14 +2848,8 @@ pub fn orchestrator_start_reports_setup_phase_failures_after_preflight_test() {
   assert failed_run.status == types.RunFailed
   assert string.contains(does: events, contain: "\"kind\":\"task_started\"")
   assert string.contains(does: events, contain: "\"kind\":\"task_failed\"")
-  assert string.contains(
-    does: env_contents,
-    contain: "(exit 127)",
-  )
-  assert string.contains(
-    does: env_contents,
-    contain: "$ missing-tool install",
-  )
+  assert string.contains(does: env_contents, contain: "(exit 127)")
+  assert string.contains(does: env_contents, contain: "$ missing-tool install")
   assert string.contains(
     does: failed_task.summary,
     contain: "Worktree setup phase failed while running `missing-tool install`",
@@ -2885,11 +2885,12 @@ pub fn orchestrator_start_uses_setup_phase_for_new_worktrees_test() {
   let assert Ok(_) = initialize_project_home(repo_root)
   let assert Ok(_) = write_fake_provider(fake_provider)
   let assert Ok(_) = write_fake_gh(fake_gh)
-  let assert Ok(_) = write_test_worktree_setup(
-    project.worktree_setup_path(repo_root),
-    ["printf setup-phase >/dev/null"],
-    ["printf maintenance-phase >/dev/null"],
-  )
+  let assert Ok(_) =
+    write_test_worktree_setup(
+      project.worktree_setup_path(repo_root),
+      ["printf setup-phase >/dev/null"],
+      ["printf maintenance-phase >/dev/null"],
+    )
   let _ =
     shell.run(
       "chmod +x " <> shell.quote(fake_provider) <> " " <> shell.quote(fake_gh),
@@ -2928,13 +2929,7 @@ pub fn orchestrator_start_uses_setup_phase_for_new_worktrees_test() {
     )
 
   let assert Ok(run) =
-    planned_run_in_environment(
-      repo_root,
-      brief_path,
-      types.Codex,
-      "default",
-      1,
-    )
+    planned_run_in_environment(repo_root, brief_path, types.Codex, "default", 1)
   let assert Ok(completed_run) = orchestrator.start(run, config)
 
   system.set_env("PATH", old_path)
@@ -2942,9 +2937,10 @@ pub fn orchestrator_start_uses_setup_phase_for_new_worktrees_test() {
   restore_env("XDG_STATE_HOME", old_state_home)
 
   let assert Ok(env_log) =
-    simplifile.read(
-      filepath.join(completed_run.run_path, "logs/demo-task.env.log"),
-    )
+    simplifile.read(filepath.join(
+      completed_run.run_path,
+      "logs/demo-task.env.log",
+    ))
 
   assert completed_run.status == types.RunCompleted
   assert string.contains(does: env_log, contain: "phase=setup")
@@ -2952,11 +2948,7 @@ pub fn orchestrator_start_uses_setup_phase_for_new_worktrees_test() {
     does: env_log,
     contain: "$ printf setup-phase >/dev/null",
   )
-  assert string.contains(
-    does: env_log,
-    contain: "maintenance-phase",
-  )
-    == False
+  assert string.contains(does: env_log, contain: "maintenance-phase") == False
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
@@ -3046,10 +3038,7 @@ pub fn orchestrator_start_marks_decode_failures_failed_and_clears_lock_test() {
   )
   assert string.contains(does: events, contain: "\"kind\":\"task_failed\"")
   assert string.contains(does: events, contain: "\"kind\":\"run_failed\"")
-  assert string.contains(
-    does: raw_payload,
-    contain: "\"follow_up_tasks\":[}",
-  )
+  assert string.contains(does: raw_payload, contain: "\"follow_up_tasks\":[}")
   let assert Error(_) = simplifile.read(project.active_lock_path(repo_root))
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
@@ -3290,7 +3279,10 @@ pub fn demo_run_succeeds_without_ui_test() {
     contain: "Proof file: "
       <> filepath.join(demo.demo_root(), "repo/IMPLEMENTED.md"),
   )
-  assert string.contains(does: first_summary, contain: "Artifacts: " <> demo.demo_root())
+  assert string.contains(
+    does: first_summary,
+    contain: "Artifacts: " <> demo.demo_root(),
+  )
 }
 
 pub fn demo_run_succeeds_with_ui_test() {
@@ -3327,7 +3319,9 @@ fn absolute_path(path: String) -> String {
   }
 }
 
-fn initialize_project_home(repo_root: String) -> Result(Nil, simplifile.FileError) {
+fn initialize_project_home(
+  repo_root: String,
+) -> Result(Nil, simplifile.FileError) {
   use _ <- result.try(simplifile.create_directory_all(project.home(repo_root)))
   use _ <- result.try(simplifile.write(
     config.render(types.default_config()),
@@ -3426,12 +3420,7 @@ fn run_local_cli_tty_command_with_input(
       |> string.join(with: " ")
     }
   let _ = simplifile.write(input, to: input_path)
-  let result =
-    shell.run(
-      command,
-      cwd,
-      log_path,
-    )
+  let result = shell.run(command, cwd, log_path)
 
   case shell.succeeded(result) {
     True -> Ok(result.output)
@@ -3449,7 +3438,13 @@ fn start_run(
   provider_name: types.Provider,
   max_workers: Int,
 ) -> Result(types.RunRecord, String) {
-  start_run_in_environment(repo_root, brief_path, provider_name, "", max_workers)
+  start_run_in_environment(
+    repo_root,
+    brief_path,
+    provider_name,
+    "",
+    max_workers,
+  )
 }
 
 fn planned_run(
@@ -3901,7 +3896,9 @@ fn write_fake_streaming_codex(path: String) -> Result(Nil, simplifile.FileError)
   )
 }
 
-fn write_fake_streaming_utf8_codex(path: String) -> Result(Nil, simplifile.FileError) {
+fn write_fake_streaming_utf8_codex(
+  path: String,
+) -> Result(Nil, simplifile.FileError) {
   let long_output = repeat_text("a", 156) <> "\\u2014tail\\n"
 
   simplifile.write(
