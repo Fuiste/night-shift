@@ -56,12 +56,14 @@ pub fn attach_worktree(
 }
 
 pub fn has_changes(cwd: String, log_path: String) -> Bool {
-  let result = shell.run("git status --short", cwd, log_path)
+  let result =
+    shell.run("git status --short --untracked-files=all", cwd, log_path)
   shell.succeeded(result) && string.trim(result.output) != ""
 }
 
 pub fn changed_files(cwd: String, log_path: String) -> List(String) {
-  let result = shell.run("git status --short", cwd, log_path)
+  let result =
+    shell.run("git status --short --untracked-files=all", cwd, log_path)
   case shell.succeeded(result) {
     True ->
       result.output
@@ -82,6 +84,25 @@ pub fn changed_files(cwd: String, log_path: String) -> List(String) {
       })
     False -> []
   }
+}
+
+pub fn remove_worktree(
+  repo_root: String,
+  worktree_path: String,
+  log_path: String,
+) -> Result(Nil, String) {
+  run_git(
+    "git worktree remove --force " <> shell.quote(worktree_path),
+    repo_root,
+    log_path,
+  )
+}
+
+pub fn prune_worktrees(
+  repo_root: String,
+  log_path: String,
+) -> Result(Nil, String) {
+  run_git("git worktree prune", repo_root, log_path)
 }
 
 pub fn changed_files_between(

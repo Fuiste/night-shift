@@ -188,10 +188,10 @@ Night Shift resolves agent settings in this order:
 Command-level `--profile`, `--provider`, `--model`, and `--reasoning`
 override the resolved profile for that invocation.
 
-For `start`, command-level overrides apply to both planning and execution for
-that run so ad hoc runs stay predictable. `resume` never re-resolves settings;
-it continues with the resolved planning and execution configs stored in the run
-journal.
+`plan` resolves the planning profile for the current planning pass. `start`
+uses the execution config already stored in the pending run created by `plan`.
+`resume` never re-resolves settings; it continues with the resolved planning
+and execution configs stored in the run journal.
 
 ### Provider Overrides
 
@@ -221,10 +221,11 @@ The CLI surface is:
 
 - `night-shift --demo [--ui]`
 - `night-shift init [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>] [--yes] [--generate-setup]`
-- `night-shift plan --notes <path> [--doc <path>] [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>]`
-- `night-shift start [--brief <path>] [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>] [--environment <name>] [--max-workers <n>] [--ui]`
+- `night-shift plan --notes <file-or-inline-text> [--doc <path>] [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>]`
+- `night-shift start [--run <id>|latest] [--ui]`
 - `night-shift status [--run <id>|latest]`
 - `night-shift report [--run <id>|latest]`
+- `night-shift resolve [--run <id>|latest]`
 - `night-shift resume [--run <id>|latest] [--ui]`
 - `night-shift review [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>] [--environment <name>]`
 
@@ -233,8 +234,14 @@ Canonical setup flow:
 ```sh
 night-shift init
 night-shift plan --notes notes/morning.md
+night-shift status
+# if blocked:
+night-shift resolve
 night-shift start
 ```
+
+`start` is execution-only now. It requires an existing pending run from
+`plan`, and it will tell you to plan first if no runnable plan exists yet.
 
 ## Worktree Environments
 
@@ -265,9 +272,12 @@ windows = []
 
 Behavior:
 
-- `start --environment <name>` and `review --environment <name>` select an
+- `review --environment <name>` selects an
   environment explicitly
-- if omitted, Night Shift uses `default_environment`
+- `plan` stores the resolved default environment into the pending run
+- `start` uses the environment already stored in the selected pending run
+- if no environment is selected explicitly, Night Shift uses
+  `default_environment`
 - `resume` reuses the environment stored in the run journal
 - `setup` runs when a task worktree is first created
 - `maintenance` runs when Night Shift reattaches to an existing task worktree
@@ -283,12 +293,24 @@ Night Shift can build up a cumulative execution brief throughout the day:
 
 ```sh
 night-shift plan --notes notes/morning.md
+night-shift plan --notes "Follow up on the landing page polish."
 night-shift plan --notes notes/afternoon.md
 ```
 
 By default this updates `./.night-shift/execution-brief.md`. Each run reads the
 existing brief if present, combines it with the new notes, and asks the
 resolved planning provider to rewrite the full document in place.
+
+`--notes` accepts either:
+
+- a readable file path
+- an inline string, which Night Shift saves into the planning artifacts for
+  auditability
+
+Planning is now the main decision loop. If the planner produces
+manual-attention questions, Night Shift stores them in the blocked run and
+`night-shift resolve` records the answers before replanning the unresolved
+work.
 
 The brief is whole-file managed by Night Shift and always targets this outline:
 

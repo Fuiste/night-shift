@@ -107,10 +107,7 @@ pub fn quote(value: String) -> String {
   "'" <> string.replace(in: value, each: "'", with: "'\"'\"'") <> "'"
 }
 
-pub fn with_env(
-  command: String,
-  env_vars: List(#(String, String)),
-) -> String {
+pub fn with_env(command: String, env_vars: List(#(String, String))) -> String {
   case env_vars {
     [] -> command
     _ ->

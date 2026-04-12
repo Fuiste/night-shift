@@ -154,7 +154,9 @@ pub type ExecutionMode {
   Exclusive
 }
 
-pub fn execution_mode_from_string(value: String) -> Result(ExecutionMode, String) {
+pub fn execution_mode_from_string(
+  value: String,
+) -> Result(ExecutionMode, String) {
   case value {
     "parallel" -> Ok(Parallel)
     "serial" -> Ok(Serial)
@@ -191,6 +193,42 @@ pub fn task_kind_to_string(kind: TaskKind) -> String {
   }
 }
 
+pub type DecisionOption {
+  DecisionOption(label: String, description: String)
+}
+
+pub type DecisionRequest {
+  DecisionRequest(
+    key: String,
+    question: String,
+    rationale: String,
+    options: List(DecisionOption),
+    recommended_option: Option(String),
+    allow_freeform: Bool,
+  )
+}
+
+pub type RecordedDecision {
+  RecordedDecision(
+    key: String,
+    question: String,
+    answer: String,
+    answered_at: String,
+  )
+}
+
+pub type NotesSource {
+  NotesFile(path: String)
+  InlineNotes(path: String)
+}
+
+pub fn notes_source_label(source: NotesSource) -> String {
+  case source {
+    NotesFile(path) -> "file: " <> path
+    InlineNotes(path) -> "inline: " <> path
+  }
+}
+
 pub type FollowUpTask {
   FollowUpTask(
     id: String,
@@ -199,6 +237,7 @@ pub type FollowUpTask {
     dependencies: List(String),
     acceptance: List(String),
     demo_plan: List(String),
+    decision_requests: List(DecisionRequest),
     kind: TaskKind,
     execution_mode: ExecutionMode,
   )
@@ -212,6 +251,7 @@ pub type Task {
     dependencies: List(String),
     acceptance: List(String),
     demo_plan: List(String),
+    decision_requests: List(DecisionRequest),
     kind: TaskKind,
     execution_mode: ExecutionMode,
     state: TaskState,
@@ -231,6 +271,39 @@ pub fn is_task_ready(task: Task, completed_ids: List(String)) -> Bool {
     Ready -> True
     _ -> False
   }
+}
+
+pub fn decision_recorded(decisions: List(RecordedDecision), key: String) -> Bool {
+  list.any(decisions, fn(decision) { decision.key == key })
+}
+
+pub fn unresolved_decision_requests(
+  decisions: List(RecordedDecision),
+  task: Task,
+) -> List(DecisionRequest) {
+  case task.decision_requests {
+    [] -> [
+      DecisionRequest(
+        key: "task:" <> task.id,
+        question: task.title,
+        rationale: task.description,
+        options: [],
+        recommended_option: None,
+        allow_freeform: True,
+      ),
+    ]
+    requests ->
+      requests
+      |> list.filter(fn(request) { !decision_recorded(decisions, request.key) })
+  }
+}
+
+pub fn task_requires_manual_attention(
+  decisions: List(RecordedDecision),
+  task: Task,
+) -> Bool {
+  task.kind == ManualAttentionTask
+  && unresolved_decision_requests(decisions, task) != []
 }
 
 pub type PrPlan {
@@ -289,6 +362,9 @@ pub type RunRecord {
     execution_agent: ResolvedAgentConfig,
     environment_name: String,
     max_workers: Int,
+    notes_source: Option(NotesSource),
+    decisions: List(RecordedDecision),
+    planning_dirty: Bool,
     status: RunStatus,
     created_at: String,
     updated_at: String,
@@ -334,25 +410,17 @@ pub fn default_config() -> Config {
 }
 
 pub type Command {
-  Start(
-    brief_path: Option(String),
-    agent_overrides: AgentOverrides,
-    environment_name: Option(String),
-    max_workers: Result(Int, Nil),
-    ui_enabled: Bool,
-  )
-  Init(
-    agent_overrides: AgentOverrides,
-    generate_setup: Bool,
-    assume_yes: Bool,
-  )
+  Start(run: RunSelector, ui_enabled: Bool)
+  Init(agent_overrides: AgentOverrides, generate_setup: Bool, assume_yes: Bool)
+  Reset(assume_yes: Bool, force: Bool)
   Plan(
-    notes_path: String,
+    notes_value: String,
     doc_path: Option(String),
     agent_overrides: AgentOverrides,
   )
   Status(run: RunSelector)
   Report(run: RunSelector)
+  Resolve(run: RunSelector)
   Resume(run: RunSelector, ui_enabled: Bool)
   Review(agent_overrides: AgentOverrides, environment_name: Option(String))
   Demo(ui_enabled: Bool)

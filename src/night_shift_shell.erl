@@ -413,10 +413,7 @@ extract_field(_, _, Default) ->
 
 compact_output(Output) ->
     Trimmed = trim_binary(Output),
-    case byte_size(Trimmed) > 160 of
-        true -> <<(binary:part(Trimmed, 0, 157))/binary, "...">>;
-        false -> Trimmed
-    end.
+    compact_text(Trimmed, 160).
 
 send_renderer(StreamMeta, Event) ->
     Renderer = ensure_renderer(),
@@ -1208,7 +1205,21 @@ normalize_raw_text(Data) ->
     trim_binary(Data).
 
 trim_binary(Value) when is_binary(Value) ->
-    unicode:characters_to_binary(string:trim(to_chars(Value))).
+    case unicode:characters_to_list(Value) of
+        Chars when is_list(Chars) ->
+            unicode:characters_to_binary(string:trim(Chars));
+        {error, ValidPrefix, _Rest} ->
+            unicode:characters_to_binary(string:trim(ValidPrefix));
+        {incomplete, ValidPrefix, _Rest} ->
+            unicode:characters_to_binary(string:trim(ValidPrefix))
+    end.
+
+compact_text(Text, Limit) ->
+    Chars = to_chars(Text),
+    case length(Chars) > Limit of
+        true -> from_chars(lists:sublist(Chars, Limit - 3) ++ "...");
+        false -> Text
+    end.
 
 should_suppress_line(Data) ->
     is_plugin_manifest_warning(Data)
