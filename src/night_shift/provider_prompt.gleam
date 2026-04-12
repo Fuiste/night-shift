@@ -1,4 +1,5 @@
 import gleam/list
+import gleam/option.{type Option, None, Some}
 import gleam/string
 import night_shift/codec/provider_payload
 import night_shift/types
@@ -9,6 +10,15 @@ pub fn planner_prompt(
   decisions: List(types.RecordedDecision),
   completed_tasks: List(types.Task),
 ) -> String {
+  planner_prompt_with_feedback(brief_contents, decisions, completed_tasks, None)
+}
+
+pub fn planner_prompt_with_feedback(
+  brief_contents: String,
+  decisions: List(types.RecordedDecision),
+  completed_tasks: List(types.Task),
+  retry_feedback: Option(String),
+) -> String {
   "You are Night Shift's planning provider.\n"
   <> "Break the supplied brief into a task DAG.\n"
   <> "Do not write files, apply patches, or make any repository changes.\n"
@@ -16,6 +26,9 @@ pub fn planner_prompt(
   <> "Stay strictly within the brief. Do not create adjacent scope.\n"
   <> "Bias toward making a reasonable best-effort decision when the brief allows autonomy or calls the work a first pass.\n"
   <> "Use manual attention only for truly high-impact ambiguity that cannot be resolved from the repository or supplied brief.\n"
+  <> "Use the minimum meaningful number of tasks.\n"
+  <> "For docs-only or single-file micro changes, prefer one implementation task unless there is a real dependency boundary or a human decision is required.\n"
+  <> "Do not emit context-gathering, review-only, or validation-only wrapper tasks for tiny scoped work.\n"
   <> "Return only one JSON object between the exact sentinel markers below.\n"
   <> "Each task must include: id, title, description, dependencies, acceptance, demo_plan, decision_requests, task_kind, execution_mode.\n"
   <> "Use task_kind = manual_attention only when the next step is a human decision or missing product direction. Manual-attention tasks will pause execution before any worktree bootstrap or coding work begins.\n"
@@ -29,8 +42,11 @@ pub fn planner_prompt(
   <> "Never use file paths, branch names, acceptance items, or prose as dependency values.\n"
   <> "When a task depends on previously completed work, reference the completed task id exactly.\n"
   <> "Do not re-ask recorded decisions. Treat them as final unless the brief now explicitly conflicts.\n"
+  <> "If a previously answered decision still applies after replanning, reuse its decision key verbatim and consume the recorded answer instead of asking again.\n"
+  <> "Especially for file-location decisions, carry the accepted target forward directly rather than re-asking with a new key or wording.\n"
   <> "Do not emit tasks whose ids are already completed.\n"
   <> "Use lowercase kebab-case ids.\n"
+  <> render_retry_feedback(retry_feedback)
   <> "\n"
   <> provider_payload.start_marker
   <> "\n"
@@ -53,6 +69,20 @@ pub fn planning_document_prompt(
   existing_doc_contents existing_doc_contents: String,
   doc_path doc_path: String,
 ) -> String {
+  planning_document_prompt_with_feedback(
+    notes_contents,
+    existing_doc_contents,
+    doc_path,
+    None,
+  )
+}
+
+pub fn planning_document_prompt_with_feedback(
+  notes_contents notes_contents: String,
+  existing_doc_contents existing_doc_contents: String,
+  doc_path doc_path: String,
+  retry_feedback retry_feedback: Option(String),
+) -> String {
   "You are Night Shift's planning provider.\n"
   <> "Update the repository's cumulative Night Shift brief.\n"
   <> "Do not write files, apply patches, or make any repository changes.\n"
@@ -62,6 +92,7 @@ pub fn planning_document_prompt(
   <> "If the new notes conflict with the prior brief, the new notes win.\n"
   <> "Stay within supplied scope and repository facts. Do not invent adjacent work.\n"
   <> "Return only the full Markdown brief between the exact sentinel markers below.\n"
+  <> "Do not return prose outside the sentinel markers.\n"
   <> "The brief will later be passed directly to `night-shift start`.\n"
   <> "Use exactly these top-level sections in order:\n"
   <> "# Night Shift Brief\n"
@@ -79,6 +110,7 @@ pub fn planning_document_prompt(
   <> "...\n"
   <> provider_payload.end_marker
   <> "\n"
+  <> render_retry_feedback(retry_feedback)
   <> "\n"
   <> "Destination path:\n"
   <> doc_path
@@ -221,5 +253,12 @@ fn render_completed_tasks(tasks: List(types.Task)) -> String {
       tasks
       |> list.map(fn(task) { "- " <> task.id <> ": " <> task.title })
       |> string.join(with: "\n")
+  }
+}
+
+fn render_retry_feedback(retry_feedback: Option(String)) -> String {
+  case retry_feedback {
+    None -> ""
+    Some(feedback) -> "\nRetry guidance:\n" <> feedback <> "\n"
   }
 }

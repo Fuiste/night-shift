@@ -1,5 +1,6 @@
 import filepath
 import gleam/list
+import gleam/option.{type Option, None, Some}
 import gleam/string
 import night_shift/shell
 import night_shift/system
@@ -53,6 +54,26 @@ pub fn attach_worktree(
     repo_root,
     log_path,
   )
+}
+
+pub fn mounted_worktree_path(
+  repo_root: String,
+  branch_name: String,
+  log_path: String,
+) -> Result(Option(String), String) {
+  let command =
+    "git worktree list --porcelain | awk -v target="
+    <> shell.quote("refs/heads/" <> branch_name)
+    <> " 'BEGIN { path = \"\" } $1 == \"worktree\" { path = substr($0, 10) } $1 == \"branch\" && $2 == target { print path; exit }'"
+  let result = shell.run(command, repo_root, log_path)
+  case shell.succeeded(result) {
+    True ->
+      case string.trim(result.output) {
+        "" -> Ok(None)
+        path -> Ok(Some(path))
+      }
+    False -> Error("Git command failed: " <> string.trim(result.output))
+  }
 }
 
 pub fn has_changes(cwd: String, log_path: String) -> Bool {

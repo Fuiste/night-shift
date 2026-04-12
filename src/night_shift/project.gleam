@@ -33,6 +33,10 @@ pub fn gitignore_path(repo_root: String) -> String {
   filepath.join(home(repo_root), ".gitignore")
 }
 
+pub fn local_exclude_path(repo_root: String) -> String {
+  filepath.join(repo_root, ".git/info/exclude")
+}
+
 pub fn legacy_config_path(repo_root: String) -> String {
   filepath.join(repo_root, ".night-shift.toml")
 }

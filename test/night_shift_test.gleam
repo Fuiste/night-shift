@@ -878,6 +878,57 @@ pub fn init_writes_selected_provider_and_model_test() {
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
 
+pub fn init_adds_local_exclude_entry_and_keeps_repo_clean_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-init-exclude-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let _ =
+    shell.run(
+      "git init --initial-branch=main " <> shell.quote(repo_root),
+      base_dir,
+      filepath.join(base_dir, "repo-init.log"),
+    )
+
+  let assert Ok(_) =
+    run_local_cli_command(
+      ["init", "--provider", "codex", "--model", "gpt-5.4-mini", "--yes"],
+      repo_root,
+      filepath.join(base_dir, "init-first.log"),
+    )
+  let assert Ok(_) =
+    run_local_cli_command(
+      ["init", "--provider", "codex", "--model", "gpt-5.4-mini", "--yes"],
+      repo_root,
+      filepath.join(base_dir, "init-second.log"),
+    )
+  let assert Ok(exclude_contents) =
+    simplifile.read(project.local_exclude_path(repo_root))
+  let status =
+    shell.run(
+      "git status --short",
+      repo_root,
+      filepath.join(base_dir, "status.log"),
+    )
+
+  assert string.contains(does: exclude_contents, contain: "/.night-shift/")
+  assert list.length(
+      string.split(exclude_contents, "\n")
+      |> list.filter(fn(line) { string.trim(line) == "/.night-shift/" }),
+    )
+    == 1
+  assert shell.succeeded(status)
+  assert string.trim(status.output) == ""
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
 pub fn init_requires_provider_outside_interactive_terminal_test() {
   let unique = system.unique_id()
   let base_dir =
@@ -953,6 +1004,108 @@ pub fn init_rejects_cursor_reasoning_test() {
     does: message,
     contain: "Cursor does not support Night Shift's normalized reasoning control.",
   )
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn review_command_reuses_existing_worktree_for_open_pr_branch_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-review-reuse-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let remote_root = filepath.join(base_dir, "remote.git")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let fake_provider = filepath.join(bin_dir, "fake-provider")
+  let fake_gh = filepath.join(bin_dir, "gh")
+  let existing_worktree = filepath.join(base_dir, "existing-review-worktree")
+  let old_path = system.get_env("PATH")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let _ =
+    shell.run(
+      "git init --initial-branch=main " <> shell.quote(repo_root),
+      base_dir,
+      filepath.join(base_dir, "repo-init.log"),
+    )
+  let _ =
+    shell.run(
+      "git init --bare " <> shell.quote(remote_root),
+      base_dir,
+      filepath.join(base_dir, "remote-init.log"),
+    )
+  let _ =
+    shell.run(
+      "git -C "
+        <> shell.quote(repo_root)
+        <> " config user.email 'night-shift@example.test' && git -C "
+        <> shell.quote(repo_root)
+        <> " config user.name 'Night Shift Test' && git -C "
+        <> shell.quote(repo_root)
+        <> " remote add origin "
+        <> shell.quote(remote_root)
+        <> " && printf '# scratch\\n' > "
+        <> shell.quote(filepath.join(repo_root, "README.md"))
+        <> " && git -C "
+        <> shell.quote(repo_root)
+        <> " add README.md && git -C "
+        <> shell.quote(repo_root)
+        <> " commit -m 'init' >/dev/null && git -C "
+        <> shell.quote(repo_root)
+        <> " push -u origin main >/dev/null",
+      base_dir,
+      filepath.join(base_dir, "seed.log"),
+    )
+  let assert Ok(_) = initialize_project_home(repo_root)
+  let assert Ok(_) = write_fake_provider(fake_provider)
+  let assert Ok(_) = write_review_fake_gh(fake_gh)
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_provider) <> " " <> shell.quote(fake_gh),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+  let _ =
+    shell.run(
+      "git -C "
+        <> shell.quote(repo_root)
+        <> " worktree add -b night-shift/demo "
+        <> shell.quote(existing_worktree)
+        <> " main",
+      base_dir,
+      filepath.join(base_dir, "worktree.log"),
+    )
+
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
+
+  let result =
+    run_local_cli_command(
+      ["review", "--provider", "codex"],
+      repo_root,
+      filepath.join(base_dir, "review.log"),
+    )
+
+  system.set_env("PATH", old_path)
+  restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
+
+  let assert Ok(output) = result
+  let assert Ok(report) = journal.read_report(repo_root, types.LatestRun)
+
+  assert string.contains(
+    does: output,
+    contain: "finished with status completed",
+  )
+  assert string.contains(
+    does: report,
+    contain: "Reused existing worktree for branch night-shift/demo",
+  )
+  assert string.contains(does: report, contain: existing_worktree)
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
@@ -2402,6 +2555,7 @@ pub fn start_task_runs_codex_execution_in_worktree_test() {
       "seed-head",
       "night-shift/demo",
       "main",
+      provider.CreatedWorktree,
     )
   let assert Ok(result) = provider.await_task(task_run)
 
@@ -2475,6 +2629,7 @@ pub fn provider_await_task_recovers_trailing_junk_test() {
       "seed-head",
       "night-shift/demo",
       "main",
+      provider.CreatedWorktree,
     )
   let assert Ok(result) = provider.await_task(task_run)
 
@@ -4406,6 +4561,26 @@ fn write_fake_gh(path: String) -> Result(Nil, simplifile.FileError) {
       <> "fi\n"
       <> "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"view\" ]; then\n"
       <> "  printf '{\"number\":1,\"title\":\"Night Shift PR\",\"body\":\"Review body\",\"headRefName\":\"night-shift/demo\",\"baseRefName\":\"main\",\"url\":\"https://example.test/pr/1\",\"reviewDecision\":\"REVIEW_REQUIRED\",\"statusCheckRollup\":[],\"reviews\":[],\"comments\":[]}'\n"
+      <> "  exit 0\n"
+      <> "fi\n"
+      <> "printf 'unsupported gh invocation: %s %s\\n' \"$1\" \"$2\" >&2\n"
+      <> "exit 1\n",
+    to: path,
+  )
+}
+
+fn write_review_fake_gh(path: String) -> Result(Nil, simplifile.FileError) {
+  simplifile.write(
+    "#!/bin/sh\n"
+      <> "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"list\" ]; then\n"
+      <> "  printf '[{\"number\":1,\"url\":\"https://example.test/pr/1\",\"headRefName\":\"night-shift/demo\",\"title\":\"Night Shift PR\"}]\\n'\n"
+      <> "  exit 0\n"
+      <> "fi\n"
+      <> "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"edit\" ]; then\n"
+      <> "  exit 0\n"
+      <> "fi\n"
+      <> "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"view\" ]; then\n"
+      <> "  printf '{\"number\":1,\"title\":\"Night Shift PR\",\"body\":\"Review body\",\"headRefName\":\"night-shift/demo\",\"baseRefName\":\"main\",\"url\":\"https://example.test/pr/1\",\"reviewDecision\":\"REVIEW_REQUIRED\",\"statusCheckRollup\":[],\"reviews\":[{\"state\":\"COMMENTED\",\"body\":\"Please make the note a little more specific.\"}],\"comments\":[]}'\n"
       <> "  exit 0\n"
       <> "fi\n"
       <> "printf 'unsupported gh invocation: %s %s\\n' \"$1\" \"$2\" >&2\n"
