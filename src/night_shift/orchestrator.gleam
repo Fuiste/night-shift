@@ -115,18 +115,22 @@ fn load_planned_tasks(
   String,
 ) {
   let completed_tasks = task_graph.completed_tasks(run.tasks)
-  use planned_tasks <- result.try(provider.plan_tasks_attempt(
-    run.planning_agent,
-    run.repo_root,
-    run.brief_path,
-    run.run_path,
-    run.decisions,
-    completed_tasks,
-    attempt,
-    retry_feedback,
-  ))
-
-  case validate_planned_tasks(run, planned_tasks) {
+  case
+    provider.plan_tasks_attempt(
+      run.planning_agent,
+      run.repo_root,
+      run.brief_path,
+      run.run_path,
+      run.decisions,
+      completed_tasks,
+      attempt,
+      retry_feedback,
+    )
+  {
+    Error(message) ->
+      maybe_retry_planned_tasks(run, attempt, retry_feedback, message)
+    Ok(planned_tasks) ->
+      case validate_planned_tasks(run, planned_tasks) {
     Ok(_) ->
       case
         decision_contract.reconcile_decision_requests(
@@ -162,7 +166,7 @@ fn load_planned_tasks(
           Error(message)
         }
       }
-    }
+    }}
   }
 }
 
