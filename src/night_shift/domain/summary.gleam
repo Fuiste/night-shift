@@ -1,6 +1,8 @@
 import gleam/int
 import gleam/list
+import gleam/option.{type Option, None, Some}
 import gleam/string
+import night_shift/domain/task_validation
 import night_shift/types
 
 pub fn pluralize(count: Int, noun: String) -> String {
@@ -61,4 +63,56 @@ pub fn completion_failure_summary(message: String) -> String {
     False ->
       task_failure_summary("task completion failed unexpectedly.", message)
   }
+}
+
+pub fn planning_validation_summary(
+  issues: List(task_validation.ValidationIssue),
+) -> String {
+  task_failure_summary(
+    "Night Shift rejected the planner output before updating the task graph.",
+    "Validation errors: " <> task_validation.render_issues(issues),
+  )
+}
+
+pub fn follow_up_validation_summary(
+  task: types.Task,
+  issues: List(task_validation.ValidationIssue),
+) -> String {
+  task_failure_summary(
+    "Night Shift captured implementation output, but the follow-up task graph was invalid.",
+    "Task worktree: "
+      <> task.worktree_path
+      <> "\n"
+      <> "Task branch: "
+      <> task.branch_name
+      <> "\n"
+      <> "Validation errors: "
+      <> task_validation.render_issues(issues),
+  )
+}
+
+pub fn decode_manual_attention_summary(
+  task: types.Task,
+  log_path: String,
+  raw_payload_path: String,
+  sanitized_payload_path: Option(String),
+) -> String {
+  task_failure_summary(
+    "Night Shift found candidate worktree changes, but could not trust the structured execution result.",
+    "Task worktree: "
+      <> task.worktree_path
+      <> "\n"
+      <> "Task branch: "
+      <> task.branch_name
+      <> "\n"
+      <> "Task log: "
+      <> log_path
+      <> "\n"
+      <> "Raw payload: "
+      <> raw_payload_path
+      <> case sanitized_payload_path {
+      Some(path) -> "\nSanitized payload: " <> path
+      None -> ""
+    },
+  )
 }

@@ -24,6 +24,7 @@ pub fn render(run: types.RunRecord, events: List(types.RunEvent)) -> String {
     "",
     "## Summary",
     render_summary(run.decisions, run.planning_dirty, run.tasks, events),
+    render_planning_validation_summary(events),
     render_failure_summary(run, events),
     "",
     "## Tasks",
@@ -258,6 +259,13 @@ fn render_failure_summary(
   }
 }
 
+fn render_planning_validation_summary(events: List(types.RunEvent)) -> String {
+  case latest_event_message(events, "planning_validation_failed") {
+    Some(message) -> "\n## Planning\n- Validation: " <> message
+    None -> ""
+  }
+}
+
 fn task_requires_manual_attention(
   decisions: List(types.RecordedDecision),
   task: types.Task,
@@ -298,6 +306,27 @@ fn latest_run_failed_message_loop(
       case event.kind == "run_failed" {
         True -> Some(event.message)
         False -> latest_run_failed_message_loop(rest)
+      }
+  }
+}
+
+fn latest_event_message(
+  events: List(types.RunEvent),
+  kind: String,
+) -> Option(String) {
+  latest_event_message_loop(list.reverse(events), kind)
+}
+
+fn latest_event_message_loop(
+  events: List(types.RunEvent),
+  kind: String,
+) -> Option(String) {
+  case events {
+    [] -> None
+    [event, ..rest] ->
+      case event.kind == kind {
+        True -> Some(event.message)
+        False -> latest_event_message_loop(rest, kind)
       }
   }
 }

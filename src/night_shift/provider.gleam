@@ -23,6 +23,15 @@ pub type TaskRun {
   )
 }
 
+pub type AwaitTaskError {
+  ProviderCommandFailed(message: String)
+  PayloadExtractionFailed(message: String)
+  PayloadDecodeFailed(
+    message: String,
+    artifacts: provider_payload.PayloadArtifacts,
+  )
+}
+
 pub fn plan_document(
   agent: types.ResolvedAgentConfig,
   repo_root: String,
@@ -227,21 +236,35 @@ pub fn start_task(
 }
 
 pub fn await_task(run: TaskRun) -> Result(types.ExecutionResult, String) {
+  await_task_detailed(run) |> result.map_error(await_task_error_message)
+}
+
+pub fn await_task_detailed(
+  run: TaskRun,
+) -> Result(types.ExecutionResult, AwaitTaskError) {
   let command_result = shell.wait(run.handle)
   case shell.succeeded(command_result) {
     True ->
-      provider_payload.decode_execution_result(
+      provider_payload.decode_execution_result_detailed(
         command_result.output,
         run.log_path,
         "Unable to decode execution output for task " <> run.task.id <> ".",
       )
+      |> result.map_error(fn(error) {
+        case error {
+          provider_payload.PayloadExtractionFailure(message) ->
+            PayloadExtractionFailed(message)
+          provider_payload.JsonDecodeFailure(message, artifacts) ->
+            PayloadDecodeFailed(message, artifacts)
+        }
+      })
     False ->
-      Error(
+      Error(ProviderCommandFailed(
         "Provider execution failed for task "
         <> run.task.id
         <> ". See "
         <> run.log_path,
-      )
+      ))
   }
 }
 
@@ -308,6 +331,14 @@ pub fn sanitize_json_payload(payload: String) -> Result(String, String) {
 
 fn planning_artifact_path(repo_root: String) -> String {
   artifact_path.timestamped_directory(journal.planning_root_for(repo_root))
+}
+
+fn await_task_error_message(error: AwaitTaskError) -> String {
+  case error {
+    ProviderCommandFailed(message) -> message
+    PayloadExtractionFailed(message) -> message
+    PayloadDecodeFailed(message, _) -> message
+  }
 }
 
 fn create_directory(path: String) -> Result(Nil, String) {

@@ -25,6 +25,9 @@ pub fn planner_prompt(
   <> "For implementation tasks, set decision_requests to an empty list.\n"
   <> "Use task_kind = implementation for normal coding or research work.\n"
   <> "Use execution_mode = parallel for independent low-conflict work, serial for normal implementation work that may share context, and exclusive only when the task must run alone.\n"
+  <> "Dependencies must be task ids only.\n"
+  <> "Never use file paths, branch names, acceptance items, or prose as dependency values.\n"
+  <> "When a task depends on previously completed work, reference the completed task id exactly.\n"
   <> "Do not re-ask recorded decisions. Treat them as final unless the brief now explicitly conflicts.\n"
   <> "Do not emit tasks whose ids are already completed.\n"
   <> "Use lowercase kebab-case ids.\n"
@@ -100,6 +103,8 @@ pub fn execution_prompt(task: types.Task) -> String {
   <> "Return only one JSON object between the exact sentinel markers below.\n"
   <> "The content between the markers must be exactly one valid JSON object with no trailing braces, notes, or extra text.\n"
   <> "Status must be one of: completed, blocked, failed, manual_attention.\n"
+  <> "Every follow_up_tasks dependency must reference an existing task id or a follow-up task id created in the same follow_up_tasks array.\n"
+  <> "Never use file paths, branch names, or acceptance items as follow_up_tasks dependencies.\n"
   <> "The JSON shape is:\n"
   <> provider_payload.start_marker
   <> "\n"

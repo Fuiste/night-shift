@@ -1,13 +1,14 @@
 import filepath
 import gleam/int
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import night_shift/domain/decisions as decision_domain
 import night_shift/domain/run_state
 import night_shift/domain/summary as domain_summary
 import night_shift/domain/task_graph
+import night_shift/domain/task_validation
 import night_shift/git
 import night_shift/infra/task_delivery
 import night_shift/infra/task_verifier
@@ -58,6 +59,7 @@ fn plan_with_event(
     run.decisions,
     task_graph.completed_tasks(run.tasks),
   ))
+  use _ <- result.try(validate_planned_tasks(run, planned_tasks))
 
   let normalized_tasks = task_graph.normalize_tasks(planned_tasks)
   let merged_tasks =
@@ -361,7 +363,7 @@ fn await_batch(
   case task_runs {
     [] -> Ok(run)
     [task_run, ..rest] -> {
-      let next_run_result = case provider.await_task(task_run) {
+      let next_run_result = case provider.await_task_detailed(task_run) {
         Ok(execution_result) ->
           case complete_task(config, run, task_run, execution_result) {
             Ok(updated_run) -> Ok(updated_run)
@@ -374,14 +376,7 @@ fn await_batch(
                 "task_failed",
               )
           }
-        Error(message) ->
-          mark_task_with_event(
-            run,
-            task_run.task,
-            types.Failed,
-            message,
-            "task_failed",
-          )
+        Error(error) -> handle_await_task_error(run, task_run, error)
       }
 
       use updated_run <- result.try(next_run_result)
@@ -396,11 +391,17 @@ fn complete_task(
   task_run: provider.TaskRun,
   execution_result: types.ExecutionResult,
 ) -> Result(types.RunRecord, String) {
-  case execution_result.status {
-    types.Completed -> finalize_success(config, run, task_run, execution_result)
-    types.Blocked | types.ManualAttention | types.Failed ->
-      finalize_non_success(run, task_run.task, execution_result)
-    _ -> finalize_non_success(run, task_run.task, execution_result)
+  case validate_follow_up_tasks(run, task_run, execution_result) {
+    Ok(Some(updated_run)) -> Ok(updated_run)
+    Ok(None) ->
+      case execution_result.status {
+        types.Completed ->
+          finalize_success(config, run, task_run, execution_result)
+        types.Blocked | types.ManualAttention | types.Failed ->
+          finalize_non_success(run, task_run.task, execution_result)
+        _ -> finalize_non_success(run, task_run.task, execution_result)
+      }
+    Error(message) -> Error(message)
   }
 }
 
@@ -632,4 +633,129 @@ fn mark_task_with_event(
       task_id: Some(task.id),
     ),
   )
+}
+
+fn validate_follow_up_tasks(
+  run: types.RunRecord,
+  task_run: provider.TaskRun,
+  execution_result: types.ExecutionResult,
+) -> Result(Option(types.RunRecord), String) {
+  case
+    task_validation.validate_follow_up_tasks(
+      run.tasks,
+      task_run.task.id,
+      execution_result.follow_up_tasks,
+    )
+  {
+    Ok(_) -> Ok(None)
+    Error(issues) ->
+      mark_task_with_event(
+        run,
+        task_run.task,
+        types.ManualAttention,
+        domain_summary.follow_up_validation_summary(task_run.task, issues),
+        "task_manual_attention",
+      )
+      |> result.map(Some)
+  }
+}
+
+fn validate_planned_tasks(
+  run: types.RunRecord,
+  planned_tasks: List(types.Task),
+) -> Result(Nil, String) {
+  case
+    task_validation.validate_planned_tasks(
+      task_graph.completed_tasks(run.tasks),
+      planned_tasks,
+    )
+  {
+    Ok(_) -> Ok(Nil)
+    Error(issues) -> reject_invalid_plan(run, issues)
+  }
+}
+
+fn reject_invalid_plan(
+  run: types.RunRecord,
+  issues: List(task_validation.ValidationIssue),
+) -> Result(Nil, String) {
+  let message = domain_summary.planning_validation_summary(issues)
+  use _ <- result.try(journal.append_event(
+    run,
+    types.RunEvent(
+      kind: "planning_validation_failed",
+      at: system.timestamp(),
+      message: message,
+      task_id: None,
+    ),
+  ))
+  Error(message)
+}
+
+fn handle_await_task_error(
+  run: types.RunRecord,
+  task_run: provider.TaskRun,
+  error: provider.AwaitTaskError,
+) -> Result(types.RunRecord, String) {
+  case error {
+    provider.PayloadDecodeFailed(message, artifacts) ->
+      case task_run_has_candidate_changes(run, task_run) {
+        True ->
+          mark_task_with_event(
+            run,
+            task_run.task,
+            types.ManualAttention,
+            domain_summary.decode_manual_attention_summary(
+              task_run.task,
+              task_run.log_path,
+              artifacts.raw_payload_path,
+              artifacts.sanitized_payload_path,
+            ),
+            "task_manual_attention",
+          )
+        False ->
+          mark_task_with_event(
+            run,
+            task_run.task,
+            types.Failed,
+            message,
+            "task_failed",
+          )
+      }
+    _ ->
+      mark_task_with_event(
+        run,
+        task_run.task,
+        types.Failed,
+        await_task_error_message(error),
+        "task_failed",
+      )
+  }
+}
+
+fn task_run_has_candidate_changes(
+  run: types.RunRecord,
+  task_run: provider.TaskRun,
+) -> Bool {
+  let git_log =
+    filepath.join(
+      run.run_path,
+      "logs/" <> task_run.task.id <> ".recover.git.log",
+    )
+
+  let has_dirty_worktree = git.has_changes(task_run.worktree_path, git_log)
+  let has_new_commit = case git.head_commit(task_run.worktree_path, git_log) {
+    Ok(head) -> head != task_run.start_head
+    Error(_) -> False
+  }
+
+  has_dirty_worktree || has_new_commit
+}
+
+fn await_task_error_message(error: provider.AwaitTaskError) -> String {
+  case error {
+    provider.ProviderCommandFailed(message) -> message
+    provider.PayloadExtractionFailed(message) -> message
+    provider.PayloadDecodeFailed(message, _) -> message
+  }
 }

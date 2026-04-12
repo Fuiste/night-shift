@@ -14,6 +14,18 @@ pub const end_marker = "NIGHT_SHIFT_RESULT_END"
 @external(erlang, "night_shift_provider_support", "extract_balanced_json")
 fn extract_balanced_json_raw(payload: String) -> String
 
+pub type PayloadArtifacts {
+  PayloadArtifacts(
+    raw_payload_path: String,
+    sanitized_payload_path: Option(String),
+  )
+}
+
+pub type ExecutionDecodeError {
+  PayloadExtractionFailure(message: String)
+  JsonDecodeFailure(message: String, artifacts: PayloadArtifacts)
+}
+
 pub fn extract_payload(output: String) -> Result(String, String) {
   case extract_structured_output(output) {
     Ok(structured_output) -> extract_marker_payload(structured_output)
@@ -43,35 +55,57 @@ pub fn decode_execution_result(
   log_path: String,
   failure_prefix: String,
 ) -> Result(types.ExecutionResult, String) {
-  use payload <- result.try(extract_payload(output))
-  let raw_payload_path = raw_payload_artifact_path(log_path)
-  use _ <- result.try(write_file(raw_payload_path, payload))
+  decode_execution_result_detailed(output, log_path, failure_prefix)
+  |> result.map_error(execution_decode_error_message)
+}
 
-  case json.parse(payload, execution_decoder()) {
-    Ok(decoded) -> Ok(decoded)
-    Error(_) ->
-      case sanitize_json_payload(payload) {
-        Ok(sanitized) if sanitized != payload -> {
-          let sanitized_payload_path = sanitized_payload_artifact_path(log_path)
-          use _ <- result.try(write_file(sanitized_payload_path, sanitized))
-          json.parse(sanitized, execution_decoder())
-          |> result.map_error(fn(_) {
-            execution_decode_failure(
-              failure_prefix,
-              log_path,
-              raw_payload_path,
-              Some(sanitized_payload_path),
-            )
-          })
-        }
-        _ ->
-          Error(execution_decode_failure(
-            failure_prefix,
-            log_path,
-            raw_payload_path,
-            None,
-          ))
-      }
+pub fn decode_execution_result_detailed(
+  output: String,
+  log_path: String,
+  failure_prefix: String,
+) -> Result(types.ExecutionResult, ExecutionDecodeError) {
+  use payload <- result.try(
+    extract_payload(output)
+    |> result.map_error(PayloadExtractionFailure),
+  )
+  let raw_payload_path = raw_payload_artifact_path(log_path)
+  use _ <- result.try(
+    write_file(raw_payload_path, payload)
+    |> result.map_error(PayloadExtractionFailure),
+  )
+
+  case decode_execution_payload(payload) {
+    Ok(#(decoded, sanitized_payload)) -> {
+      use _sanitized_payload_path <- result.try(persist_sanitized_payload(
+        log_path,
+        sanitized_payload,
+      ))
+      Ok(decoded)
+    }
+    Error(sanitized_payload) ->
+      Error(JsonDecodeFailure(
+        message: execution_decode_failure(
+          failure_prefix,
+          log_path,
+          raw_payload_path,
+          sanitized_payload,
+          payload,
+        ),
+        artifacts: PayloadArtifacts(
+          raw_payload_path: raw_payload_path,
+          sanitized_payload_path: case sanitized_payload {
+            Some(_) -> Some(sanitized_payload_artifact_path(log_path))
+            None -> None
+          },
+        ),
+      ))
+  }
+}
+
+pub fn execution_decode_error_message(error: ExecutionDecodeError) -> String {
+  case error {
+    PayloadExtractionFailure(message) -> message
+    JsonDecodeFailure(message, _) -> message
   }
 }
 
@@ -122,7 +156,8 @@ fn execution_decode_failure(
   prefix: String,
   log_path: String,
   raw_payload_path: String,
-  sanitized_payload_path: Option(String),
+  sanitized_payload: Option(String),
+  original_payload: String,
 ) -> String {
   prefix
   <> " Night Shift captured the provider result, but it was not a valid execution JSON object.\n"
@@ -131,9 +166,129 @@ fn execution_decode_failure(
   <> "\n"
   <> "Raw payload: "
   <> raw_payload_path
-  <> case sanitized_payload_path {
-    Some(path) -> "\nSanitized payload: " <> path
+  <> case sanitized_payload {
+    Some(_) ->
+      "\nSanitized payload: " <> sanitized_payload_artifact_path(log_path)
     None -> ""
+  }
+  <> case sanitized_payload {
+    Some(sanitized) ->
+      case sanitized == string.trim(original_payload) {
+        True -> ""
+        False ->
+          "\nNight Shift recovered a candidate JSON object, but decoding still failed."
+      }
+    None -> ""
+  }
+}
+
+fn decode_execution_payload(
+  payload: String,
+) -> Result(#(types.ExecutionResult, Option(String)), Option(String)) {
+  case json.parse(payload, execution_decoder()) {
+    Ok(decoded) -> Ok(#(decoded, None))
+    Error(_) ->
+      try_execution_payload_candidates(payload, candidate_payloads(payload))
+  }
+}
+
+fn try_execution_payload_candidates(
+  original_payload: String,
+  candidates: List(String),
+) -> Result(#(types.ExecutionResult, Option(String)), Option(String)) {
+  case candidates {
+    [] -> Error(None)
+    [candidate, ..rest] ->
+      case json.parse(candidate, execution_decoder()) {
+        Ok(decoded) ->
+          case candidate == string.trim(original_payload) {
+            True -> Ok(#(decoded, None))
+            False -> Ok(#(decoded, Some(candidate)))
+          }
+        Error(_) ->
+          case rest {
+            [] ->
+              case candidate == string.trim(original_payload) {
+                True -> Error(None)
+                False -> Error(Some(candidate))
+              }
+            _ -> try_execution_payload_candidates(original_payload, rest)
+          }
+      }
+  }
+}
+
+fn candidate_payloads(payload: String) -> List(String) {
+  let trimmed_payload = string.trim(payload)
+  let balanced_candidate = case sanitize_json_payload(trimmed_payload) {
+    Ok(sanitized) -> sanitized
+    Error(_) -> trimmed_payload
+  }
+  let prefix_candidate = recover_json_prefix(trimmed_payload)
+
+  [balanced_candidate, prefix_candidate]
+  |> unique_non_empty(trimmed_payload, [])
+}
+
+fn persist_sanitized_payload(
+  log_path: String,
+  sanitized_payload: Option(String),
+) -> Result(Option(String), ExecutionDecodeError) {
+  case sanitized_payload {
+    Some(sanitized) -> {
+      let path = sanitized_payload_artifact_path(log_path)
+      use _ <- result.try(
+        write_file(path, sanitized)
+        |> result.map_error(PayloadExtractionFailure),
+      )
+      Ok(Some(path))
+    }
+    None -> Ok(None)
+  }
+}
+
+fn recover_json_prefix(payload: String) -> String {
+  recover_json_prefix_loop(payload, string.length(payload))
+}
+
+fn recover_json_prefix_loop(payload: String, width: Int) -> String {
+  case width <= 0 {
+    True -> payload
+    False -> {
+      let candidate =
+        string.drop_end(payload, string.length(payload) - width)
+        |> string.trim
+      case candidate {
+        "" -> recover_json_prefix_loop(payload, width - 1)
+        _ ->
+          case json.parse(candidate, execution_decoder()) {
+            Ok(_) -> candidate
+            Error(_) -> recover_json_prefix_loop(payload, width - 1)
+          }
+      }
+    }
+  }
+}
+
+fn unique_non_empty(
+  candidates: List(String),
+  original_payload: String,
+  acc: List(String),
+) -> List(String) {
+  case candidates {
+    [] -> list.reverse(acc)
+    [candidate, ..rest] -> {
+      let trimmed_candidate = string.trim(candidate)
+      let next = case
+        trimmed_candidate == ""
+        || trimmed_candidate == string.trim(original_payload)
+        || list.contains(acc, trimmed_candidate)
+      {
+        True -> acc
+        False -> [trimmed_candidate, ..acc]
+      }
+      unique_non_empty(rest, original_payload, next)
+    }
   }
 }
 
