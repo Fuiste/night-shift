@@ -3,8 +3,21 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
 import night_shift/agent_config
+import night_shift/domain/decisions as decision_domain
 import night_shift/types
 import night_shift/usecase/result
+
+pub fn render_init(view: result.InitResult) -> String {
+  "Initialized "
+  <> view.repo_root
+  <> "/.night-shift"
+  <> "\nConfig: "
+  <> view.config_status
+  <> "\nWorktree setup: "
+  <> view.setup_status
+  <> "\nNext action: "
+  <> view.next_action
+}
 
 pub fn render_plan(view: result.PlanResult) -> String {
   prefix_warnings(
@@ -47,6 +60,13 @@ pub fn render_status(view: result.StatusResult) -> String {
   <> view.run.report_path
 }
 
+pub fn render_resolve(view: result.ResolveResult) -> String {
+  prefix_warnings(view.warnings, case view.summary {
+    Some(message) -> message
+    None -> render_run_outcome(view.run, view.next_action)
+  })
+}
+
 pub fn render_start(view: result.StartResult) -> String {
   prefix_warnings(view.warnings, render_run_outcome(view.run, view.next_action))
 }
@@ -79,6 +99,18 @@ pub fn render_reset(view: result.ResetResult) -> String {
   ]
   |> list.filter(fn(line) { string.trim(line) != "" })
   |> string.join(with: "\n")
+}
+
+pub fn render_resolve_prompt(run: types.RunRecord) -> String {
+  "\nResolving run "
+  <> run.run_id
+  <> "\nBlocked tasks: "
+  <> int.to_string(decision_domain.blocked_task_count(run))
+  <> "\nOutstanding decisions: "
+  <> int.to_string(decision_domain.outstanding_decision_count(run))
+  <> "\nPlanning sync pending: "
+  <> bool_label(run.planning_dirty)
+  <> "\nNext action: answer the questions below to make this run ready to start."
 }
 
 fn render_run_outcome(run: types.RunRecord, next_action: String) -> String {
@@ -121,5 +153,12 @@ fn prefix_warnings(warnings: List(String), body: String) -> String {
   case warnings {
     [] -> body
     _ -> string.join(list.append(warnings, ["", body]), with: "\n")
+  }
+}
+
+fn bool_label(value: Bool) -> String {
+  case value {
+    True -> "yes"
+    False -> "no"
   }
 }

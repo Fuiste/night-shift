@@ -1,4 +1,14 @@
+import gleam/option.{type Option}
 import night_shift/types
+
+pub type InitResult {
+  InitResult(
+    repo_root: String,
+    config_status: String,
+    setup_status: String,
+    next_action: String,
+  )
+}
 
 pub type PlanResult {
   PlanResult(
@@ -17,6 +27,15 @@ pub type StatusResult {
     events: List(types.RunEvent),
     summary: String,
     next_action: String,
+  )
+}
+
+pub type ResolveResult {
+  ResolveResult(
+    run: types.RunRecord,
+    warnings: List(String),
+    next_action: String,
+    summary: Option(String),
   )
 }
 

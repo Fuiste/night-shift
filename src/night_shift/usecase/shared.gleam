@@ -162,6 +162,19 @@ pub fn load_start_run(
   }
 }
 
+pub fn load_resolvable_run(
+  repo_root: String,
+  selector: types.RunSelector,
+) -> Result(types.RunRecord, String) {
+  case selector {
+    types.RunId(_) -> {
+      use #(run, _) <- result.try(journal.load(repo_root, selector))
+      validate_resolvable_run(run)
+    }
+    types.LatestRun -> load_latest_resolvable_run(repo_root)
+  }
+}
+
 pub fn load_display_run(
   repo_root: String,
   selector: types.RunSelector,
@@ -206,6 +219,35 @@ pub fn validate_startable_run(
         <> run.run_id
         <> " already failed. Run `night-shift plan --notes ...` to create a fresh or refreshed plan.",
       )
+  }
+}
+
+pub fn validate_resolvable_run(
+  run: types.RunRecord,
+) -> Result(types.RunRecord, String) {
+  case
+    run.status,
+    run.planning_dirty,
+    decision_domain.outstanding_decision_count(run)
+  {
+    types.RunBlocked, _, _ -> Ok(run)
+    types.RunPending, True, _ -> Ok(run)
+    types.RunPending, False, _ ->
+      Error(
+        "Run "
+        <> run.run_id
+        <> " is already ready to start. Run `night-shift start --run "
+        <> run.run_id
+        <> "`.",
+      )
+    types.RunActive, _, _ ->
+      Error(
+        "Run " <> run.run_id <> " is active and cannot be resolved right now.",
+      )
+    types.RunCompleted, _, _ ->
+      Error("Run " <> run.run_id <> " is already completed.")
+    types.RunFailed, _, _ ->
+      Error("Run " <> run.run_id <> " failed and cannot be resolved in place.")
   }
 }
 
@@ -271,6 +313,18 @@ fn load_latest_start_run(repo_root: String) -> Result(types.RunRecord, String) {
     Error(_) ->
       Error(
         "No open Night Shift run was found. Run `night-shift plan --notes ...` first.",
+      )
+  }
+}
+
+fn load_latest_resolvable_run(
+  repo_root: String,
+) -> Result(types.RunRecord, String) {
+  case latest_open_run(repo_root) {
+    Ok(run) -> validate_resolvable_run(run)
+    Error(_) ->
+      Error(
+        "No blocked Night Shift run was found. Run `night-shift plan --notes ...` first.",
       )
   }
 }
