@@ -22,9 +22,11 @@ import night_shift/usecase/reset as reset_usecase
 import night_shift/usecase/resolve as resolve_usecase
 import night_shift/usecase/resume as resume_usecase
 import night_shift/usecase/review as review_usecase
-import night_shift/usecase/shared
 import night_shift/usecase/start as start_usecase
 import night_shift/usecase/status as status_usecase
+import night_shift/usecase/support/environment
+import night_shift/usecase/support/repo_guard
+import night_shift/usecase/support/runs
 import simplifile
 
 pub fn run(command: types.Command) -> Nil {
@@ -704,9 +706,9 @@ fn start_with_ui(
   selector: types.RunSelector,
   config: types.Config,
 ) -> Nil {
-  case shared.load_start_run(repo_root, selector) {
+  case runs.load_start_run(repo_root, selector) {
     Ok(run) ->
-      case shared.ensure_clean_repo_for_start(repo_root) {
+      case repo_guard.ensure_clean_repo_for_start(repo_root) {
         Ok(warnings) ->
           case journal.activate_run(run) {
             Ok(active_run) ->
@@ -744,7 +746,7 @@ fn resume_with_ui(
   case journal.load(repo_root, run) {
     Ok(#(saved_run, _)) ->
       case
-        shared.ensure_saved_environment_is_valid(
+        environment.ensure_saved_environment_is_valid(
           repo_root,
           saved_run.environment_name,
         )

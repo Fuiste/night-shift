@@ -13,7 +13,8 @@ import night_shift/project
 import night_shift/system
 import night_shift/types
 import night_shift/usecase/result as workflow
-import night_shift/usecase/shared
+import night_shift/usecase/support/environment
+import night_shift/usecase/support/runs
 
 pub fn execute(
   repo_root: String,
@@ -21,7 +22,7 @@ pub fn execute(
   environment_name: Option(String),
   config: types.Config,
 ) -> Result(workflow.ReviewResult, String) {
-  use selected_environment <- result.try(shared.resolve_environment_name(
+  use selected_environment <- result.try(environment.resolve_environment_name(
     repo_root,
     environment_name,
   ))
@@ -47,7 +48,7 @@ pub fn execute(
   Ok(workflow.ReviewResult(
     run: reviewed_run,
     warnings: [],
-    next_action: shared.next_action_for_run(reviewed_run),
+    next_action: runs.next_action_for_run(reviewed_run),
   ))
 }
 

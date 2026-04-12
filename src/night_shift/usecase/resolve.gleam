@@ -6,7 +6,7 @@ import night_shift/orchestrator
 import night_shift/system
 import night_shift/types
 import night_shift/usecase/result as workflow
-import night_shift/usecase/shared
+import night_shift/usecase/support/runs
 
 pub fn execute(
   repo_root: String,
@@ -14,7 +14,7 @@ pub fn execute(
   collect_decisions: fn(types.RunRecord, List(types.Task)) ->
     Result(#(List(types.RecordedDecision), List(types.RunEvent)), String),
 ) -> Result(workflow.ResolveResult, String) {
-  use run <- result.try(shared.load_resolvable_run(repo_root, selector))
+  use run <- result.try(runs.load_resolvable_run(repo_root, selector))
   resolve_loop(run, collect_decisions)
 }
 
@@ -32,7 +32,7 @@ fn resolve_loop(
         workflow.ResolveResult(
           run: run,
           warnings: [],
-          next_action: shared.next_action_for_run(run),
+          next_action: runs.next_action_for_run(run),
           summary: case run.status {
             types.RunPending -> None
             _ ->
@@ -91,7 +91,7 @@ fn continue_resolve_run(
       Ok(workflow.ResolveResult(
         run: replanned_run,
         warnings: [],
-        next_action: shared.next_action_for_run(replanned_run),
+        next_action: runs.next_action_for_run(replanned_run),
         summary: None,
       ))
   }

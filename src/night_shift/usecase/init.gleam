@@ -6,7 +6,7 @@ import night_shift/project
 import night_shift/provider
 import night_shift/types
 import night_shift/usecase/result as workflow
-import night_shift/usecase/shared
+import night_shift/usecase/support/filesystem
 import night_shift/worktree_setup
 import simplifile
 
@@ -145,16 +145,16 @@ fn validate_init_reasoning(
 }
 
 fn init_project_home(repo_root: String) -> Result(Nil, String) {
-  use _ <- result.try(shared.create_directory(project.home(repo_root)))
-  use _ <- result.try(shared.create_directory(project.runs_root(repo_root)))
-  shared.create_directory(project.planning_root(repo_root))
+  use _ <- result.try(filesystem.create_directory(project.home(repo_root)))
+  use _ <- result.try(filesystem.create_directory(project.runs_root(repo_root)))
+  filesystem.create_directory(project.planning_root(repo_root))
 }
 
 fn ensure_file(path: String, contents: String) -> Result(String, String) {
   case simplifile.read(path) {
     Ok(_) -> Ok("kept " <> path)
     Error(_) ->
-      shared.write_string(path, contents)
+      filesystem.write_string(path, contents)
       |> result.map(fn(_) { "created " <> path })
   }
 }
@@ -200,7 +200,7 @@ fn write_and_verify_string(
   path: String,
   contents: String,
 ) -> Result(Nil, String) {
-  use _ <- result.try(shared.write_string(path, contents))
+  use _ <- result.try(filesystem.write_string(path, contents))
   case simplifile.read(path) {
     Ok(saved_contents) ->
       case saved_contents == contents {

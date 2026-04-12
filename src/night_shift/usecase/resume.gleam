@@ -10,7 +10,8 @@ import night_shift/orchestrator
 import night_shift/system
 import night_shift/types
 import night_shift/usecase/result as workflow
-import night_shift/usecase/shared
+import night_shift/usecase/support/environment
+import night_shift/usecase/support/runs
 
 pub fn execute(
   repo_root: String,
@@ -18,7 +19,7 @@ pub fn execute(
   config: types.Config,
 ) -> Result(workflow.ResumeResult, String) {
   use #(saved_run, _) <- result.try(journal.load(repo_root, selector))
-  use _ <- result.try(shared.ensure_saved_environment_is_valid(
+  use _ <- result.try(environment.ensure_saved_environment_is_valid(
     repo_root,
     saved_run.environment_name,
   ))
@@ -27,7 +28,7 @@ pub fn execute(
   Ok(workflow.ResumeResult(
     run: continued_run,
     warnings: [],
-    next_action: shared.next_action_for_run(continued_run),
+    next_action: runs.next_action_for_run(continued_run),
   ))
 }
 
