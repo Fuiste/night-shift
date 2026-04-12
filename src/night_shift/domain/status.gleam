@@ -55,6 +55,7 @@ pub fn summary(
               <> "\n"
               <> "Planning sync pending: "
               <> bool_label(run.planning_dirty)
+              <> planning_validation_fragment(events)
               <> "\n"
               <> "Ready implementation tasks: "
               <> int.to_string(ready_implementation_task_count(run.tasks))
@@ -152,6 +153,13 @@ fn latest_run_failed_message(events: List(types.RunEvent)) -> String {
   }
 }
 
+fn planning_validation_fragment(events: List(types.RunEvent)) -> String {
+  case latest_event_message(events, "planning_validation_failed") {
+    Some(message) -> "\nPlanning validation: " <> message
+    None -> ""
+  }
+}
+
 fn latest_run_failed_message_loop(
   events: List(types.RunEvent),
 ) -> Option(String) {
@@ -161,6 +169,27 @@ fn latest_run_failed_message_loop(
       case event.kind == "run_failed" {
         True -> Some(event.message)
         False -> latest_run_failed_message_loop(rest)
+      }
+  }
+}
+
+fn latest_event_message(
+  events: List(types.RunEvent),
+  kind: String,
+) -> Option(String) {
+  latest_event_message_loop(list.reverse(events), kind)
+}
+
+fn latest_event_message_loop(
+  events: List(types.RunEvent),
+  kind: String,
+) -> Option(String) {
+  case events {
+    [] -> None
+    [event, ..rest] ->
+      case event.kind == kind {
+        True -> Some(event.message)
+        False -> latest_event_message_loop(rest, kind)
       }
   }
 }

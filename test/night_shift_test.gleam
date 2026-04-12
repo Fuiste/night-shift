@@ -878,6 +878,57 @@ pub fn init_writes_selected_provider_and_model_test() {
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
 
+pub fn init_adds_local_exclude_entry_and_keeps_repo_clean_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-init-exclude-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let _ =
+    shell.run(
+      "git init --initial-branch=main " <> shell.quote(repo_root),
+      base_dir,
+      filepath.join(base_dir, "repo-init.log"),
+    )
+
+  let assert Ok(_) =
+    run_local_cli_command(
+      ["init", "--provider", "codex", "--model", "gpt-5.4-mini", "--yes"],
+      repo_root,
+      filepath.join(base_dir, "init-first.log"),
+    )
+  let assert Ok(_) =
+    run_local_cli_command(
+      ["init", "--provider", "codex", "--model", "gpt-5.4-mini", "--yes"],
+      repo_root,
+      filepath.join(base_dir, "init-second.log"),
+    )
+  let assert Ok(exclude_contents) =
+    simplifile.read(project.local_exclude_path(repo_root))
+  let status =
+    shell.run(
+      "git status --short",
+      repo_root,
+      filepath.join(base_dir, "status.log"),
+    )
+
+  assert string.contains(does: exclude_contents, contain: "/.night-shift/")
+  assert list.length(
+      string.split(exclude_contents, "\n")
+      |> list.filter(fn(line) { string.trim(line) == "/.night-shift/" }),
+    )
+    == 1
+  assert shell.succeeded(status)
+  assert string.trim(status.output) == ""
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
 pub fn init_requires_provider_outside_interactive_terminal_test() {
   let unique = system.unique_id()
   let base_dir =
@@ -953,6 +1004,108 @@ pub fn init_rejects_cursor_reasoning_test() {
     does: message,
     contain: "Cursor does not support Night Shift's normalized reasoning control.",
   )
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn review_command_reuses_existing_worktree_for_open_pr_branch_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-review-reuse-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let remote_root = filepath.join(base_dir, "remote.git")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let fake_provider = filepath.join(bin_dir, "fake-provider")
+  let fake_gh = filepath.join(bin_dir, "gh")
+  let existing_worktree = filepath.join(base_dir, "existing-review-worktree")
+  let old_path = system.get_env("PATH")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let _ =
+    shell.run(
+      "git init --initial-branch=main " <> shell.quote(repo_root),
+      base_dir,
+      filepath.join(base_dir, "repo-init.log"),
+    )
+  let _ =
+    shell.run(
+      "git init --bare " <> shell.quote(remote_root),
+      base_dir,
+      filepath.join(base_dir, "remote-init.log"),
+    )
+  let _ =
+    shell.run(
+      "git -C "
+        <> shell.quote(repo_root)
+        <> " config user.email 'night-shift@example.test' && git -C "
+        <> shell.quote(repo_root)
+        <> " config user.name 'Night Shift Test' && git -C "
+        <> shell.quote(repo_root)
+        <> " remote add origin "
+        <> shell.quote(remote_root)
+        <> " && printf '# scratch\\n' > "
+        <> shell.quote(filepath.join(repo_root, "README.md"))
+        <> " && git -C "
+        <> shell.quote(repo_root)
+        <> " add README.md && git -C "
+        <> shell.quote(repo_root)
+        <> " commit -m 'init' >/dev/null && git -C "
+        <> shell.quote(repo_root)
+        <> " push -u origin main >/dev/null",
+      base_dir,
+      filepath.join(base_dir, "seed.log"),
+    )
+  let assert Ok(_) = initialize_project_home(repo_root)
+  let assert Ok(_) = write_fake_provider(fake_provider)
+  let assert Ok(_) = write_review_fake_gh(fake_gh)
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_provider) <> " " <> shell.quote(fake_gh),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+  let _ =
+    shell.run(
+      "git -C "
+        <> shell.quote(repo_root)
+        <> " worktree add -b night-shift/demo "
+        <> shell.quote(existing_worktree)
+        <> " main",
+      base_dir,
+      filepath.join(base_dir, "worktree.log"),
+    )
+
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
+
+  let result =
+    run_local_cli_command(
+      ["review", "--provider", "codex"],
+      repo_root,
+      filepath.join(base_dir, "review.log"),
+    )
+
+  system.set_env("PATH", old_path)
+  restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
+
+  let assert Ok(output) = result
+  let assert Ok(report) = journal.read_report(repo_root, types.LatestRun)
+
+  assert string.contains(
+    does: output,
+    contain: "finished with status completed",
+  )
+  assert string.contains(
+    does: report,
+    contain: "Reused existing worktree for branch night-shift/demo",
+  )
+  assert string.contains(does: report, contain: existing_worktree)
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
@@ -2402,6 +2555,7 @@ pub fn start_task_runs_codex_execution_in_worktree_test() {
       "seed-head",
       "night-shift/demo",
       "main",
+      provider.CreatedWorktree,
     )
   let assert Ok(result) = provider.await_task(task_run)
 
@@ -2475,6 +2629,7 @@ pub fn provider_await_task_recovers_trailing_junk_test() {
       "seed-head",
       "night-shift/demo",
       "main",
+      provider.CreatedWorktree,
     )
   let assert Ok(result) = provider.await_task(task_run)
 
@@ -3040,6 +3195,263 @@ pub fn orchestrator_start_marks_decode_failures_failed_and_clears_lock_test() {
   assert string.contains(does: events, contain: "\"kind\":\"run_failed\"")
   assert string.contains(does: raw_payload, contain: "\"follow_up_tasks\":[}")
   let assert Error(_) = simplifile.read(project.active_lock_path(repo_root))
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn orchestrator_plan_rejects_invalid_dependency_graph_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-invalid-plan-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let brief_path = filepath.join(base_dir, "brief.md")
+  let fake_provider = filepath.join(bin_dir, "fake-provider")
+  let old_path = system.get_env("PATH")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
+  let assert Ok(_) = initialize_project_home(repo_root)
+  let assert Ok(_) = write_invalid_plan_dependency_fake_provider(fake_provider)
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_provider),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+  seed_git_repo(repo_root, base_dir)
+
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+
+  let assert Ok(pending_run) =
+    journal.create_pending_run(
+      repo_root,
+      brief_path,
+      agent_for(types.Codex),
+      agent_for(types.Codex),
+      "",
+      1,
+      None,
+    )
+  let assert Ok(dirty_pending_run) =
+    journal.rewrite_run(types.RunRecord(..pending_run, planning_dirty: True))
+  let assert Error(message) = orchestrator.plan(dirty_pending_run)
+
+  system.set_env("PATH", old_path)
+  restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
+
+  let assert Ok(#(persisted_run, events)) =
+    journal.load(repo_root, types.RunId(dirty_pending_run.run_id))
+  let assert Ok(report) = simplifile.read(persisted_run.report_path)
+
+  assert persisted_run.planning_dirty == True
+  assert persisted_run.tasks == []
+  assert string.contains(does: message, contain: "docs/wiki/index.md")
+  assert string.contains(does: report, contain: "planning_validation_failed")
+  assert list.any(events, fn(event) {
+    event.kind == "planning_validation_failed"
+  })
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn orchestrator_start_routes_dirty_decode_failures_to_manual_attention_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-dirty-decode-failure-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let brief_path = filepath.join(base_dir, "brief.md")
+  let fake_provider = filepath.join(bin_dir, "fake-provider")
+  let state_home = filepath.join(base_dir, "state")
+  let old_path = system.get_env("PATH")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
+  let old_state_home = system.get_env("XDG_STATE_HOME")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
+  let assert Ok(_) = initialize_project_home(repo_root)
+  let assert Ok(_) = write_dirty_invalid_execution_fake_provider(fake_provider)
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_provider),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+  seed_git_repo(repo_root, base_dir)
+
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("XDG_STATE_HOME", state_home)
+
+  let config =
+    types.Config(
+      ..types.default_config(),
+      verification_commands: [],
+      max_workers: 1,
+    )
+
+  let assert Ok(run) = planned_run(repo_root, brief_path, types.Codex, 1)
+  let assert Ok(active_run) = journal.activate_run(run)
+  let assert Ok(blocked_run) = orchestrator.start(active_run, config)
+
+  system.set_env("PATH", old_path)
+  restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
+  restore_env("XDG_STATE_HOME", old_state_home)
+
+  let blocked_task =
+    blocked_run.tasks
+    |> list.find(fn(task) { task.id == "demo-task" })
+    |> result.unwrap(or: types.Task(
+      id: "",
+      title: "",
+      description: "",
+      dependencies: [],
+      acceptance: [],
+      demo_plan: [],
+      decision_requests: [],
+      kind: types.ImplementationTask,
+      execution_mode: types.Serial,
+      state: types.Queued,
+      worktree_path: "",
+      branch_name: "",
+      pr_number: "",
+      summary: "",
+    ))
+  let assert Ok(report) = simplifile.read(blocked_run.report_path)
+  let assert Ok(raw_payload) =
+    simplifile.read(filepath.join(
+      blocked_run.run_path,
+      "logs/demo-task.result.raw.jsonish",
+    ))
+  let assert Ok(created_file) =
+    simplifile.read(filepath.join(blocked_task.worktree_path, "BROKEN.md"))
+
+  assert blocked_run.status == types.RunBlocked
+  assert blocked_task.state == types.ManualAttention
+  assert string.contains(
+    does: blocked_task.summary,
+    contain: "candidate worktree changes",
+  )
+  assert string.contains(does: blocked_task.summary, contain: "Raw payload:")
+  assert string.contains(does: report, contain: "Raw payload:")
+  assert string.contains(does: raw_payload, contain: "\"follow_up_tasks\":[}")
+  assert string.contains(does: created_file, contain: "decode fallback")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn orchestrator_start_blocks_invalid_follow_up_tasks_before_delivery_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-invalid-follow-up-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let brief_path = filepath.join(base_dir, "brief.md")
+  let fake_provider = filepath.join(bin_dir, "fake-provider")
+  let state_home = filepath.join(base_dir, "state")
+  let old_path = system.get_env("PATH")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
+  let old_state_home = system.get_env("XDG_STATE_HOME")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
+  let assert Ok(_) = initialize_project_home(repo_root)
+  let assert Ok(_) = write_invalid_follow_up_fake_provider(fake_provider)
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_provider),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+  seed_git_repo(repo_root, base_dir)
+
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("XDG_STATE_HOME", state_home)
+
+  let config =
+    types.Config(
+      ..types.default_config(),
+      verification_commands: [],
+      max_workers: 1,
+    )
+
+  let assert Ok(run) = planned_run(repo_root, brief_path, types.Codex, 1)
+  let assert Ok(active_run) = journal.activate_run(run)
+  let assert Ok(blocked_run) = orchestrator.start(active_run, config)
+
+  system.set_env("PATH", old_path)
+  restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
+  restore_env("XDG_STATE_HOME", old_state_home)
+
+  let blocked_task =
+    blocked_run.tasks
+    |> list.find(fn(task) { task.id == "demo-task" })
+    |> result.unwrap(or: types.Task(
+      id: "",
+      title: "",
+      description: "",
+      dependencies: [],
+      acceptance: [],
+      demo_plan: [],
+      decision_requests: [],
+      kind: types.ImplementationTask,
+      execution_mode: types.Serial,
+      state: types.Queued,
+      worktree_path: "",
+      branch_name: "",
+      pr_number: "",
+      summary: "",
+    ))
+  let assert Ok(events_text) = simplifile.read(blocked_run.events_path)
+  let assert Ok(created_file) =
+    simplifile.read(filepath.join(
+      blocked_task.worktree_path,
+      "docs/wiki/combinators.md",
+    ))
+
+  assert blocked_run.status == types.RunBlocked
+  assert blocked_task.state == types.ManualAttention
+  assert blocked_task.pr_number == ""
+  assert string.contains(
+    does: blocked_task.summary,
+    contain: "follow-up task graph was invalid",
+  )
+  assert string.contains(
+    does: blocked_task.summary,
+    contain: "docs/wiki/combinators.md",
+  )
+  assert string.contains(does: events_text, contain: "\"kind\":\"pr_opened\"")
+    == False
+  assert string.contains(
+    does: events_text,
+    contain: "\"kind\":\"task_manual_attention\"",
+  )
+  assert string.contains(does: created_file, contain: "guard")
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
@@ -3658,6 +4070,60 @@ fn write_invalid_execution_fake_provider(
   )
 }
 
+fn write_dirty_invalid_execution_fake_provider(
+  path: String,
+) -> Result(Nil, simplifile.FileError) {
+  simplifile.write(
+    "#!/bin/sh\n"
+      <> "MODE=$1\n"
+      <> "if [ \"$MODE\" = \"plan\" ]; then\n"
+      <> "  printf 'planning\\nNIGHT_SHIFT_RESULT_START\\n{\"tasks\":[{\"id\":\"demo-task\",\"title\":\"Dirty invalid result task\",\"description\":\"Write a file and then return malformed JSON.\",\"dependencies\":[],\"acceptance\":[\"Night Shift preserves the worktree for inspection.\"],\"demo_plan\":[\"Inspect BROKEN.md in the task worktree.\"],\"execution_mode\":\"serial\"}]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "elif [ \"$MODE\" = \"plan-doc\" ]; then\n"
+      <> "  printf 'planning-doc\\nNIGHT_SHIFT_RESULT_START\\n# Brief\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "else\n"
+      <> "  printf 'decode fallback\\n' > BROKEN.md\n"
+      <> "  printf 'execution\\nNIGHT_SHIFT_RESULT_START\\n{\"status\":\"completed\",\"summary\":\"Broken payload with changes\",\"files_touched\":[\"BROKEN.md\"],\"demo_evidence\":[\"BROKEN.md created\"],\"pr\":{\"title\":\"t\",\"summary\":\"s\",\"demo\":[],\"risks\":[]},\"follow_up_tasks\":[}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "fi\n",
+    to: path,
+  )
+}
+
+fn write_invalid_follow_up_fake_provider(
+  path: String,
+) -> Result(Nil, simplifile.FileError) {
+  simplifile.write(
+    "#!/bin/sh\n"
+      <> "MODE=$1\n"
+      <> "if [ \"$MODE\" = \"plan\" ]; then\n"
+      <> "  printf 'planning\\nNIGHT_SHIFT_RESULT_START\\n{\"tasks\":[{\"id\":\"demo-task\",\"title\":\"Combinators page\",\"description\":\"Create the combinators page and return an invalid follow-up dependency.\",\"dependencies\":[],\"acceptance\":[\"Create docs/wiki/combinators.md\"],\"demo_plan\":[\"Inspect the new docs page.\"],\"execution_mode\":\"serial\"}]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "elif [ \"$MODE\" = \"plan-doc\" ]; then\n"
+      <> "  printf 'planning-doc\\nNIGHT_SHIFT_RESULT_START\\n# Brief\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "else\n"
+      <> "  mkdir -p docs/wiki\n"
+      <> "  printf '# combinators\\n\\n- guard\\n- at\\n- index\\n- each\\n' > docs/wiki/combinators.md\n"
+      <> "  printf 'execution\\nNIGHT_SHIFT_RESULT_START\\n{\"status\":\"completed\",\"summary\":\"Created combinators page\",\"files_touched\":[\"docs/wiki/combinators.md\"],\"demo_evidence\":[\"Created docs/wiki/combinators.md\"],\"pr\":{\"title\":\"Create combinators page\",\"summary\":\"Add the first-pass combinators docs.\",\"demo\":[\"docs/wiki/combinators.md created\"],\"risks\":[]},\"follow_up_tasks\":[{\"id\":\"create-combinators-page-smoke\",\"title\":\"Manual docs render sanity check\",\"description\":\"Verify rendered markdown.\",\"dependencies\":[\"docs/wiki/combinators.md\"],\"acceptance\":[\"Rendered markdown looks correct.\"],\"demo_plan\":[\"Preview the new page.\"],\"decision_requests\":[],\"task_kind\":\"implementation\",\"execution_mode\":\"serial\"}]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "fi\n",
+    to: path,
+  )
+}
+
+fn write_invalid_plan_dependency_fake_provider(
+  path: String,
+) -> Result(Nil, simplifile.FileError) {
+  simplifile.write(
+    "#!/bin/sh\n"
+      <> "MODE=$1\n"
+      <> "if [ \"$MODE\" = \"plan\" ]; then\n"
+      <> "  printf 'planning\\nNIGHT_SHIFT_RESULT_START\\n{\"tasks\":[{\"id\":\"create-wiki-first-pass-pages\",\"title\":\"Create wiki pages\",\"description\":\"Create the first-pass docs pages.\",\"dependencies\":[\"docs/wiki/index.md\"],\"acceptance\":[\"Create the first-pass docs.\"],\"demo_plan\":[\"Inspect the new docs tree.\"],\"execution_mode\":\"serial\"}]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "elif [ \"$MODE\" = \"plan-doc\" ]; then\n"
+      <> "  printf 'planning-doc\\nNIGHT_SHIFT_RESULT_START\\n# Brief\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "else\n"
+      <> "  printf 'execution\\nNIGHT_SHIFT_RESULT_START\\n{\"status\":\"completed\",\"summary\":\"noop\",\"files_touched\":[],\"demo_evidence\":[],\"pr\":{\"title\":\"t\",\"summary\":\"s\",\"demo\":[],\"risks\":[]},\"follow_up_tasks\":[]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "fi\n",
+    to: path,
+  )
+}
+
 fn write_batch_decode_fake_provider(
   path: String,
 ) -> Result(Nil, simplifile.FileError) {
@@ -4095,6 +4561,26 @@ fn write_fake_gh(path: String) -> Result(Nil, simplifile.FileError) {
       <> "fi\n"
       <> "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"view\" ]; then\n"
       <> "  printf '{\"number\":1,\"title\":\"Night Shift PR\",\"body\":\"Review body\",\"headRefName\":\"night-shift/demo\",\"baseRefName\":\"main\",\"url\":\"https://example.test/pr/1\",\"reviewDecision\":\"REVIEW_REQUIRED\",\"statusCheckRollup\":[],\"reviews\":[],\"comments\":[]}'\n"
+      <> "  exit 0\n"
+      <> "fi\n"
+      <> "printf 'unsupported gh invocation: %s %s\\n' \"$1\" \"$2\" >&2\n"
+      <> "exit 1\n",
+    to: path,
+  )
+}
+
+fn write_review_fake_gh(path: String) -> Result(Nil, simplifile.FileError) {
+  simplifile.write(
+    "#!/bin/sh\n"
+      <> "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"list\" ]; then\n"
+      <> "  printf '[{\"number\":1,\"url\":\"https://example.test/pr/1\",\"headRefName\":\"night-shift/demo\",\"title\":\"Night Shift PR\"}]\\n'\n"
+      <> "  exit 0\n"
+      <> "fi\n"
+      <> "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"edit\" ]; then\n"
+      <> "  exit 0\n"
+      <> "fi\n"
+      <> "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"view\" ]; then\n"
+      <> "  printf '{\"number\":1,\"title\":\"Night Shift PR\",\"body\":\"Review body\",\"headRefName\":\"night-shift/demo\",\"baseRefName\":\"main\",\"url\":\"https://example.test/pr/1\",\"reviewDecision\":\"REVIEW_REQUIRED\",\"statusCheckRollup\":[],\"reviews\":[{\"state\":\"COMMENTED\",\"body\":\"Please make the note a little more specific.\"}],\"comments\":[]}'\n"
       <> "  exit 0\n"
       <> "fi\n"
       <> "printf 'unsupported gh invocation: %s %s\\n' \"$1\" \"$2\" >&2\n"

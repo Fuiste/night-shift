@@ -1,9 +1,12 @@
+import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
+import gleam/string
 import night_shift/agent_config
 import night_shift/config as config_codec
 import night_shift/project
 import night_shift/provider
+import night_shift/shell
 import night_shift/types
 import night_shift/usecase/result as workflow
 import night_shift/usecase/support/filesystem
@@ -45,6 +48,7 @@ pub fn execute(
     project.gitignore_path(repo_root),
     project_gitignore_contents(),
   ))
+  use _ <- result.try(ensure_local_exclude(repo_root))
   use config_status <- result.try(ensure_file(
     config_path,
     config_codec.render(init_config),
@@ -226,6 +230,43 @@ fn file_exists(path: String) -> Bool {
   case simplifile.read(path) {
     Ok(_) -> True
     Error(_) -> False
+  }
+}
+
+fn ensure_local_exclude(repo_root: String) -> Result(String, String) {
+  let exclude_path = project.local_exclude_path(repo_root)
+  let exclude_entry = "/.night-shift/"
+  let existing = case simplifile.read(exclude_path) {
+    Ok(contents) -> contents
+    Error(_) -> ""
+  }
+  let lines =
+    existing
+    |> string.split("\n")
+    |> list.filter(fn(line) { string.trim(line) != "" })
+    |> list.filter(fn(line) { string.trim(line) != exclude_entry })
+  let updated =
+    list.append(lines, [exclude_entry])
+    |> string.join(with: "\n")
+    |> string.trim
+    |> append_newline
+
+  use _ <- result.try(write_and_verify_string(exclude_path, updated))
+  let status_log = project.home(repo_root) <> "/init.exclude-status.log"
+  let status =
+    shell.run("git status --short", repo_root, status_log)
+    |> shell.succeeded
+  case status {
+    True -> Ok("updated " <> exclude_path)
+    False ->
+      Error("Unable to confirm git status after updating " <> exclude_path)
+  }
+}
+
+fn append_newline(contents: String) -> String {
+  case contents {
+    "" -> ""
+    _ -> contents <> "\n"
   }
 }
 

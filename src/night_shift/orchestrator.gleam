@@ -1,13 +1,16 @@
 import filepath
 import gleam/int
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
+import night_shift/domain/decision_contract
 import night_shift/domain/decisions as decision_domain
+import night_shift/domain/plan_hygiene
 import night_shift/domain/run_state
 import night_shift/domain/summary as domain_summary
 import night_shift/domain/task_graph
+import night_shift/domain/task_validation
 import night_shift/git
 import night_shift/infra/task_delivery
 import night_shift/infra/task_verifier
@@ -50,14 +53,9 @@ fn plan_with_event(
   event_kind: String,
   message_prefix: String,
 ) -> Result(types.RunRecord, String) {
-  use planned_tasks <- result.try(provider.plan_tasks(
-    run.planning_agent,
-    run.repo_root,
-    run.brief_path,
-    run.run_path,
-    run.decisions,
-    task_graph.completed_tasks(run.tasks),
-  ))
+  use #(planned_tasks, contract_warnings, retry_events) <- result.try(
+    load_planned_tasks(run, 1, None),
+  )
 
   let normalized_tasks = task_graph.normalize_tasks(planned_tasks)
   let merged_tasks =
@@ -87,7 +85,12 @@ fn plan_with_event(
     )
 
   use rewritten_run <- result.try(journal.rewrite_run(updated_run))
-  use planned_run <- result.try(journal.append_event(rewritten_run, plan_event))
+  use warned_run <- result.try(append_run_events(rewritten_run, retry_events))
+  use reconciled_run <- result.try(append_decision_contract_events(
+    warned_run,
+    contract_warnings,
+  ))
+  use planned_run <- result.try(journal.append_event(reconciled_run, plan_event))
   use signaled_run <- result.try(append_decision_request_events(
     planned_run,
     decision_domain.decision_requesting_tasks(run.decisions, merged_tasks),
@@ -97,6 +100,104 @@ fn plan_with_event(
     status,
     decision_domain.planning_status_message(run.decisions, merged_tasks),
   )
+}
+
+fn load_planned_tasks(
+  run: types.RunRecord,
+  attempt: Int,
+  retry_feedback: Option(String),
+) -> Result(
+  #(
+    List(types.Task),
+    List(decision_contract.ReconciliationWarning),
+    List(types.RunEvent),
+  ),
+  String,
+) {
+  let completed_tasks = task_graph.completed_tasks(run.tasks)
+  case
+    provider.plan_tasks_attempt(
+      run.planning_agent,
+      run.repo_root,
+      run.brief_path,
+      run.run_path,
+      run.decisions,
+      completed_tasks,
+      attempt,
+      retry_feedback,
+    )
+  {
+    Error(message) ->
+      maybe_retry_planned_tasks(run, attempt, retry_feedback, message)
+    Ok(planned_tasks) ->
+      case validate_planned_tasks(run, planned_tasks) {
+        Ok(_) ->
+          case
+            decision_contract.reconcile_decision_requests(
+              run.decisions,
+              planned_tasks,
+            )
+          {
+            Ok(#(reconciled_tasks, warnings)) ->
+              case plan_hygiene.normalize_planned_tasks(reconciled_tasks) {
+                Ok(normalized_tasks) ->
+                  Ok(#(
+                    normalized_tasks,
+                    warnings,
+                    retry_events(attempt, retry_feedback),
+                  ))
+                Error(message) ->
+                  maybe_retry_planned_tasks(
+                    run,
+                    attempt,
+                    retry_feedback,
+                    message,
+                  )
+              }
+            Error(message) ->
+              maybe_retry_planned_tasks(run, attempt, retry_feedback, message)
+          }
+        Error(issues) -> {
+          let message = domain_summary.planning_validation_summary(issues)
+          case attempt < 2 && retryable_planning_issue(message) {
+            True ->
+              load_planned_tasks(
+                run,
+                attempt + 1,
+                Some(corrective_retry_feedback(message, retry_feedback)),
+              )
+            False -> {
+              use _ <- result.try(reject_invalid_plan(run, issues))
+              Error(message)
+            }
+          }
+        }
+      }
+  }
+}
+
+fn maybe_retry_planned_tasks(
+  run: types.RunRecord,
+  attempt: Int,
+  retry_feedback: Option(String),
+  message: String,
+) -> Result(
+  #(
+    List(types.Task),
+    List(decision_contract.ReconciliationWarning),
+    List(types.RunEvent),
+  ),
+  String,
+) {
+  case attempt < 2 && retryable_planning_issue(message) {
+    True ->
+      load_planned_tasks(
+        run,
+        attempt + 1,
+        Some(corrective_retry_feedback(message, retry_feedback)),
+      )
+    False -> Error(message)
+  }
 }
 
 fn prepare_run_for_execution(
@@ -239,9 +340,9 @@ fn launch_batch_loop(
               )
             existing_branch -> existing_branch
           }
-          let worktree_path =
-            filepath.join(run.run_path, "worktrees/" <> task.id)
           let is_existing_worktree = task.branch_name != ""
+          let default_worktree_path =
+            filepath.join(run.run_path, "worktrees/" <> task.id)
           let base_ref = case task.branch_name {
             "" -> task_graph.task_base_ref(task, run.tasks, config.base_branch)
             existing_branch -> existing_branch
@@ -250,26 +351,17 @@ fn launch_batch_loop(
             filepath.join(run.run_path, "logs/" <> task.id <> ".git.log")
           let env_log =
             filepath.join(run.run_path, "logs/" <> task.id <> ".env.log")
-          let worktree_result = case is_existing_worktree {
-            False ->
-              git.create_worktree(
-                run.repo_root,
-                worktree_path,
-                branch_name,
-                base_ref,
-                git_log,
-              )
-            True ->
-              git.attach_worktree(
-                run.repo_root,
-                worktree_path,
-                branch_name,
-                git_log,
-              )
-          }
-
-          case worktree_result {
-            Ok(_) -> {
+          case
+            prepare_task_worktree(
+              run.repo_root,
+              default_worktree_path,
+              branch_name,
+              base_ref,
+              is_existing_worktree,
+              git_log,
+            )
+          {
+            Ok(#(worktree_path, worktree_origin)) -> {
               let running_task =
                 types.Task(
                   ..task,
@@ -289,18 +381,28 @@ fn launch_batch_loop(
                   message: "Started task " <> task.title,
                   task_id: Some(task.id),
                 )
+              let bootstrap_phase = case worktree_origin {
+                provider.ReusedWorktree -> worktree_setup_model.MaintenancePhase
+                _ ->
+                  case is_existing_worktree {
+                    True -> worktree_setup_model.MaintenancePhase
+                    False -> worktree_setup_model.SetupPhase
+                  }
+              }
 
               use persisted_run <- result.try(journal.append_event(
                 updated_run,
                 event,
               ))
-              let bootstrap_phase = case is_existing_worktree {
-                True -> worktree_setup_model.MaintenancePhase
-                False -> worktree_setup_model.SetupPhase
-              }
+              use announced_run <- result.try(append_worktree_origin_event(
+                persisted_run,
+                running_task,
+                worktree_origin,
+                worktree_path,
+              ))
               case
                 start_task_run(
-                  persisted_run,
+                  announced_run,
                   running_task,
                   worktree_path,
                   branch_name,
@@ -308,6 +410,7 @@ fn launch_batch_loop(
                   bootstrap_phase,
                   git_log,
                   env_log,
+                  worktree_origin,
                 )
               {
                 Ok(#(started_run, task_run)) ->
@@ -315,7 +418,7 @@ fn launch_batch_loop(
 
                 Error(message) -> {
                   use failed_run <- result.try(mark_task_with_event(
-                    persisted_run,
+                    announced_run,
                     running_task,
                     types.Failed,
                     message,
@@ -353,6 +456,67 @@ fn launch_batch_loop(
   }
 }
 
+fn prepare_task_worktree(
+  repo_root: String,
+  default_worktree_path: String,
+  branch_name: String,
+  base_ref: String,
+  is_existing_worktree: Bool,
+  git_log: String,
+) -> Result(#(String, provider.WorktreeOrigin), String) {
+  case is_existing_worktree {
+    False -> {
+      use _ <- result.try(git.create_worktree(
+        repo_root,
+        default_worktree_path,
+        branch_name,
+        base_ref,
+        git_log,
+      ))
+      Ok(#(default_worktree_path, provider.CreatedWorktree))
+    }
+    True ->
+      case git.mounted_worktree_path(repo_root, branch_name, git_log) {
+        Ok(Some(existing_path)) -> Ok(#(existing_path, provider.ReusedWorktree))
+        Ok(None) -> {
+          use _ <- result.try(git.attach_worktree(
+            repo_root,
+            default_worktree_path,
+            branch_name,
+            git_log,
+          ))
+          Ok(#(default_worktree_path, provider.AttachedWorktree))
+        }
+        Error(message) -> Error(message)
+      }
+  }
+}
+
+fn append_worktree_origin_event(
+  run: types.RunRecord,
+  task: types.Task,
+  worktree_origin: provider.WorktreeOrigin,
+  worktree_path: String,
+) -> Result(types.RunRecord, String) {
+  case worktree_origin {
+    provider.ReusedWorktree ->
+      journal.append_event(
+        run,
+        types.RunEvent(
+          kind: "task_progress",
+          at: system.timestamp(),
+          message: "Reused existing worktree for branch "
+            <> task.branch_name
+            <> " at "
+            <> worktree_path
+            <> ".",
+          task_id: Some(task.id),
+        ),
+      )
+    _ -> Ok(run)
+  }
+}
+
 fn await_batch(
   config: types.Config,
   run: types.RunRecord,
@@ -361,7 +525,7 @@ fn await_batch(
   case task_runs {
     [] -> Ok(run)
     [task_run, ..rest] -> {
-      let next_run_result = case provider.await_task(task_run) {
+      let next_run_result = case provider.await_task_detailed(task_run) {
         Ok(execution_result) ->
           case complete_task(config, run, task_run, execution_result) {
             Ok(updated_run) -> Ok(updated_run)
@@ -374,14 +538,7 @@ fn await_batch(
                 "task_failed",
               )
           }
-        Error(message) ->
-          mark_task_with_event(
-            run,
-            task_run.task,
-            types.Failed,
-            message,
-            "task_failed",
-          )
+        Error(error) -> handle_await_task_error(run, task_run, error)
       }
 
       use updated_run <- result.try(next_run_result)
@@ -396,11 +553,17 @@ fn complete_task(
   task_run: provider.TaskRun,
   execution_result: types.ExecutionResult,
 ) -> Result(types.RunRecord, String) {
-  case execution_result.status {
-    types.Completed -> finalize_success(config, run, task_run, execution_result)
-    types.Blocked | types.ManualAttention | types.Failed ->
-      finalize_non_success(run, task_run.task, execution_result)
-    _ -> finalize_non_success(run, task_run.task, execution_result)
+  case validate_follow_up_tasks(run, task_run, execution_result) {
+    Ok(Some(updated_run)) -> Ok(updated_run)
+    Ok(None) ->
+      case execution_result.status {
+        types.Completed ->
+          finalize_success(config, run, task_run, execution_result)
+        types.Blocked | types.ManualAttention | types.Failed ->
+          finalize_non_success(run, task_run.task, execution_result)
+        _ -> finalize_non_success(run, task_run.task, execution_result)
+      }
+    Error(message) -> Error(message)
   }
 }
 
@@ -542,6 +705,46 @@ fn append_decision_request_events(
   }
 }
 
+fn append_run_events(
+  run: types.RunRecord,
+  events: List(types.RunEvent),
+) -> Result(types.RunRecord, String) {
+  case events {
+    [] -> Ok(run)
+    [event, ..rest] -> {
+      use updated_run <- result.try(journal.append_event(run, event))
+      append_run_events(updated_run, rest)
+    }
+  }
+}
+
+fn append_decision_contract_events(
+  run: types.RunRecord,
+  warnings: List(decision_contract.ReconciliationWarning),
+) -> Result(types.RunRecord, String) {
+  case warnings {
+    [] -> Ok(run)
+    [warning, ..rest] -> {
+      use updated_run <- result.try(journal.append_event(
+        run,
+        types.RunEvent(
+          kind: "decision_contract_warning",
+          at: system.timestamp(),
+          message: "Reused recorded decision key `"
+            <> warning.new_key
+            <> "` for planner request `"
+            <> warning.previous_key
+            <> "` ("
+            <> warning.question
+            <> ").",
+          task_id: Some(warning.task_id),
+        ),
+      ))
+      append_decision_contract_events(updated_run, rest)
+    }
+  }
+}
+
 fn append_manual_attention_events(
   run: types.RunRecord,
 ) -> Result(types.RunRecord, String) {
@@ -580,6 +783,7 @@ fn start_task_run(
   bootstrap_phase: worktree_setup.BootstrapPhase,
   git_log: String,
   env_log: String,
+  worktree_origin: provider.WorktreeOrigin,
 ) -> Result(#(types.RunRecord, provider.TaskRun), String) {
   use _ <- result.try(worktree_setup.prepare_worktree(
     run.repo_root,
@@ -606,6 +810,7 @@ fn start_task_run(
     start_head,
     branch_name,
     base_ref,
+    worktree_origin,
   ))
   Ok(#(run, task_run))
 }
@@ -632,4 +837,172 @@ fn mark_task_with_event(
       task_id: Some(task.id),
     ),
   )
+}
+
+fn validate_follow_up_tasks(
+  run: types.RunRecord,
+  task_run: provider.TaskRun,
+  execution_result: types.ExecutionResult,
+) -> Result(Option(types.RunRecord), String) {
+  case
+    task_validation.validate_follow_up_tasks(
+      run.tasks,
+      task_run.task.id,
+      execution_result.follow_up_tasks,
+    )
+  {
+    Ok(_) -> Ok(None)
+    Error(issues) ->
+      mark_task_with_event(
+        run,
+        task_run.task,
+        types.ManualAttention,
+        domain_summary.follow_up_validation_summary(task_run.task, issues),
+        "task_manual_attention",
+      )
+      |> result.map(Some)
+  }
+}
+
+fn validate_planned_tasks(
+  run: types.RunRecord,
+  planned_tasks: List(types.Task),
+) -> Result(Nil, List(task_validation.ValidationIssue)) {
+  case
+    task_validation.validate_planned_tasks(
+      task_graph.completed_tasks(run.tasks),
+      planned_tasks,
+    )
+  {
+    Ok(_) -> Ok(Nil)
+    Error(issues) -> Error(issues)
+  }
+}
+
+fn reject_invalid_plan(
+  run: types.RunRecord,
+  issues: List(task_validation.ValidationIssue),
+) -> Result(Nil, String) {
+  let message = domain_summary.planning_validation_summary(issues)
+  use _ <- result.try(journal.append_event(
+    run,
+    types.RunEvent(
+      kind: "planning_validation_failed",
+      at: system.timestamp(),
+      message: message,
+      task_id: None,
+    ),
+  ))
+  Error(message)
+}
+
+fn retry_events(
+  attempt: Int,
+  retry_feedback: Option(String),
+) -> List(types.RunEvent) {
+  case attempt, retry_feedback {
+    1, _ -> []
+    _, Some(feedback) -> [
+      types.RunEvent(
+        kind: "planning_retry",
+        at: system.timestamp(),
+        message: feedback,
+        task_id: None,
+      ),
+    ]
+    _, None -> []
+  }
+}
+
+fn retryable_planning_issue(message: String) -> Bool {
+  let lowered = string.lowercase(message)
+  string.contains(does: lowered, contain: "start marker")
+  || string.contains(does: lowered, contain: "end marker")
+  || string.contains(does: lowered, contain: "unable to decode")
+  || string.contains(does: lowered, contain: "fragmented tiny plan")
+  || string.contains(does: lowered, contain: "reuse the recorded decision key")
+  || string.contains(does: lowered, contain: "dependencies")
+}
+
+fn corrective_retry_feedback(
+  message: String,
+  prior_feedback: Option(String),
+) -> String {
+  let prefix = case prior_feedback {
+    Some(existing) -> existing <> "\n\n"
+    None -> ""
+  }
+
+  prefix
+  <> "The previous planning attempt failed because:\n"
+  <> message
+  <> "\nRetry once. Return only a valid Night Shift plan between the sentinel markers, reuse prior decision keys when they still apply, and keep tiny docs-only work to the minimum meaningful number of implementation tasks."
+}
+
+fn handle_await_task_error(
+  run: types.RunRecord,
+  task_run: provider.TaskRun,
+  error: provider.AwaitTaskError,
+) -> Result(types.RunRecord, String) {
+  case error {
+    provider.PayloadDecodeFailed(message, artifacts) ->
+      case task_run_has_candidate_changes(run, task_run) {
+        True ->
+          mark_task_with_event(
+            run,
+            task_run.task,
+            types.ManualAttention,
+            domain_summary.decode_manual_attention_summary(
+              task_run.task,
+              task_run.log_path,
+              artifacts.raw_payload_path,
+              artifacts.sanitized_payload_path,
+            ),
+            "task_manual_attention",
+          )
+        False ->
+          mark_task_with_event(
+            run,
+            task_run.task,
+            types.Failed,
+            message,
+            "task_failed",
+          )
+      }
+    _ ->
+      mark_task_with_event(
+        run,
+        task_run.task,
+        types.Failed,
+        await_task_error_message(error),
+        "task_failed",
+      )
+  }
+}
+
+fn task_run_has_candidate_changes(
+  run: types.RunRecord,
+  task_run: provider.TaskRun,
+) -> Bool {
+  let git_log =
+    filepath.join(
+      run.run_path,
+      "logs/" <> task_run.task.id <> ".recover.git.log",
+    )
+
+  let has_dirty_worktree = git.has_changes(task_run.worktree_path, git_log)
+  let has_new_commit = case git.head_commit(task_run.worktree_path, git_log) {
+    Ok(head) -> head != task_run.start_head
+    Error(_) -> False
+  }
+
+  has_dirty_worktree || has_new_commit
+}
+
+fn await_task_error_message(error: provider.AwaitTaskError) -> String {
+  case error {
+    provider.ProviderCommandFailed(message) -> message
+    provider.PayloadExtractionFailed(message) -> message
+    provider.PayloadDecodeFailed(message, _) -> message
+  }
 }
