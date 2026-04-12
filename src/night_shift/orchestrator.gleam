@@ -5,16 +5,15 @@ import gleam/option.{None, Some}
 import gleam/result
 import gleam/string
 import night_shift/domain/decisions as decision_domain
-import night_shift/domain/pull_request as pull_request_domain
 import night_shift/domain/run_state
 import night_shift/domain/summary as domain_summary
 import night_shift/domain/task_graph
 import night_shift/git
-import night_shift/github
+import night_shift/infra/task_delivery
+import night_shift/infra/task_verifier
 import night_shift/journal
 import night_shift/project
 import night_shift/provider
-import night_shift/shell
 import night_shift/system
 import night_shift/types
 import night_shift/worktree_setup
@@ -426,206 +425,81 @@ fn finalize_success(
   task_run: provider.TaskRun,
   execution_result: types.ExecutionResult,
 ) -> Result(types.RunRecord, String) {
-  let verification_log =
-    filepath.join(run.run_path, "logs/" <> task_run.task.id <> ".verify.log")
-  use env_vars <- result.try(worktree_setup.env_vars_for(
-    run.repo_root,
-    run.environment_name,
-    project.worktree_setup_path(run.repo_root),
-  ))
-  let verify_result =
-    verify_commands(
-      config.verification_commands,
-      task_run.worktree_path,
-      env_vars,
-      verification_log,
-    )
-
-  let final_result = case verify_result {
-    Ok(output) -> Ok(#(execution_result, output))
-    Error(output) ->
+  case
+    task_verifier.verify_completed_task(config, run, task_run, execution_result)
+  {
+    Ok(verified) ->
       case
-        provider.repair_task(
-          run.execution_agent,
-          run.repo_root,
-          task_run.worktree_path,
-          env_vars,
-          run.run_path,
-          task_run.task,
-          output,
+        task_delivery.deliver_completed_task(
+          run,
+          task_run,
+          verified.execution_result,
+          verified.verification_output,
         )
       {
-        Ok(repaired_result) ->
-          case
-            verify_commands(
-              config.verification_commands,
-              task_run.worktree_path,
-              env_vars,
-              verification_log,
-            )
-          {
-            Ok(repaired_output) -> Ok(#(repaired_result, repaired_output))
-            Error(repaired_output) -> Error(repaired_output)
-          }
-        Error(_) -> Error(output)
-      }
-  }
-
-  case final_result {
-    Ok(#(final_execution, verification_output)) -> {
-      let git_log =
-        filepath.join(
-          run.run_path,
-          "logs/" <> task_run.task.id <> ".deliver.log",
-        )
-      let had_worktree_changes =
-        git.has_changes(task_run.worktree_path, git_log)
-
-      let delivery_result = case had_worktree_changes {
-        True ->
-          git.commit_all(
-            task_run.worktree_path,
-            "feat(night-shift): " <> task_run.task.title,
-            git_log,
+        Ok(task_delivery.NoDeliveredChanges(_)) ->
+          mark_task_with_event(
+            run,
+            task_run.task,
+            types.ManualAttention,
+            "Primary blocker: provider reported completion but the task worktree produced no committed or uncommitted changes.\n\nEnvironment notes: verification completed, but there was nothing new to deliver.",
+            "task_manual_attention",
           )
-        False -> Ok(Nil)
-      }
+        Ok(task_delivery.Delivered(pr_number, pr_url, delivered_files)) -> {
+          let completed_task =
+            types.Task(
+              ..task_run.task,
+              state: types.Completed,
+              worktree_path: task_run.worktree_path,
+              branch_name: task_run.branch_name,
+              pr_number: pr_number,
+              summary: verified.execution_result.summary,
+            )
 
-      case delivery_result {
-        Error(message) ->
-          Error(domain_summary.task_failure_summary(
-            "git delivery failed.",
-            message,
+          let merged_tasks =
+            decision_domain.apply_decision_states(
+              task_graph.merge_follow_up_tasks(
+                task_graph.replace_task(run.tasks, completed_task),
+                verified.execution_result.follow_up_tasks,
+              ),
+              run.decisions,
+            )
+            |> task_graph.refresh_ready_states
+          let updated_run = types.RunRecord(..run, tasks: merged_tasks)
+          let verified_event =
+            types.RunEvent(
+              kind: "task_verified",
+              at: system.timestamp(),
+              message: "Verification passed for " <> task_run.task.title,
+              task_id: Some(task_run.task.id),
+            )
+          use verified_run <- result.try(journal.append_event(
+            updated_run,
+            verified_event,
           ))
-        Ok(_) ->
-          case git.head_commit(task_run.worktree_path, git_log) {
-            Error(message) ->
-              Error(domain_summary.task_failure_summary(
-                "git delivery failed.",
-                message,
-              ))
-            Ok(delivered_head) -> {
-              let delivered_files =
-                git.changed_files_between(
-                  task_run.worktree_path,
-                  task_run.start_head,
-                  "HEAD",
-                  git_log,
-                )
-
-              case delivered_head == task_run.start_head {
-                True -> {
-                  mark_task_with_event(
-                    run,
-                    task_run.task,
-                    types.ManualAttention,
-                    "Primary blocker: provider reported completion but the task worktree produced no committed or uncommitted changes.\n\nEnvironment notes: verification completed, but there was nothing new to deliver.",
-                    "task_manual_attention",
-                  )
-                }
-                False ->
-                  case
-                    git.push_branch(
-                      task_run.worktree_path,
-                      task_run.branch_name,
-                      git_log,
-                    )
-                  {
-                    Error(message) ->
-                      Error(domain_summary.task_failure_summary(
-                        "git delivery failed.",
-                        message,
-                      ))
-                    Ok(_) -> {
-                      let pr_body =
-                        pull_request_domain.render_body(
-                          run,
-                          task_run.task,
-                          final_execution,
-                          verification_output,
-                        )
-                      case
-                        github.open_or_update_pr(
-                          task_run.worktree_path,
-                          task_run.branch_name,
-                          task_run.base_ref,
-                          final_execution.pr.title,
-                          pr_body,
-                          run.run_path,
-                          git_log,
-                        )
-                      {
-                        Error(message) ->
-                          Error(domain_summary.task_failure_summary(
-                            "GitHub PR delivery failed.",
-                            message,
-                          ))
-                        Ok(pull_request) -> {
-                          let completed_task =
-                            types.Task(
-                              ..task_run.task,
-                              state: types.Completed,
-                              worktree_path: task_run.worktree_path,
-                              branch_name: task_run.branch_name,
-                              pr_number: int.to_string(pull_request.number),
-                              summary: final_execution.summary,
-                            )
-
-                          let merged_tasks =
-                            decision_domain.apply_decision_states(
-                              task_graph.merge_follow_up_tasks(
-                                task_graph.replace_task(
-                                  run.tasks,
-                                  completed_task,
-                                ),
-                                final_execution.follow_up_tasks,
-                              ),
-                              run.decisions,
-                            )
-                            |> task_graph.refresh_ready_states
-                          let updated_run =
-                            types.RunRecord(..run, tasks: merged_tasks)
-                          let verified_event =
-                            types.RunEvent(
-                              kind: "task_verified",
-                              at: system.timestamp(),
-                              message: "Verification passed for "
-                                <> task_run.task.title,
-                              task_id: Some(task_run.task.id),
-                            )
-                          use verified_run <- result.try(journal.append_event(
-                            updated_run,
-                            verified_event,
-                          ))
-                          journal.append_event(
-                            types.RunRecord(
-                              ..verified_run,
-                              tasks: task_graph.replace_task(
-                                verified_run.tasks,
-                                types.Task(
-                                  ..completed_task,
-                                  summary: final_execution.summary
-                                    <> " Changed files: "
-                                    <> string.join(delivered_files, ", "),
-                                ),
-                              ),
-                            ),
-                            types.RunEvent(
-                              kind: "pr_opened",
-                              at: system.timestamp(),
-                              message: pull_request.url,
-                              task_id: Some(task_run.task.id),
-                            ),
-                          )
-                        }
-                      }
-                    }
-                  }
-              }
-            }
-          }
+          journal.append_event(
+            types.RunRecord(
+              ..verified_run,
+              tasks: task_graph.replace_task(
+                verified_run.tasks,
+                types.Task(
+                  ..completed_task,
+                  summary: verified.execution_result.summary
+                    <> " Changed files: "
+                    <> string.join(delivered_files, ", "),
+                ),
+              ),
+            ),
+            types.RunEvent(
+              kind: "pr_opened",
+              at: system.timestamp(),
+              message: pr_url,
+              task_id: Some(task_run.task.id),
+            ),
+          )
+        }
+        Error(message) -> Error(message)
       }
-    }
     Error(output) -> {
       mark_task_with_event(
         run,
@@ -637,52 +511,6 @@ fn finalize_success(
       )
     }
   }
-}
-
-fn verify_commands(
-  commands: List(String),
-  cwd: String,
-  env_vars: List(#(String, String)),
-  log_path: String,
-) -> Result(String, String) {
-  case commands {
-    [] -> Ok("No verification commands configured.")
-    _ -> verify_loop(commands, cwd, env_vars, log_path, [])
-  }
-}
-
-fn verify_loop(
-  commands: List(String),
-  cwd: String,
-  env_vars: List(#(String, String)),
-  log_path: String,
-  acc: List(String),
-) -> Result(String, String) {
-  case commands {
-    [] -> Ok(string.join(list.reverse(acc), "\n\n"))
-    [command, ..rest] -> {
-      let output = shell.run(shell.with_env(command, env_vars), cwd, log_path)
-      let transcript = "$ " <> command <> "\n" <> output.output
-
-      case shell.succeeded(output) {
-        True -> verify_loop(rest, cwd, env_vars, log_path, [transcript, ..acc])
-        False -> Error(string.join(list.reverse([transcript, ..acc]), "\n\n"))
-      }
-    }
-  }
-}
-
-fn replace_task(
-  tasks: List(types.Task),
-  updated: types.Task,
-) -> List(types.Task) {
-  tasks
-  |> list.map(fn(task) {
-    case task.id == updated.id {
-      True -> updated
-      False -> task
-    }
-  })
 }
 
 fn append_decision_request_events(
@@ -734,7 +562,7 @@ fn append_manual_attention_events_for_tasks(
         types.RunEvent(
           kind: "task_manual_attention",
           at: system.timestamp(),
-          message: manual_attention_summary(task),
+          message: domain_summary.manual_attention_summary(task),
           task_id: Some(task.id),
         ),
       ))
@@ -791,7 +619,10 @@ fn mark_task_with_event(
 ) -> Result(types.RunRecord, String) {
   let updated_task = types.Task(..task, state: state, summary: summary)
   let updated_run =
-    types.RunRecord(..run, tasks: replace_task(run.tasks, updated_task))
+    types.RunRecord(
+      ..run,
+      tasks: task_graph.replace_task(run.tasks, updated_task),
+    )
   journal.append_event(
     updated_run,
     types.RunEvent(
@@ -801,10 +632,4 @@ fn mark_task_with_event(
       task_id: Some(task.id),
     ),
   )
-}
-
-fn manual_attention_summary(task: types.Task) -> String {
-  "Primary blocker: "
-  <> task.description
-  <> "\n\nEnvironment notes: no worktree bootstrap or provider execution started because this task requires manual attention."
 }
