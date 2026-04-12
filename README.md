@@ -1,40 +1,57 @@
 # Night Shift
 
-Night Shift is a Gleam CLI that orchestrates autonomous coding agents over a
-single local repository. It turns a brief into a queue of tasks, executes that
-queue through external providers like Codex CLI or Cursor Agent, opens pull
-requests for completed work, and leaves behind a durable report for morning
-review.
+Night Shift is a repo-local CLI for planning, executing, and reviewing
+autonomous coding work against a single Git repository. It turns a running
+brief into a task graph, executes tasks inside isolated git worktrees through
+external agent providers, delivers completed work as pull requests, and leaves
+behind a durable report for the human who has to read it in the morning.
 
-## Status
+Read the in-repo docs at [docs/README.md](docs/README.md) or the published site
+at [fuiste.github.io/night-shift](https://fuiste.github.io/night-shift/).
 
-This repository currently contains the v1 runtime for:
+## Current Shape
 
-- repo-local configuration
-- resumable run journals
-- task DAG scheduling
+Night Shift already has working support for:
+
+- repo-local configuration in `./.night-shift/`
+- cumulative brief planning with `plan --notes`
+- resumable run journals and reports
+- task DAG scheduling and follow-up task ingestion
+- isolated worktree execution
 - provider adapters for Codex CLI and Cursor Agent
-- isolated git worktree execution
-- verification and PR delivery plumbing
-- review-loop task ingestion for open Night Shift PRs
-- local notifier and report output
+- local verification before pull request delivery
+- review-loop ingestion for open Night Shift pull requests
+- a local monitor-only dashboard via `start --ui` and `resume --ui`
+
+The current operator flow is:
+
+```sh
+night-shift init
+night-shift plan --notes notes/today.md
+night-shift start
+night-shift status
+night-shift report
+```
+
+Supporting commands round out the lifecycle:
+
+- `resolve` records answers for blocked planning decisions and replans the run
+- `resume` recovers an interrupted run from saved state
+- `review` reopens open Night Shift PRs as stabilization tasks
+- `reset` removes repo-local Night Shift state and tracked worktrees
+- `--demo` runs a fixture-backed proof flow
 
 ## Install
 
-Night Shift prerelease assets are published from merges to `main` as GitHub
-Release artifacts for:
+Night Shift prerelease bundles are published from `main` for:
 
 - Linux x64
 - macOS arm64
 - macOS x64
 
-Each asset bundles the `night-shift` launcher, the compiled Gleam shipment, and
-an Erlang runtime, so end users do not need to install Erlang or Gleam just to
-run the CLI.
-
-Download the `.tar.gz` for your platform from the repository's Releases page,
-unpack it, move the unpacked directory somewhere stable, and symlink the
-launcher into your `PATH`. For example:
+Each bundle includes the `night-shift` launcher, the compiled Gleam shipment,
+and an Erlang runtime. You still need whichever provider CLIs you plan to use
+locally, such as Codex CLI or Cursor Agent.
 
 ```sh
 tar -xzf night-shift-<tag>-macos-arm64.tar.gz
@@ -43,421 +60,92 @@ mv night-shift-<tag>-macos-arm64 ~/.local/opt/
 ln -sf ~/.local/opt/night-shift-<tag>-macos-arm64/night-shift ~/.local/bin/night-shift
 ```
 
-The unpacked directory must stay intact because `night-shift` runs alongside
+The unpacked directory must remain intact because `night-shift` runs alongside
 its bundled `shipment/` and `erlang/` directories.
 
-These bundles remove the Erlang/Gleam setup requirement, but you still need the
-provider CLIs you plan to use locally, such as Codex CLI or Cursor Agent.
+Windows release assets are not published yet.
 
-Windows release assets are not published in this first cut.
+## Quick Start
+
+Initialize the repository once:
+
+```sh
+night-shift init
+```
+
+On a fresh repo, `init` asks for:
+
+1. the default provider
+2. a model that exists in that provider's local CLI
+3. whether Night Shift should generate `./.night-shift/worktree-setup.toml`
+
+Then create or refresh the execution brief and task graph:
+
+```sh
+night-shift plan --notes notes/today.md
+```
+
+`--notes` accepts either a readable file path or inline text. `plan --doc
+<path>` changes the brief destination; otherwise Night Shift writes
+`./.night-shift/execution-brief.md`.
+
+Start execution from the most recent pending run:
+
+```sh
+night-shift start
+```
+
+`start` executes the run that `plan` already created. It does not accept
+provider, profile, brief, or environment overrides. It also expects the source
+repository to be clean apart from changes under `./.night-shift/`.
+
+Inspect progress and outputs:
+
+```sh
+night-shift status
+night-shift report
+```
+
+If planning blocked on manual decisions:
+
+```sh
+night-shift resolve
+night-shift start
+```
+
+If Night Shift was interrupted mid-run:
+
+```sh
+night-shift resume
+```
+
+If you want the local dashboard while a run is active:
+
+```sh
+night-shift start --ui
+```
 
 ## Source Development
 
-Night Shift targets Erlang through Gleam. This machine does not currently ship
-with Gleam or Erlang by default, so the repo pins expected versions in
-`.tool-versions`.
-
-Suggested setup:
+Night Shift targets Erlang through Gleam. Expected versions are pinned in
+[.tool-versions](.tool-versions).
 
 ```sh
 brew install erlang gleam
 ```
 
-If you use `asdf`, run:
+If you use `asdf`:
 
 ```sh
 asdf install
 ```
 
-## Configuration
+## Docs Map
+
+- [Getting Started](docs/getting-started.md)
+- [Run Lifecycle](docs/run-lifecycle.md)
+- [Configuration](docs/configuration.md)
+- [Worktree Environments](docs/worktree-environments.md)
+- [State and Artifacts](docs/state-and-artifacts.md)
+- [Providers and Delivery](docs/providers-and-delivery.md)
 
-Night Shift now keeps project-owned state in `./.night-shift/`.
-
-Tracked project config lives in:
-
-- `./.night-shift/config.toml`
-- `./.night-shift/worktree-setup.toml`
-
-Runtime artifacts stay in the same repo-local home:
-
-- `./.night-shift/runs/<run-id>/`
-- `./.night-shift/planning/<timestamp>/`
-- `./.night-shift/active.lock`
-
-The easiest way to scaffold this is:
-
-```sh
-night-shift init
-```
-
-On a fresh repo, `init` now walks through three questions:
-
-1. which provider should Night Shift use by default
-2. which model from that provider's actual local CLI should become the default
-3. whether Night Shift should draft an initial `worktree-setup.toml`
-
-That command then creates `./.night-shift/`, writes a starter `config.toml`,
-creates `worktree-setup.toml`, and installs a local `.gitignore` inside
-`.night-shift/` so runtime artifacts stay untracked while the TOML files stay
-shareable.
-
-If you want to skip the interactive questions, pass the answers explicitly:
-
-```sh
-night-shift init --provider codex --model gpt-5.4 --generate-setup
-```
-
-For fully non-interactive bootstrap without setup drafting, use:
-
-```sh
-night-shift init --provider codex --model gpt-5.4 --yes
-```
-
-`init` is the required first step for a repository. All Night Shift commands
-other than `help`, `--demo`, and `init` expect `./.night-shift/config.toml` to
-exist already.
-
-Repository defaults live in `./.night-shift/config.toml`.
-
-```toml
-default_profile = "default"
-planning_profile = "planner"
-execution_profile = "builder"
-review_profile = "reviewer"
-
-base_branch = "main"
-max_workers = 4
-branch_prefix = "night-shift"
-pr_title_prefix = "[night-shift]"
-notifiers = ["console", "report_file"]
-
-[profiles.default]
-provider = "codex"
-
-[profiles.planner]
-provider = "codex"
-model = "gpt-5.4-mini"
-reasoning = "medium"
-
-[profiles.builder]
-provider = "codex"
-model = "gpt-5.4"
-reasoning = "high"
-
-[profiles.reviewer]
-provider = "cursor"
-model = "sonnet-4"
-
-[profiles.reviewer.provider_overrides]
-mode = "plan"
-
-[verification]
-commands = []
-```
-
-### Profiles
-
-Profiles are the main developer-facing abstraction. Each profile is Night
-Shift-owned and provider agnostic at the top level:
-
-- `provider`: currently `codex` or `cursor`
-- `model`: provider model id
-- `reasoning`: normalized thinking level, currently `low`, `medium`, `high`,
-  or `xhigh`
-- `provider_overrides`: advanced provider-specific escape hatch for settings
-  that do not fit the normalized surface
-
-The phase selectors control which profile is used by default:
-
-- `default_profile`: base fallback profile name
-- `planning_profile`: used by `night-shift plan`
-- `execution_profile`: used by `night-shift start`
-- `review_profile`: used by `night-shift review`
-
-An empty `./.night-shift/config.toml` still works. Night Shift will use a
-built-in `default` profile that targets Codex with provider defaults.
-
-### Precedence
-
-Night Shift resolves agent settings in this order:
-
-1. Built-in defaults
-2. Repo config profile values
-3. Command-level overrides
-
-Command-level `--profile`, `--provider`, `--model`, and `--reasoning`
-override the resolved profile for that invocation.
-
-`plan` resolves the planning profile for the current planning pass. `start`
-uses the execution config already stored in the pending run created by `plan`.
-`resume` never re-resolves settings; it continues with the resolved planning
-and execution configs stored in the run journal.
-
-### Provider Overrides
-
-Use `[profiles.<name>.provider_overrides]` only for provider-specific controls
-that Night Shift does not normalize.
-
-Current adapter support:
-
-- Codex: no provider overrides yet
-- Cursor: `mode = "plan"` or `mode = "ask"`
-
-Night Shift fails fast when a normalized control cannot be represented by the
-selected provider. For example, Cursor supports model selection but not the
-generic `reasoning` control.
-
-### Examples
-
-Example configs live in:
-
-- `examples/config-single-profile.toml`
-- `examples/config-phase-profiles.toml`
-- `examples/config-provider-overrides.toml`
-
-## Commands
-
-The CLI surface is:
-
-- `night-shift --demo [--ui]`
-- `night-shift init [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>] [--yes] [--generate-setup]`
-- `night-shift plan --notes <file-or-inline-text> [--doc <path>] [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>]`
-- `night-shift start [--run <id>|latest] [--ui]`
-- `night-shift status [--run <id>|latest]`
-- `night-shift report [--run <id>|latest]`
-- `night-shift resolve [--run <id>|latest]`
-- `night-shift resume [--run <id>|latest] [--ui]`
-- `night-shift review [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>] [--environment <name>]`
-
-Canonical setup flow:
-
-```sh
-night-shift init
-night-shift plan --notes notes/morning.md
-night-shift status
-# if blocked:
-night-shift resolve
-night-shift start
-```
-
-`start` is execution-only now. It requires an existing pending run from
-`plan`, and it will tell you to plan first if no runnable plan exists yet.
-
-## Worktree Environments
-
-`./.night-shift/worktree-setup.toml` lets the repo define deterministic
-worktree setup and maintenance commands, following the same broad pattern as
-Codex environments.
-
-The v0 schema is:
-
-```toml
-version = 1
-default_environment = "default"
-
-[environments.default.env]
-
-[environments.default.setup]
-default = []
-macos = []
-linux = []
-windows = []
-
-[environments.default.maintenance]
-default = []
-macos = []
-linux = []
-windows = []
-```
-
-Behavior:
-
-- `review --environment <name>` selects an
-  environment explicitly
-- `plan` stores the resolved default environment into the pending run
-- `start` uses the environment already stored in the selected pending run
-- if no environment is selected explicitly, Night Shift uses
-  `default_environment`
-- `resume` reuses the environment stored in the run journal
-- `setup` runs when a task worktree is first created
-- `maintenance` runs when Night Shift reattaches to an existing task worktree
-- configured env vars are injected into setup, maintenance, provider
-  execution, and verification commands
-
-If `worktree-setup.toml` is absent, environment setup is a no-op. If it is
-present but invalid, Night Shift fails before any task worktrees launch.
-
-## Planning Brief
-
-Night Shift can build up a cumulative execution brief throughout the day:
-
-```sh
-night-shift plan --notes notes/morning.md
-night-shift plan --notes "Follow up on the landing page polish."
-night-shift plan --notes notes/afternoon.md
-```
-
-By default this updates `./.night-shift/execution-brief.md`. Each run reads the
-existing brief if present, combines it with the new notes, and asks the
-resolved planning provider to rewrite the full document in place.
-
-`--notes` accepts either:
-
-- a readable file path
-- an inline string, which Night Shift saves into the planning artifacts for
-  auditability
-
-Planning is now the main decision loop. If the planner produces
-manual-attention questions, Night Shift stores them in the blocked run and
-`night-shift resolve` records the answers before replanning the unresolved
-work.
-
-The brief is whole-file managed by Night Shift and always targets this outline:
-
-- `# Night Shift Brief`
-- `## Objective`
-- `## Scope`
-- `## Constraints`
-- `## Deliverables`
-- `## Acceptance Criteria`
-- `## Risks and Open Questions`
-
-You can override the destination file with `--doc <path>`, but the default
-`./.night-shift/execution-brief.md` is the happy-path execution input.
-
-## Starting Work
-
-After `night-shift init`, the simplest kickoff flow is:
-
-```sh
-night-shift plan --notes notes/today.md
-night-shift start
-```
-
-Passing `--brief <path>` still works and overrides the default brief location.
-If no default brief exists, Night Shift tells you to create one with
-`night-shift plan --notes <path>` or pass `--brief`.
-
-You can also override the resolved profiles or environment at runtime:
-
-```sh
-night-shift start --profile fast
-night-shift start --provider codex --model gpt-5.4 --reasoning high
-night-shift start --environment default
-night-shift plan --provider cursor --model sonnet-4
-```
-
-## Dashboard
-
-Night Shift can launch a local read-only dashboard while a run is active:
-
-```sh
-night-shift start --ui
-night-shift resume --run latest --ui
-```
-
-The dashboard binds to `127.0.0.1`, prefers port `8787`, and will try the next
-few ports if that one is unavailable. The CLI prints the chosen URL and keeps
-serving until you stop the process.
-
-The first cut is intentionally minimal and monitor-only:
-
-- run history for the current repository
-- run summary metadata, including planning and execution profile details
-- task status list
-- event timeline
-- report content as plain text
-
-There are no browser-side controls for starting, resuming, or reviewing runs in
-v1.
-
-## Demo Mode
-
-Night Shift can self-demo against fixture providers and prints a compact proof
-summary on success:
-
-```sh
-night-shift --demo
-night-shift --demo --ui
-```
-
-The headless demo runs a real fixture-backed start flow and validates the
-resulting `start`, `status`, and `report` CLI flows. The UI demo launches the
-local dashboard through the real CLI, waits for the run to complete, validates
-the served payload, and then exits. Both variants print the validated flows,
-the proof file path, and the artifact directory so the demo is visible from the
-terminal.
-
-Artifacts are kept under:
-
-```text
-$XDG_STATE_HOME/night-shift-demo/
-```
-
-If `XDG_STATE_HOME` is unset, this resolves under:
-
-```text
-$HOME/.local/state/night-shift-demo/
-```
-
-## Run Journal
-
-Night Shift stores durable run state inside the repo under:
-
-```text
-./.night-shift/runs/<run-id>/
-```
-
-Each run directory includes:
-
-- `brief.md`
-- `state.json`
-- `events.jsonl`
-- `report.md`
-- `logs/`
-- `worktrees/`
-
-Planning artifacts are written to:
-
-```text
-./.night-shift/planning/<timestamp>/
-```
-
-An `active.lock` file is kept at `./.night-shift/active.lock` so only one
-active run can operate on a repo at a time.
-
-## Provider Contract
-
-Providers are treated as external runtimes. Night Shift prepares a prompt,
-launches the selected CLI, and extracts a structured JSON payload from stdout
-between these markers:
-
-```text
-NIGHT_SHIFT_RESULT_START
-{ ...json... }
-NIGHT_SHIFT_RESULT_END
-```
-
-The planner emits task DAGs. The executor emits task status, demo evidence,
-files touched, PR metadata, and follow-up tasks.
-
-For integration tests or local experimentation, you can point Night Shift at a
-fixture provider by setting `NIGHT_SHIFT_FAKE_PROVIDER` to an executable that
-implements:
-
-- `fake-provider plan <prompt-file>`
-- `fake-provider plan-doc <prompt-file>`
-- `fake-provider execute <prompt-file> <worktree> <repo-root>`
-
-If you also need deterministic PR fixture behavior, set
-`NIGHT_SHIFT_GH_BIN` to the `gh`-compatible executable Night Shift should use
-for pull request delivery and review commands.
-
-## Delivery Model
-
-- Each completed task is delivered as a pull request.
-- Dependent tasks may be delivered as stacked pull requests.
-- Verification is run locally before PR creation.
-- A local Markdown report is updated throughout the run.
-- Review mode reopens open Night Shift PRs, turns review state into
-  stabilization tasks, and reruns the scheduler.

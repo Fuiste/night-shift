@@ -1,0 +1,15 @@
+<nav class="nav">
+  <p class="nav-title">Guide</p>
+  <a href="{{ '/' | relative_url }}"{% if page.url == '/' %} aria-current="page"{% endif %}>Home</a>
+  <a href="{{ '/getting-started/' | relative_url }}"{% if page.url == '/getting-started/' %} aria-current="page"{% endif %}>Getting Started</a>
+  <a href="{{ '/run-lifecycle/' | relative_url }}"{% if page.url == '/run-lifecycle/' %} aria-current="page"{% endif %}>Run Lifecycle</a>
+  <a href="{{ '/configuration/' | relative_url }}"{% if page.url == '/configuration/' %} aria-current="page"{% endif %}>Configuration</a>
+  <a href="{{ '/worktree-environments/' | relative_url }}"{% if page.url == '/worktree-environments/' %} aria-current="page"{% endif %}>Worktree Environments</a>
+  <a href="{{ '/state-and-artifacts/' | relative_url }}"{% if page.url == '/state-and-artifacts/' %} aria-current="page"{% endif %}>State and Artifacts</a>
+  <a href="{{ '/providers-and-delivery/' | relative_url }}"{% if page.url == '/providers-and-delivery/' %} aria-current="page"{% endif %}>Providers and Delivery</a>
+
+  <p class="nav-title">Project</p>
+  <a href="https://github.com/Fuiste/night-shift">GitHub Repository</a>
+  <a href="https://github.com/Fuiste/night-shift/blob/main/docs/README.md">Docs Source</a>
+  <a href="https://github.com/Fuiste/night-shift/releases">Release Bundles</a>
+</nav>
