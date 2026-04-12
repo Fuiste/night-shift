@@ -17,6 +17,7 @@ import night_shift/shell
 import night_shift/system
 import night_shift/types
 import night_shift/worktree_setup
+import night_shift/worktree_setup_model
 
 pub fn start(
   run: types.RunRecord,
@@ -360,8 +361,8 @@ fn launch_batch_loop(
                 event,
               ))
               let bootstrap_phase = case is_existing_worktree {
-                True -> worktree_setup.MaintenancePhase
-                False -> worktree_setup.SetupPhase
+                True -> worktree_setup_model.MaintenancePhase
+                False -> worktree_setup_model.SetupPhase
               }
               case
                 start_task_run(
