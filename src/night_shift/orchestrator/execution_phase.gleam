@@ -590,11 +590,22 @@ fn ensure_runtime_context(
         run.repo_root,
         run.environment_name,
       ))
+      use reserved_port_bases <- result.try(runtime_reserved_port_bases(
+        run.repo_root,
+        run.run_id,
+      ))
+      use port_base <- result.try(runtime_identity.allocate_port_base(
+        run.run_id,
+        run.tasks,
+        reserved_port_bases,
+        task.id,
+      ))
       use context <- result.try(runtime_identity.build_context(
         run.run_path,
         run.run_id,
         task.id,
         task.title,
+        port_base,
         named_ports,
       ))
       Ok(types.Task(..task, runtime_context: Some(context)))
@@ -618,6 +629,28 @@ fn runtime_named_ports(
     Some(environment) -> Ok(environment.runtime.named_ports)
     None -> Ok([])
   }
+}
+
+fn runtime_reserved_port_bases(
+  repo_root: String,
+  current_run_id: String,
+) -> Result(List(Int), String) {
+  use runs <- result.try(journal.list_runs(repo_root))
+  Ok(
+    runs
+    |> list.filter(fn(run) { run.run_id != current_run_id })
+    |> list.flat_map(fn(run) { runtime_task_port_bases(run.tasks) }),
+  )
+}
+
+fn runtime_task_port_bases(tasks: List(types.Task)) -> List(Int) {
+  tasks
+  |> list.flat_map(fn(task) {
+    case task.runtime_context {
+      Some(context) -> [context.port_base]
+      None -> []
+    }
+  })
 }
 
 fn require_runtime_context(

@@ -159,6 +159,7 @@ pub fn runtime_identity_build_context_is_deterministic_test() {
       "run-123",
       "demo-task",
       "Demo Task",
+      41_000,
       ["web", "api"],
     )
   let assert Ok(second) =
@@ -167,6 +168,7 @@ pub fn runtime_identity_build_context_is_deterministic_test() {
       "run-123",
       "demo-task",
       "Demo Task",
+      41_000,
       ["web", "api"],
     )
 
@@ -182,7 +184,7 @@ pub fn runtime_identity_ensure_artifacts_writes_env_manifest_and_handoff_test() 
   let base_dir =
     filepath.join(
       system.state_directory(),
-      "night-shift-runtime-identity-" <> unique,
+      "night shift runtime identity " <> unique,
     )
   let _ = simplifile.delete(file_or_dir_at: base_dir)
   let assert Ok(context) =
@@ -191,6 +193,7 @@ pub fn runtime_identity_ensure_artifacts_writes_env_manifest_and_handoff_test() 
       "run-456",
       "demo-task",
       "Demo Task",
+      41_020,
       ["web"],
     )
   let task =
@@ -226,7 +229,11 @@ pub fn runtime_identity_ensure_artifacts_writes_env_manifest_and_handoff_test() 
 
   assert string.contains(
     does: env_contents,
-    contain: "NIGHT_SHIFT_COMPOSE_PROJECT=",
+    contain: "NIGHT_SHIFT_COMPOSE_PROJECT='",
+  )
+  assert string.contains(
+    does: env_contents,
+    contain: "NIGHT_SHIFT_RUNTIME_DIR='" <> context.runtime_dir <> "'",
   )
   assert string.contains(
     does: manifest_contents,
@@ -235,6 +242,44 @@ pub fn runtime_identity_ensure_artifacts_writes_env_manifest_and_handoff_test() 
   assert string.contains(does: handoff_contents, contain: "Compose project")
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn runtime_identity_allocate_port_base_is_unique_within_run_test() {
+  let tasks = [
+    task_fixture("task-a"),
+    task_fixture("task-b"),
+    task_fixture("task-c"),
+    task_fixture("task-d"),
+  ]
+
+  let assert Ok(port_base_a) =
+    runtime_identity.allocate_port_base("run-ports", tasks, [], "task-a")
+  let assert Ok(port_base_b) =
+    runtime_identity.allocate_port_base("run-ports", tasks, [], "task-b")
+  let assert Ok(port_base_c) =
+    runtime_identity.allocate_port_base("run-ports", tasks, [], "task-c")
+  let assert Ok(port_base_d) =
+    runtime_identity.allocate_port_base("run-ports", tasks, [], "task-d")
+
+  assert unique_int_count(
+      [port_base_a, port_base_b, port_base_c, port_base_d],
+      [],
+    )
+    == 4
+}
+
+pub fn runtime_identity_allocate_port_base_skips_reserved_blocks_test() {
+  let tasks = [task_fixture("task-a"), task_fixture("task-b")]
+
+  let assert Ok(port_base_a) =
+    runtime_identity.allocate_port_base(
+      "run-reserved",
+      tasks,
+      [40_000],
+      "task-a",
+    )
+
+  assert port_base_a != 40_000
 }
 
 fn build_port_names(count: Int, acc: List(String)) -> List(String) {
@@ -253,4 +298,36 @@ fn render_port_list(values: List(String)) -> String {
     |> string.join(with: ", ")
   }
   <> "]"
+}
+
+fn task_fixture(task_id: String) -> types.Task {
+  types.Task(
+    id: task_id,
+    title: task_id,
+    description: "",
+    dependencies: [],
+    acceptance: [],
+    demo_plan: [],
+    decision_requests: [],
+    superseded_pr_numbers: [],
+    kind: types.ImplementationTask,
+    execution_mode: types.Serial,
+    state: types.Ready,
+    worktree_path: "",
+    branch_name: "",
+    pr_number: "",
+    summary: "",
+    runtime_context: None,
+  )
+}
+
+fn unique_int_count(values: List(Int), seen: List(Int)) -> Int {
+  case values {
+    [] -> list.length(seen)
+    [value, ..rest] ->
+      case list.contains(seen, value) {
+        True -> unique_int_count(rest, seen)
+        False -> unique_int_count(rest, [value, ..seen])
+      }
+  }
 }

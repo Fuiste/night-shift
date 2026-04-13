@@ -687,9 +687,11 @@ pub fn orchestrator_start_generates_runtime_identity_artifacts_test() {
 
   assert string.contains(
     does: env_contents,
-    contain: "NIGHT_SHIFT_COMPOSE_PROJECT=" <> runtime_context.compose_project,
+    contain: "NIGHT_SHIFT_COMPOSE_PROJECT='"
+      <> runtime_context.compose_project
+      <> "'",
   )
-  assert string.contains(does: env_contents, contain: "NIGHT_SHIFT_PORT_WEB=")
+  assert string.contains(does: env_contents, contain: "NIGHT_SHIFT_PORT_WEB='")
   assert string.contains(
     does: compose_project_contents,
     contain: runtime_context.compose_project,

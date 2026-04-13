@@ -66,9 +66,10 @@ generated values.
 ## Runtime Identity
 
 Before Night Shift runs environment setup or provider execution for a task, it
-derives a stable per-task runtime identity from the run ID and task ID. That
-identity is persisted in the run journal and reused on resume, so an existing
-task does not silently pick up new runtime values after a config edit.
+derives a stable per-task runtime identity and assigns a deterministic port
+block for that task. That identity is persisted in the run journal and reused
+on resume, so an existing task does not silently pick up new runtime values
+after a config edit.
 
 Night Shift always injects:
 
@@ -88,7 +89,7 @@ normalized alias:
 - and so on
 
 The generated values are meant to be consumed by your existing setup scripts,
-Compose files, and verification commands. Night Shift does not reserve ports,
+shell wrappers, and verification commands. Night Shift does not reserve ports,
 start services, or manage secrets.
 
 ## Validation Rules
@@ -111,8 +112,9 @@ the git worktree:
 - `./.night-shift/runs/<run-id>/runtime/<task-id>/night-shift.runtime.json`
 - `./.night-shift/runs/<run-id>/runtime/<task-id>/night-shift.handoff.md`
 
-`night-shift.env` is plain `KEY=VALUE` output for shell scripts and Compose.
-`night-shift.runtime.json` is the machine-readable source of truth.
+`night-shift.env` is a shell-safe assignment file with quoted values.
+`night-shift.runtime.json` is the machine-readable source of truth when another
+tool needs exact values without shell parsing.
 `night-shift.handoff.md` is the short human-and-agent summary.
 
 ## Selection Rules
