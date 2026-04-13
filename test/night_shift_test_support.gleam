@@ -36,7 +36,7 @@ pub fn initialize_project_home(
 }
 
 pub fn local_demo_command() -> String {
-  "zsh -lc "
+  "sh -lc "
   <> shell.quote(
     "cd " <> shell.quote(system.cwd()) <> " && gleam run -- \"$@\"",
   )
