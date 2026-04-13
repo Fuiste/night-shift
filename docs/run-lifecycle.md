@@ -68,8 +68,7 @@ or environment settings; it reuses what the run journal already saved.
 
 ## Review-Driven Replanning
 
-Night Shift no longer has a separate `review` execution entry point. Review
-feedback is folded back into planning with `plan --from-reviews`:
+Review feedback re-enters Night Shift through `plan --from-reviews`:
 
 ```sh
 night-shift plan --from-reviews
@@ -130,7 +129,7 @@ attention with both the original and repair artifacts recorded.
 
 ## Dashboard
 
-The dashboard is monitor-only in the current cut:
+The dashboard is monitor-only:
 
 ```sh
 night-shift start --ui
