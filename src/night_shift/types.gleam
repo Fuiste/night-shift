@@ -580,7 +580,10 @@ pub fn replace_task_handoff_state(
 ) -> List(TaskHandoffState) {
   case handoff_states {
     [] -> [next_state]
-    [state, ..rest] if state.task_id == next_state.task_id -> [next_state, ..rest]
+    [state, ..rest] if state.task_id == next_state.task_id -> [
+      next_state,
+      ..rest
+    ]
     [state, ..rest] -> [state, ..replace_task_handoff_state(rest, next_state)]
   }
 }

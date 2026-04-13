@@ -6,6 +6,7 @@ import night_shift/domain/repo_state
 import night_shift/types
 
 pub const body_start_marker = "<!-- night-shift:handoff-body:start -->"
+
 pub const body_end_marker = "<!-- night-shift:handoff-body:end -->"
 
 pub type Snippets {
@@ -62,7 +63,13 @@ pub fn render_body_region(
       "## Summary\n" <> fallback_text(execution_result.pr.summary),
       render_evidence(handoff, execution_result, verification_output),
       "## Known Risks\n" <> bullet_list(execution_result.pr.risks),
-      render_provenance(handoff.provenance, run, task, execution_result, verification_output),
+      render_provenance(
+        handoff.provenance,
+        run,
+        task,
+        execution_result,
+        verification_output,
+      ),
       render_optional(snippets.body_suffix),
     ]
     |> list.filter(fn(section) { string.trim(section) != "" })
@@ -118,11 +125,15 @@ fn render_scope(
 ) -> String {
   let scope_lines = []
   let scope_lines = case handoff.include_files_touched {
-    True -> list.append(scope_lines, ["Files touched: " <> inline_list(execution_result.files_touched)])
+    True ->
+      list.append(scope_lines, [
+        "Files touched: " <> inline_list(execution_result.files_touched),
+      ])
     False -> scope_lines
   }
   let scope_lines = case handoff.include_acceptance {
-    True -> list.append(scope_lines, ["Acceptance: " <> inline_list(task.acceptance)])
+    True ->
+      list.append(scope_lines, ["Acceptance: " <> inline_list(task.acceptance)])
     False -> scope_lines
   }
   let scope_lines = case handoff.include_stack_context {
@@ -145,15 +156,18 @@ fn render_evidence(
   execution_result: types.ExecutionResult,
   verification_output: String,
 ) -> String {
-  let sections = ["Demo evidence:\n" <> bullet_list(execution_result.demo_evidence)]
+  let sections = [
+    "Demo evidence:\n" <> bullet_list(execution_result.demo_evidence),
+  ]
   let sections = case handoff.include_verification_summary {
-    True -> list.append(sections, [
-      "Verification digest: "
+    True ->
+      list.append(sections, [
+        "Verification digest: "
         <> verification_digest(verification_output)
         <> "\n\n```text\n"
         <> verification_output
         <> "\n```",
-    ])
+      ])
     False -> sections
   }
 
@@ -213,11 +227,22 @@ fn render_delta(
     Some(state) ->
       bullet_list([
         "Added files: "
-          <> inline_list(list_difference(current_files, state.last_handoff_files)),
+          <> inline_list(list_difference(
+          current_files,
+          state.last_handoff_files,
+        )),
         "Removed files: "
-          <> inline_list(list_difference(state.last_handoff_files, current_files)),
-        "Verification changed: " <> bool_label(state.last_verification_digest != current_digest),
-        "Risks changed: " <> bool_label(string.join(state.last_risks, with: "\n") != string.join(current_risks, with: "\n")),
+          <> inline_list(list_difference(
+          state.last_handoff_files,
+          current_files,
+        )),
+        "Verification changed: "
+          <> bool_label(state.last_verification_digest != current_digest),
+        "Risks changed: "
+          <> bool_label(
+          string.join(state.last_risks, with: "\n")
+          != string.join(current_risks, with: "\n"),
+        ),
       ])
   }
 }
@@ -225,7 +250,10 @@ fn render_delta(
 fn render_review_feedback_status(run: types.RunRecord) -> String {
   case run.planning_provenance {
     Some(provenance) ->
-      case types.planning_provenance_uses_reviews(provenance), run.repo_state_snapshot {
+      case
+        types.planning_provenance_uses_reviews(provenance),
+        run.repo_state_snapshot
+      {
         True, Some(snapshot) -> {
           let actionable_lines =
             snapshot.open_pull_requests
@@ -245,7 +273,8 @@ fn render_review_feedback_status(run: types.RunRecord) -> String {
             })
 
           case actionable_lines {
-            [] -> "- Review-driven run, but no actionable comments or failing checks were captured."
+            [] ->
+              "- Review-driven run, but no actionable comments or failing checks were captured."
             _ -> bullet_list(actionable_lines)
           }
         }
@@ -292,11 +321,14 @@ fn agent_summary(agent: types.ResolvedAgentConfig) -> String {
     Some(reasoning) -> " reasoning=" <> types.reasoning_to_string(reasoning)
     None -> ""
   }
-  types.provider_to_string(agent.provider) <> model_fragment <> reasoning_fragment
+  types.provider_to_string(agent.provider)
+  <> model_fragment
+  <> reasoning_fragment
 }
 
 fn bullet_list(items: List(String)) -> String {
-  case items
+  case
+    items
     |> list.filter(fn(item) { string.trim(item) != "" })
   {
     [] -> "- None"
@@ -325,7 +357,8 @@ fn render_pr_numbers(pr_numbers: List(Int)) -> String {
 }
 
 fn inline_list(items: List(String)) -> String {
-  case items
+  case
+    items
     |> list.filter(fn(item) { string.trim(item) != "" })
   {
     [] -> "(none)"

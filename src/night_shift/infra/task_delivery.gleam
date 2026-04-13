@@ -55,7 +55,8 @@ pub fn deliver_completed_task(
         git.push_branch(task_run.worktree_path, task_run.branch_name, git_log)
         |> result.map_error(git_delivery_error),
       )
-      let snippets_and_events = load_snippets(run.repo_root, config.handoff, task_run.task.id)
+      let snippets_and_events =
+        load_snippets(run.repo_root, config.handoff, task_run.task.id)
       let #(snippets, snippet_events) = snippets_and_events
       let legacy_body =
         pull_request_domain.render_legacy_body(
@@ -64,9 +65,7 @@ pub fn deliver_completed_task(
           execution_result,
           verification_output,
         )
-      let handoff_region = case
-        pr_handoff.body_region_enabled(config.handoff)
-      {
+      let handoff_region = case pr_handoff.body_region_enabled(config.handoff) {
         True ->
           Some(pr_handoff.render_body_region(
             config.handoff,
@@ -135,37 +134,31 @@ pub fn deliver_completed_task(
               git_log,
             )
           {
-            Ok(github.CommentCreated) ->
-              #(
-                True,
-                [handoff_event(
-                  "pr_handoff_created",
-                  task_run.task.id,
-                  "Created managed PR handoff comment for PR #"
-                    <> int.to_string(pull_request.number)
-                    <> ".",
-                )],
-              )
-            Ok(github.CommentUpdated) ->
-              #(
-                True,
-                [handoff_event(
-                  "pr_handoff_updated",
-                  task_run.task.id,
-                  "Updated managed PR handoff comment for PR #"
-                    <> int.to_string(pull_request.number)
-                    <> ".",
-                )],
-              )
-            Error(message) ->
-              #(
-                False,
-                [handoff_event(
-                  "pr_handoff_warning",
-                  task_run.task.id,
-                  "Unable to update the managed PR handoff comment: " <> message,
-                )],
-              )
+            Ok(github.CommentCreated) -> #(True, [
+              handoff_event(
+                "pr_handoff_created",
+                task_run.task.id,
+                "Created managed PR handoff comment for PR #"
+                  <> int.to_string(pull_request.number)
+                  <> ".",
+              ),
+            ])
+            Ok(github.CommentUpdated) -> #(True, [
+              handoff_event(
+                "pr_handoff_updated",
+                task_run.task.id,
+                "Updated managed PR handoff comment for PR #"
+                  <> int.to_string(pull_request.number)
+                  <> ".",
+              ),
+            ])
+            Error(message) -> #(False, [
+              handoff_event(
+                "pr_handoff_warning",
+                task_run.task.id,
+                "Unable to update the managed PR handoff comment: " <> message,
+              ),
+            ])
           }
         }
         False -> #(False, [])
@@ -189,24 +182,26 @@ pub fn deliver_completed_task(
           managed_comment_present: managed_comment_present,
         )
       let base_handoff_event = case previous_state {
-        Some(_) ->
-          [handoff_event(
+        Some(_) -> [
+          handoff_event(
             "pr_handoff_updated",
             task_run.task.id,
             case body_region_present {
               True -> "Updated Night Shift PR handoff metadata."
               False -> "Persisted Night Shift PR handoff state."
             },
-          )]
-        None ->
-          [handoff_event(
+          ),
+        ]
+        None -> [
+          handoff_event(
             "pr_handoff_created",
             task_run.task.id,
             case body_region_present {
               True -> "Created Night Shift PR handoff metadata."
               False -> "Created Night Shift PR handoff state."
             },
-          )]
+          ),
+        ]
       }
       Ok(Delivered(
         pr_number: int.to_string(pull_request.number),
@@ -285,21 +280,23 @@ fn load_snippet(
 
       case simplifile.read(absolute_path) {
         Ok(contents) -> #(Some(contents), [])
-        Error(_) ->
-          #(
-            None,
-            [handoff_event(
-              "pr_handoff_warning",
-              task_id,
-              "Unable to read handoff snippet at " <> path <> ".",
-            )],
-          )
+        Error(_) -> #(None, [
+          handoff_event(
+            "pr_handoff_warning",
+            task_id,
+            "Unable to read handoff snippet at " <> path <> ".",
+          ),
+        ])
       }
     }
   }
 }
 
-fn handoff_event(kind: String, task_id: String, message: String) -> types.RunEvent {
+fn handoff_event(
+  kind: String,
+  task_id: String,
+  message: String,
+) -> types.RunEvent {
   types.RunEvent(
     kind: kind,
     at: system.timestamp(),

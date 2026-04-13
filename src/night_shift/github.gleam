@@ -114,9 +114,11 @@ pub fn upsert_handoff_comment(
   use comments <- result.try(issue_comments(cwd, pr_number, log_path))
   let marker = pr_handoff.comment_marker(task_id)
 
-  case list.find(comments, fn(comment) {
-    string.contains(does: comment.body, contain: marker)
-  }) {
+  case
+    list.find(comments, fn(comment) {
+      string.contains(does: comment.body, contain: marker)
+    })
+  {
     Ok(comment) -> {
       use _ <- result.try(update_issue_comment(cwd, comment.id, body, log_path))
       Ok(CommentUpdated)
@@ -243,9 +245,7 @@ fn existing_pr_body(
   log_path: String,
 ) -> Result(String, String) {
   let command =
-    gh_pr_command("view ")
-    <> int.to_string(pr_number)
-    <> " --json body"
+    gh_pr_command("view ") <> int.to_string(pr_number) <> " --json body"
 
   let result = shell.run(command, cwd, log_path)
   case shell.succeeded(result) {
@@ -284,18 +284,14 @@ fn compose_pr_body(
   }
 }
 
-fn replace_handoff_region(existing_body: String, next_region: String) -> Option(String) {
-  case
-    string.split_once(existing_body, pr_handoff.body_start_marker)
-  {
+fn replace_handoff_region(
+  existing_body: String,
+  next_region: String,
+) -> Option(String) {
+  case string.split_once(existing_body, pr_handoff.body_start_marker) {
     Ok(#(before, remainder)) ->
       case string.split_once(remainder, pr_handoff.body_end_marker) {
-        Ok(#(_, after)) ->
-          Some(
-            before
-            <> next_region
-            <> after,
-          )
+        Ok(#(_, after)) -> Some(before <> next_region <> after)
         Error(_) -> None
       }
     Error(_) -> None
@@ -416,7 +412,8 @@ fn issue_comments_page(
       let next_acc = list.append(acc, comments)
       case list.length(comments) < 100 {
         True -> Ok(next_acc)
-        False -> issue_comments_page(cwd, pr_number, page + 1, log_path, next_acc)
+        False ->
+          issue_comments_page(cwd, pr_number, page + 1, log_path, next_acc)
       }
     }
     False -> Error("Unable to inspect issue comments.")

@@ -44,7 +44,10 @@ pub fn encode_run(run: types.RunRecord) -> String {
     #("created_at", json.string(run.created_at)),
     #("updated_at", json.string(run.updated_at)),
     #("tasks", json.array(run.tasks, encode_task)),
-    #("handoff_states", json.array(run.handoff_states, encode_task_handoff_state)),
+    #(
+      "handoff_states",
+      json.array(run.handoff_states, encode_task_handoff_state),
+    ),
   ])
   |> json.to_string
 }
@@ -198,10 +201,7 @@ fn encode_task_handoff_state(state: types.TaskHandoffState) -> json.Json {
   json.object([
     #("task_id", json.string(state.task_id)),
     #("delivered_pr_number", json.string(state.delivered_pr_number)),
-    #(
-      "last_delivered_commit_sha",
-      json.string(state.last_delivered_commit_sha),
-    ),
+    #("last_delivered_commit_sha", json.string(state.last_delivered_commit_sha)),
     #("last_handoff_files", json.array(state.last_handoff_files, json.string)),
     #("last_verification_digest", json.string(state.last_verification_digest)),
     #("last_risks", json.array(state.last_risks, json.string)),
@@ -285,49 +285,51 @@ fn run_decoder() -> decode.Decoder(types.RunRecord) {
     None,
     decode.optional(decode.list(task_handoff_state_decoder())),
   )
-  decode.success(types.RunRecord(
-    run_id: run_id,
-    repo_root: repo_root,
-    run_path: run_path,
-    brief_path: brief_path,
-    state_path: state_path,
-    events_path: events_path,
-    report_path: report_path,
-    lock_path: lock_path,
-    planning_agent: planning_agent,
-    execution_agent: execution_agent,
-    environment_name: case maybe_environment_name {
-      Some(name) -> name
-      None -> ""
-    },
-    max_workers: max_workers,
-    notes_source: notes_source,
-    planning_provenance: case planning_provenance {
-      Some(provenance) -> Some(provenance)
-      None ->
-        case notes_source {
-          Some(source) -> Some(types.NotesOnly(source))
-          None -> None
-        }
-    },
-    repo_state_snapshot: repo_state_snapshot,
-    decisions: case decisions {
-      Some(entries) -> entries
-      None -> []
-    },
-    planning_dirty: case planning_dirty {
-      Some(value) -> value
-      None -> False
-    },
-    status: status,
-    created_at: created_at,
-    updated_at: updated_at,
-    tasks: tasks,
-    handoff_states: case handoff_states {
-      Some(entries) -> entries
-      None -> []
-    },
-  ))
+  decode.success(
+    types.RunRecord(
+      run_id: run_id,
+      repo_root: repo_root,
+      run_path: run_path,
+      brief_path: brief_path,
+      state_path: state_path,
+      events_path: events_path,
+      report_path: report_path,
+      lock_path: lock_path,
+      planning_agent: planning_agent,
+      execution_agent: execution_agent,
+      environment_name: case maybe_environment_name {
+        Some(name) -> name
+        None -> ""
+      },
+      max_workers: max_workers,
+      notes_source: notes_source,
+      planning_provenance: case planning_provenance {
+        Some(provenance) -> Some(provenance)
+        None ->
+          case notes_source {
+            Some(source) -> Some(types.NotesOnly(source))
+            None -> None
+          }
+      },
+      repo_state_snapshot: repo_state_snapshot,
+      decisions: case decisions {
+        Some(entries) -> entries
+        None -> []
+      },
+      planning_dirty: case planning_dirty {
+        Some(value) -> value
+        None -> False
+      },
+      status: status,
+      created_at: created_at,
+      updated_at: updated_at,
+      tasks: tasks,
+      handoff_states: case handoff_states {
+        Some(entries) -> entries
+        None -> []
+      },
+    ),
+  )
 }
 
 fn legacy_run_decoder() -> decode.Decoder(types.RunRecord) {
@@ -346,30 +348,32 @@ fn legacy_run_decoder() -> decode.Decoder(types.RunRecord) {
   use updated_at <- decode.field("updated_at", decode.string)
   use tasks <- decode.field("tasks", decode.list(task_decoder()))
   let resolved_agent = types.resolved_agent_from_provider(provider)
-  decode.success(types.RunRecord(
-    run_id: run_id,
-    repo_root: repo_root,
-    run_path: run_path,
-    brief_path: brief_path,
-    state_path: state_path,
-    events_path: events_path,
-    report_path: report_path,
-    lock_path: lock_path,
-    planning_agent: resolved_agent,
-    execution_agent: resolved_agent,
-    environment_name: "",
-    max_workers: max_workers,
-    notes_source: None,
-    planning_provenance: None,
-    repo_state_snapshot: None,
-    decisions: [],
-    planning_dirty: False,
-    status: status,
-    created_at: created_at,
-    updated_at: updated_at,
-    tasks: tasks,
-    handoff_states: [],
-  ))
+  decode.success(
+    types.RunRecord(
+      run_id: run_id,
+      repo_root: repo_root,
+      run_path: run_path,
+      brief_path: brief_path,
+      state_path: state_path,
+      events_path: events_path,
+      report_path: report_path,
+      lock_path: lock_path,
+      planning_agent: resolved_agent,
+      execution_agent: resolved_agent,
+      environment_name: "",
+      max_workers: max_workers,
+      notes_source: None,
+      planning_provenance: None,
+      repo_state_snapshot: None,
+      decisions: [],
+      planning_dirty: False,
+      status: status,
+      created_at: created_at,
+      updated_at: updated_at,
+      tasks: tasks,
+      handoff_states: [],
+    ),
+  )
 }
 
 fn resolved_agent_decoder() -> decode.Decoder(types.ResolvedAgentConfig) {

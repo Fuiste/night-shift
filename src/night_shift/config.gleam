@@ -62,11 +62,10 @@ pub fn render(config: types.Config) -> String {
       <> shared.render_string_list(config.verification_commands)
   }
 
-  let handoff_lines =
-    case config.handoff == types.default_handoff_config() {
-      True -> ""
-      False -> render_handoff(config.handoff)
-    }
+  let handoff_lines = case config.handoff == types.default_handoff_config() {
+    True -> ""
+    False -> render_handoff(config.handoff)
+  }
 
   string.join(root_lines, with: "\n")
   <> "\n\n"
@@ -259,10 +258,7 @@ fn apply_value(
       Ok(ParseState(
         types.Config(
           ..config,
-          handoff: types.HandoffConfig(
-            ..config.handoff,
-            managed_comment: value,
-          ),
+          handoff: types.HandoffConfig(..config.handoff, managed_comment: value),
         ),
         state.section,
       ))
@@ -283,76 +279,44 @@ fn apply_value(
     }
 
     HandoffSection, "include_files_touched" ->
-      parse_handoff_bool_field(
-        state,
-        raw_value,
-        fn(handoff, value) {
-          types.HandoffConfig(..handoff, include_files_touched: value)
-        },
-      )
+      parse_handoff_bool_field(state, raw_value, fn(handoff, value) {
+        types.HandoffConfig(..handoff, include_files_touched: value)
+      })
 
     HandoffSection, "include_acceptance" ->
-      parse_handoff_bool_field(
-        state,
-        raw_value,
-        fn(handoff, value) {
-          types.HandoffConfig(..handoff, include_acceptance: value)
-        },
-      )
+      parse_handoff_bool_field(state, raw_value, fn(handoff, value) {
+        types.HandoffConfig(..handoff, include_acceptance: value)
+      })
 
     HandoffSection, "include_stack_context" ->
-      parse_handoff_bool_field(
-        state,
-        raw_value,
-        fn(handoff, value) {
-          types.HandoffConfig(..handoff, include_stack_context: value)
-        },
-      )
+      parse_handoff_bool_field(state, raw_value, fn(handoff, value) {
+        types.HandoffConfig(..handoff, include_stack_context: value)
+      })
 
     HandoffSection, "include_verification_summary" ->
-      parse_handoff_bool_field(
-        state,
-        raw_value,
-        fn(handoff, value) {
-          types.HandoffConfig(..handoff, include_verification_summary: value)
-        },
-      )
+      parse_handoff_bool_field(state, raw_value, fn(handoff, value) {
+        types.HandoffConfig(..handoff, include_verification_summary: value)
+      })
 
     HandoffSection, "pr_body_prefix_path" ->
-      parse_handoff_path_field(
-        state,
-        raw_value,
-        fn(handoff, value) {
-          types.HandoffConfig(..handoff, pr_body_prefix_path: value)
-        },
-      )
+      parse_handoff_path_field(state, raw_value, fn(handoff, value) {
+        types.HandoffConfig(..handoff, pr_body_prefix_path: value)
+      })
 
     HandoffSection, "pr_body_suffix_path" ->
-      parse_handoff_path_field(
-        state,
-        raw_value,
-        fn(handoff, value) {
-          types.HandoffConfig(..handoff, pr_body_suffix_path: value)
-        },
-      )
+      parse_handoff_path_field(state, raw_value, fn(handoff, value) {
+        types.HandoffConfig(..handoff, pr_body_suffix_path: value)
+      })
 
     HandoffSection, "comment_prefix_path" ->
-      parse_handoff_path_field(
-        state,
-        raw_value,
-        fn(handoff, value) {
-          types.HandoffConfig(..handoff, comment_prefix_path: value)
-        },
-      )
+      parse_handoff_path_field(state, raw_value, fn(handoff, value) {
+        types.HandoffConfig(..handoff, comment_prefix_path: value)
+      })
 
     HandoffSection, "comment_suffix_path" ->
-      parse_handoff_path_field(
-        state,
-        raw_value,
-        fn(handoff, value) {
-          types.HandoffConfig(..handoff, comment_suffix_path: value)
-        },
-      )
+      parse_handoff_path_field(state, raw_value, fn(handoff, value) {
+        types.HandoffConfig(..handoff, comment_suffix_path: value)
+      })
 
     ProfileSection(profile_name), "provider" -> {
       use provider <- result.try(
@@ -462,15 +426,15 @@ fn parse_handoff_bool_field(
 fn parse_handoff_path_field(
   state: ParseState,
   raw_value: String,
-  update: fn(
-    types.HandoffConfig,
-    Option(String),
-  ) -> types.HandoffConfig,
+  update: fn(types.HandoffConfig, Option(String)) -> types.HandoffConfig,
 ) -> Result(ParseState, String) {
   Ok(ParseState(
     types.Config(
       ..state.config,
-      handoff: update(state.config.handoff, shared.parse_optional_string(raw_value)),
+      handoff: update(
+        state.config.handoff,
+        shared.parse_optional_string(raw_value),
+      ),
     ),
     state.section,
   ))
@@ -565,29 +529,42 @@ fn render_profile(profile: types.AgentProfile) -> String {
 }
 
 fn render_handoff(handoff: types.HandoffConfig) -> String {
-  let lines = [
-    "",
-    "[handoff]",
-    "enabled = " <> render_bool(handoff.enabled),
-    "pr_body_mode = "
-      <> shared.render_string(
-      types.handoff_body_mode_to_string(handoff.pr_body_mode),
-    ),
-    "managed_comment = " <> render_bool(handoff.managed_comment),
-    "provenance = "
-      <> shared.render_string(
-      types.handoff_provenance_to_string(handoff.provenance),
-    ),
-    "include_files_touched = " <> render_bool(handoff.include_files_touched),
-    "include_acceptance = " <> render_bool(handoff.include_acceptance),
-    "include_stack_context = " <> render_bool(handoff.include_stack_context),
-    "include_verification_summary = "
-      <> render_bool(handoff.include_verification_summary),
-  ]
-  |> list.append(optional_handoff_path("pr_body_prefix_path", handoff.pr_body_prefix_path))
-  |> list.append(optional_handoff_path("pr_body_suffix_path", handoff.pr_body_suffix_path))
-  |> list.append(optional_handoff_path("comment_prefix_path", handoff.comment_prefix_path))
-  |> list.append(optional_handoff_path("comment_suffix_path", handoff.comment_suffix_path))
+  let lines =
+    [
+      "",
+      "[handoff]",
+      "enabled = " <> render_bool(handoff.enabled),
+      "pr_body_mode = "
+        <> shared.render_string(types.handoff_body_mode_to_string(
+        handoff.pr_body_mode,
+      )),
+      "managed_comment = " <> render_bool(handoff.managed_comment),
+      "provenance = "
+        <> shared.render_string(types.handoff_provenance_to_string(
+        handoff.provenance,
+      )),
+      "include_files_touched = " <> render_bool(handoff.include_files_touched),
+      "include_acceptance = " <> render_bool(handoff.include_acceptance),
+      "include_stack_context = " <> render_bool(handoff.include_stack_context),
+      "include_verification_summary = "
+        <> render_bool(handoff.include_verification_summary),
+    ]
+    |> list.append(optional_handoff_path(
+      "pr_body_prefix_path",
+      handoff.pr_body_prefix_path,
+    ))
+    |> list.append(optional_handoff_path(
+      "pr_body_suffix_path",
+      handoff.pr_body_suffix_path,
+    ))
+    |> list.append(optional_handoff_path(
+      "comment_prefix_path",
+      handoff.comment_prefix_path,
+    ))
+    |> list.append(optional_handoff_path(
+      "comment_suffix_path",
+      handoff.comment_suffix_path,
+    ))
 
   "\n" <> string.join(lines, with: "\n")
 }

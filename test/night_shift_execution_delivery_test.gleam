@@ -3,6 +3,7 @@ import gleam/list
 import gleam/option.{None, Some}
 import gleam/result
 import gleam/string
+import night_shift/domain/pr_handoff
 import night_shift/github
 import night_shift/journal
 import night_shift/orchestrator
@@ -12,7 +13,6 @@ import night_shift/shell
 import night_shift/system
 import night_shift/types
 import night_shift/worktree_setup
-import night_shift/domain/pr_handoff
 import night_shift_test_support as support
 import simplifile
 
@@ -129,7 +129,9 @@ pub fn github_open_or_update_pr_preserves_manual_body_outside_handoff_region_tes
       "main",
       "Demo PR",
       "Legacy body",
-      Some("<!-- night-shift:handoff-body:start -->\nnew body\n<!-- night-shift:handoff-body:end -->"),
+      Some(
+        "<!-- night-shift:handoff-body:start -->\nnew body\n<!-- night-shift:handoff-body:end -->",
+      ),
       types.default_handoff_config(),
       run_path,
       filepath.join(run_path, "logs/gh.log"),

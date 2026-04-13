@@ -29,8 +29,14 @@ pub fn render_body_region_includes_sections_and_snippets_test() {
   assert string.contains(body, "Team prefix")
   assert string.contains(body, "## Context")
   assert string.contains(body, "## Scope")
-  assert string.contains(body, "Files touched: src/app.gleam, test/app_test.gleam")
-  assert string.contains(body, "Acceptance: Add the app entrypoint, Cover the happy path")
+  assert string.contains(
+    body,
+    "Files touched: src/app.gleam, test/app_test.gleam",
+  )
+  assert string.contains(
+    body,
+    "Acceptance: Add the app entrypoint, Cover the happy path",
+  )
   assert string.contains(body, "## Evidence")
   assert string.contains(body, "Verification digest:")
   assert string.contains(body, "## Provenance")
@@ -65,11 +71,17 @@ pub fn render_managed_comment_reports_delta_and_review_context_test() {
     )
 
   assert string.contains(comment, "## Since Last Review")
-  assert string.contains(comment, "Added files: src/app.gleam, test/app_test.gleam")
+  assert string.contains(
+    comment,
+    "Added files: src/app.gleam, test/app_test.gleam",
+  )
   assert string.contains(comment, "Removed files: src/old.gleam")
   assert string.contains(comment, "Verification changed: yes")
   assert string.contains(comment, "## Review Feedback Status")
-  assert string.contains(comment, "#11: Review COMMENTED: Please make QA_NOTES.md the canonical doc.")
+  assert string.contains(
+    comment,
+    "#11: Review COMMENTED: Please make QA_NOTES.md the canonical doc.",
+  )
   assert string.contains(comment, "## Stack / Replacement Status")
   assert string.contains(comment, "Repo-state drift: yes")
   assert string.contains(comment, pr_handoff.comment_marker("task-1"))
@@ -121,7 +133,9 @@ fn sample_review_run() -> types.RunRecord {
   types.RunRecord(
     ..sample_run(),
     planning_provenance: Some(types.ReviewsOnly),
-    repo_state_snapshot: Some(night_shift_test_support.sample_repo_state_snapshot()),
+    repo_state_snapshot: Some(
+      night_shift_test_support.sample_repo_state_snapshot(),
+    ),
   )
 }
 
