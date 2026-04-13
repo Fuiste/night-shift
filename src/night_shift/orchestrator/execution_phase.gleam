@@ -15,6 +15,7 @@ import night_shift/infra/task_verifier
 import night_shift/journal
 import night_shift/project
 import night_shift/provider
+import night_shift/runtime_identity
 import night_shift/system
 import night_shift/types
 import night_shift/worktree_setup
@@ -148,9 +149,13 @@ fn launch_batch_loop(
             )
           {
             Ok(#(worktree_path, worktree_origin)) -> {
+              use task_with_runtime <- result.try(ensure_runtime_context(
+                run,
+                task,
+              ))
               let running_task =
                 types.Task(
-                  ..task,
+                  ..task_with_runtime,
                   state: types.Running,
                   worktree_path: worktree_path,
                   branch_name: branch_name,
@@ -564,6 +569,13 @@ fn start_task_run(
   env_log: String,
   worktree_origin: provider.WorktreeOrigin,
 ) -> Result(#(types.RunRecord, provider.TaskRun), String) {
+  use runtime_context <- result.try(require_runtime_context(task))
+  use _ <- result.try(runtime_identity.ensure_artifacts(
+    runtime_context,
+    task,
+    worktree_path,
+    branch_name,
+  ))
   use _ <- result.try(worktree_setup.prepare_worktree(
     run.repo_root,
     run.environment_name,
@@ -572,11 +584,13 @@ fn start_task_run(
     branch_name,
     bootstrap_phase,
     env_log,
+    Some(runtime_context),
   ))
   use env_vars <- result.try(worktree_setup.env_vars_for(
     run.repo_root,
     run.environment_name,
     project.worktree_setup_path(run.repo_root),
+    Some(runtime_context),
   ))
   use start_head <- result.try(git.head_commit(worktree_path, git_log))
   use task_run <- result.try(provider.start_task(
@@ -592,6 +606,94 @@ fn start_task_run(
     worktree_origin,
   ))
   Ok(#(run, task_run))
+}
+
+fn ensure_runtime_context(
+  run: types.RunRecord,
+  task: types.Task,
+) -> Result(types.Task, String) {
+  case task.runtime_context {
+    Some(_) -> Ok(task)
+    None -> {
+      use named_ports <- result.try(runtime_named_ports(
+        run.repo_root,
+        run.environment_name,
+      ))
+      use reserved_port_bases <- result.try(runtime_reserved_port_bases(
+        run.repo_root,
+        run.run_id,
+      ))
+      use port_base <- result.try(runtime_identity.allocate_port_base(
+        run.run_id,
+        run.tasks,
+        reserved_port_bases,
+        task.id,
+      ))
+      use context <- result.try(runtime_identity.build_context(
+        run.run_path,
+        run.run_id,
+        task.id,
+        task.title,
+        port_base,
+        named_ports,
+      ))
+      Ok(types.Task(..task, runtime_context: Some(context)))
+    }
+  }
+}
+
+fn runtime_named_ports(
+  repo_root: String,
+  environment_name: String,
+) -> Result(List(String), String) {
+  let setup_path = project.worktree_setup_path(repo_root)
+  use maybe_config <- result.try(worktree_setup.load(setup_path))
+  use selected <- result.try(
+    worktree_setup.choose_environment(maybe_config, case environment_name {
+      "" -> None
+      name -> Some(name)
+    }),
+  )
+  case selected {
+    Some(environment) -> Ok(environment.runtime.named_ports)
+    None -> Ok([])
+  }
+}
+
+fn runtime_reserved_port_bases(
+  repo_root: String,
+  current_run_id: String,
+) -> Result(List(Int), String) {
+  use runs <- result.try(journal.list_runs(repo_root))
+  Ok(
+    runs
+    |> list.filter(fn(run) { run.run_id != current_run_id })
+    |> list.flat_map(fn(run) { runtime_task_port_bases(run.tasks) }),
+  )
+}
+
+fn runtime_task_port_bases(tasks: List(types.Task)) -> List(Int) {
+  tasks
+  |> list.flat_map(fn(task) {
+    case task.runtime_context {
+      Some(context) -> [context.port_base]
+      None -> []
+    }
+  })
+}
+
+fn require_runtime_context(
+  task: types.Task,
+) -> Result(types.RuntimeContext, String) {
+  case task.runtime_context {
+    Some(context) -> Ok(context)
+    None ->
+      Error(
+        "Runtime identity was missing for task "
+        <> task.id
+        <> " after worktree preparation.",
+      )
+  }
 }
 
 fn mark_task_with_event(
@@ -699,6 +801,7 @@ fn attempt_payload_repair(
       run.repo_root,
       run.environment_name,
       project.worktree_setup_path(run.repo_root),
+      task_run.task.runtime_context,
     )
   {
     Ok(env_vars) ->

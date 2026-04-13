@@ -186,6 +186,10 @@ fn render_summary(
     tasks
     |> list.filter(fn(task) { task.worktree_path != "" })
     |> list.length
+  let runtime_identity_count =
+    tasks
+    |> list.filter(fn(task) { task.runtime_context != None })
+    |> list.length
 
   [
     "- Completed tasks: " <> int.to_string(completed_count),
@@ -197,6 +201,7 @@ fn render_summary(
     "- Failed tasks: " <> int.to_string(failed_count),
     "- Queued tasks: " <> int.to_string(queued_count),
     "- Retained worktrees: " <> int.to_string(retained_worktrees),
+    "- Runtime identities: " <> int.to_string(runtime_identity_count),
     "- Pruned superseded worktrees: "
       <> int.to_string(event_count(events, "worktree_pruned")),
     "- Execution recovery warnings: "
@@ -402,8 +407,22 @@ fn render_task_details(
     pr_numbers -> "\n  Supersedes: " <> render_pr_numbers(pr_numbers)
   }
 
+  let runtime_fragment = case task.runtime_context {
+    None -> ""
+    Some(context) ->
+      "\n  Runtime: "
+      <> context.compose_project
+      <> " | base "
+      <> int.to_string(context.port_base)
+      <> "\n  Runtime manifest: "
+      <> context.manifest_path
+      <> "\n  Runtime handoff: "
+      <> context.handoff_path
+  }
+
   pr_fragment
   <> lineage_fragment
+  <> runtime_fragment
   <> decision_fragment
   <> planning_fragment
   <> summary_fragment

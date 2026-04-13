@@ -35,6 +35,7 @@ Each run directory contains durable state for one run:
 - `report.md`
 - `provenance.json`
 - `logs/`
+- `runtime/`
 - `worktrees/`
 
 Night Shift only treats a run directory as real once `state.json`,
@@ -54,6 +55,7 @@ The run record itself stores:
   emitted a body overlay or managed comment
 - recorded decisions
 - `planning_dirty`
+- persisted per-task `runtime_context`
 - task list and task states
 - timestamps and current run status
 
@@ -61,6 +63,23 @@ The run record itself stores:
 saved run state plus artifact paths under `logs/` to record planning
 provenance, prompt and payload traces, verification evidence, touched files,
 worktree paths, PR linkage, and confidence posture.
+
+## Runtime Artifacts
+
+Night Shift writes per-task runtime artifacts under:
+
+- `./.night-shift/runs/<run-id>/runtime/<task-id>/night-shift.env`
+- `./.night-shift/runs/<run-id>/runtime/<task-id>/night-shift.runtime.json`
+- `./.night-shift/runs/<run-id>/runtime/<task-id>/night-shift.handoff.md`
+
+Those files are generated before setup or maintenance commands run. They live
+under the run directory instead of inside the git worktree so they do not
+pollute branches or pull requests.
+
+The persisted task `runtime_context` points at those artifact paths and stores
+the deterministic runtime identity Night Shift derived for the task, including
+the compose-safe name and port base. Resume and maintenance reuse the saved
+context rather than recomputing from current repo config.
 
 ## Planning Artifacts
 
@@ -89,6 +108,7 @@ vanishing into the terminal scrollback.
   update failures
 - payload-repair attempt, success, and failure notes when Night Shift retried a
   malformed execution result in place
+- runtime identity summaries and artifact paths for prepared tasks
 - task summaries
 - planning validation failures
 - event timeline

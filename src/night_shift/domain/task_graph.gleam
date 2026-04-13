@@ -1,4 +1,5 @@
 import gleam/list
+import gleam/option.{None}
 import gleam/result
 import gleam/string
 import night_shift/types
@@ -84,6 +85,7 @@ pub fn merge_follow_up_tasks(
           branch_name: "",
           pr_number: "",
           summary: "",
+          runtime_context: None,
         ),
         ..acc
       ]

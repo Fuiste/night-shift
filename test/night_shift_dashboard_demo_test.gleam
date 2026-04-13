@@ -103,7 +103,7 @@ pub fn dashboard_start_session_tracks_completed_run_test() {
     support.planned_run(repo_root, brief_path, types.Codex, 1)
   let assert Ok(session) =
     dashboard.start_start_session(repo_root, run.run_id, run, config)
-  let final_payload = support.wait_for_run_payload(session.url, run.run_id, 20)
+  let final_payload = support.wait_for_run_payload(session.url, run.run_id, 40)
 
   system.set_env("PATH", old_path)
   support.restore_env("NIGHT_SHIFT_GH_BIN", old_gh_bin)

@@ -1,4 +1,5 @@
 import gleam/list
+import gleam/option.{None}
 import gleam/string
 import gleeunit/should
 import night_shift/domain/plan_hygiene
@@ -22,6 +23,7 @@ pub fn normalize_planned_tasks_merges_single_validation_tail_test() {
       branch_name: "",
       pr_number: "",
       summary: "",
+      runtime_context: None,
     )
   let validation =
     types.Task(
@@ -40,6 +42,7 @@ pub fn normalize_planned_tasks_merges_single_validation_tail_test() {
       branch_name: "",
       pr_number: "",
       summary: "",
+      runtime_context: None,
     )
 
   let assert Ok([merged]) =
@@ -68,6 +71,7 @@ pub fn normalize_planned_tasks_rejects_fragmented_tiny_plan_test() {
       branch_name: "",
       pr_number: "",
       summary: "",
+      runtime_context: None,
     )
   let implementation =
     types.Task(
@@ -86,6 +90,7 @@ pub fn normalize_planned_tasks_rejects_fragmented_tiny_plan_test() {
       branch_name: "",
       pr_number: "",
       summary: "",
+      runtime_context: None,
     )
   let validation =
     types.Task(
@@ -104,6 +109,7 @@ pub fn normalize_planned_tasks_rejects_fragmented_tiny_plan_test() {
       branch_name: "",
       pr_number: "",
       summary: "",
+      runtime_context: None,
     )
 
   let assert Error(message) =

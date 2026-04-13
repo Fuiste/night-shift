@@ -4,12 +4,14 @@ import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import night_shift/codec/shared
+import night_shift/runtime_identity
 import night_shift/worktree_setup_model as model
 import simplifile
 
 type Section {
   RootSection
   EnvSection(name: String)
+  RuntimeSection(name: String)
   PreflightSection(name: String)
   SetupSection(name: String)
   MaintenanceSection(name: String)
@@ -20,7 +22,33 @@ type ParseState {
 }
 
 pub fn default_template() -> String {
-  render(model.default_config())
+  "version = 1\n"
+  <> "default_environment = \"default\"\n"
+  <> "\n"
+  <> "[environments.default.env]\n"
+  <> "\n"
+  <> "# Optional runtime aliases for deterministic per-worktree ports.\n"
+  <> "# Night Shift still generates runtime identity automatically when this section is absent.\n"
+  <> "# [environments.default.runtime]\n"
+  <> "# named_ports = [\"web\", \"api\"]\n"
+  <> "\n"
+  <> "[environments.default.preflight]\n"
+  <> "default = []\n"
+  <> "macos = []\n"
+  <> "linux = []\n"
+  <> "windows = []\n"
+  <> "\n"
+  <> "[environments.default.setup]\n"
+  <> "default = []\n"
+  <> "macos = []\n"
+  <> "linux = []\n"
+  <> "windows = []\n"
+  <> "\n"
+  <> "[environments.default.maintenance]\n"
+  <> "default = []\n"
+  <> "macos = []\n"
+  <> "linux = []\n"
+  <> "windows = []\n"
 }
 
 pub fn load(path: String) -> Result(Option(model.WorktreeSetupConfig), String) {
@@ -173,6 +201,7 @@ fn parse_section(section: String) -> Result(Section, String) {
 
   case string.split(inner, ".") {
     ["environments", name, "env"] -> Ok(EnvSection(name))
+    ["environments", name, "runtime"] -> Ok(RuntimeSection(name))
     ["environments", name, "preflight"] -> Ok(PreflightSection(name))
     ["environments", name, "setup"] -> Ok(SetupSection(name))
     ["environments", name, "maintenance"] -> Ok(MaintenanceSection(name))
@@ -217,19 +246,43 @@ fn apply_value(
       ))
 
     EnvSection(name), env_key ->
+      case string.starts_with(env_key, "NIGHT_SHIFT_") {
+        True ->
+          Error(
+            "Environment variable "
+            <> env_key
+            <> " uses the reserved NIGHT_SHIFT_ prefix.",
+          )
+        False ->
+          Ok(ParseState(
+            update_environment(config, name, fn(environment) {
+              model.WorktreeEnvironment(
+                ..environment,
+                env_vars: upsert_env_var(
+                  environment.env_vars,
+                  env_key,
+                  shared.parse_string(raw_value),
+                ),
+              )
+            }),
+            state.section,
+          ))
+      }
+
+    RuntimeSection(name), "named_ports" -> {
+      use named_ports <- result.try(
+        validate_named_ports(shared.parse_string_list(raw_value)),
+      )
       Ok(ParseState(
         update_environment(config, name, fn(environment) {
           model.WorktreeEnvironment(
             ..environment,
-            env_vars: upsert_env_var(
-              environment.env_vars,
-              env_key,
-              shared.parse_string(raw_value),
-            ),
+            runtime: model.RuntimeConfig(named_ports: named_ports),
           )
         }),
         state.section,
       ))
+    }
 
     PreflightSection(name), script_key ->
       update_command_set(
@@ -336,6 +389,7 @@ fn blank_environment(name: String) -> model.WorktreeEnvironment {
   model.WorktreeEnvironment(
     name: name,
     env_vars: [],
+    runtime: model.empty_runtime_config(),
     preflight: model.empty_command_set(),
     setup: model.empty_command_set(),
     maintenance: model.empty_command_set(),
@@ -365,7 +419,19 @@ fn render_environment(environment: model.WorktreeEnvironment) -> String {
       <> "\n\n"
   }
 
+  let runtime_block = case environment.runtime.named_ports {
+    [] -> ""
+    named_ports ->
+      "[environments."
+      <> environment.name
+      <> ".runtime]\n"
+      <> "named_ports = "
+      <> shared.render_string_list(named_ports)
+      <> "\n\n"
+  }
+
   env_block
+  <> runtime_block
   <> "[environments."
   <> environment.name
   <> ".preflight]\n"
@@ -398,4 +464,36 @@ fn render_command_set(command_set: model.CommandSet) -> String {
 
 fn render_string_list(values: List(String)) -> String {
   shared.render_string_list(values)
+}
+
+fn validate_named_ports(values: List(String)) -> Result(List(String), String) {
+  case list.length(values) > 16 {
+    True -> Error("Runtime named_ports may contain at most 16 entries.")
+    False -> validate_named_ports_loop(values, [], [])
+  }
+}
+
+fn validate_named_ports_loop(
+  values: List(String),
+  normalized_seen: List(String),
+  acc: List(String),
+) -> Result(List(String), String) {
+  case values {
+    [] -> Ok(list.reverse(acc))
+    [value, ..rest] -> {
+      use normalized <- result.try(runtime_identity.normalize_port_name(value))
+      case list.contains(normalized_seen, normalized) {
+        True ->
+          Error(
+            "Runtime named_ports must be unique after normalization: "
+            <> normalized,
+          )
+        False ->
+          validate_named_ports_loop(rest, [normalized, ..normalized_seen], [
+            normalized,
+            ..acc
+          ])
+      }
+    }
+  }
 }

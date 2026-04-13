@@ -194,6 +194,30 @@ fn encode_task(task: types.Task) -> json.Json {
     #("branch_name", json.string(task.branch_name)),
     #("pr_number", json.string(task.pr_number)),
     #("summary", json.string(task.summary)),
+    #(
+      "runtime_context",
+      json.nullable(from: task.runtime_context, of: encode_runtime_context),
+    ),
+  ])
+}
+
+fn encode_runtime_context(context: types.RuntimeContext) -> json.Json {
+  json.object([
+    #("worktree_id", json.string(context.worktree_id)),
+    #("compose_project", json.string(context.compose_project)),
+    #("port_base", json.int(context.port_base)),
+    #("named_ports", json.array(context.named_ports, encode_runtime_port)),
+    #("runtime_dir", json.string(context.runtime_dir)),
+    #("env_file_path", json.string(context.env_file_path)),
+    #("manifest_path", json.string(context.manifest_path)),
+    #("handoff_path", json.string(context.handoff_path)),
+  ])
+}
+
+fn encode_runtime_port(port: types.RuntimePort) -> json.Json {
+  json.object([
+    #("name", json.string(port.name)),
+    #("value", json.int(port.value)),
   ])
 }
 
@@ -445,6 +469,11 @@ fn task_decoder() -> decode.Decoder(types.Task) {
   use branch_name <- decode.field("branch_name", decode.string)
   use pr_number <- decode.field("pr_number", decode.string)
   use summary <- decode.field("summary", decode.string)
+  use runtime_context <- decode.optional_field(
+    "runtime_context",
+    None,
+    decode.optional(runtime_context_decoder()),
+  )
   decode.success(types.Task(
     id: id,
     title: title,
@@ -461,6 +490,7 @@ fn task_decoder() -> decode.Decoder(types.Task) {
     branch_name: branch_name,
     pr_number: pr_number,
     summary: summary,
+    runtime_context: runtime_context,
   ))
 }
 
@@ -502,6 +532,35 @@ fn task_handoff_state_decoder() -> decode.Decoder(types.TaskHandoffState) {
   ))
 }
 
+fn runtime_context_decoder() -> decode.Decoder(types.RuntimeContext) {
+  use worktree_id <- decode.field("worktree_id", decode.string)
+  use compose_project <- decode.field("compose_project", decode.string)
+  use port_base <- decode.field("port_base", decode.int)
+  use named_ports <- decode.field(
+    "named_ports",
+    decode.list(runtime_port_decoder()),
+  )
+  use runtime_dir <- decode.field("runtime_dir", decode.string)
+  use env_file_path <- decode.field("env_file_path", decode.string)
+  use manifest_path <- decode.field("manifest_path", decode.string)
+  use handoff_path <- decode.field("handoff_path", decode.string)
+  decode.success(types.RuntimeContext(
+    worktree_id: worktree_id,
+    compose_project: compose_project,
+    port_base: port_base,
+    named_ports: named_ports,
+    runtime_dir: runtime_dir,
+    env_file_path: env_file_path,
+    manifest_path: manifest_path,
+    handoff_path: handoff_path,
+  ))
+}
+
+fn runtime_port_decoder() -> decode.Decoder(types.RuntimePort) {
+  use name <- decode.field("name", decode.string)
+  use value <- decode.field("value", decode.int)
+  decode.success(types.RuntimePort(name: name, value: value))
+}
 fn decision_request_decoder() -> decode.Decoder(types.DecisionRequest) {
   use key <- decode.field("key", decode.string)
   use question <- decode.field("question", decode.string)

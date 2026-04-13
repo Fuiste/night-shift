@@ -28,6 +28,16 @@ pub fn runs_root(repo_root: String) -> String {
   filepath.join(home(repo_root), "runs")
 }
 
+/// Return the directory that stores generated runtime identity artifacts.
+pub fn runtime_root(run_path: String) -> String {
+  filepath.join(run_path, "runtime")
+}
+
+/// Return the runtime identity directory for one task.
+pub fn task_runtime_root(run_path: String, task_id: String) -> String {
+  filepath.join(runtime_root(run_path), task_id)
+}
+
 /// Return the directory that stores planning artifacts.
 pub fn planning_root(repo_root: String) -> String {
   filepath.join(home(repo_root), "planning")

@@ -27,6 +27,7 @@ pub fn verify_completed_task(
     run.repo_root,
     run.environment_name,
     project.worktree_setup_path(run.repo_root),
+    task_run.task.runtime_context,
   ))
 
   case

@@ -84,11 +84,11 @@ fn run_headless_demo(
     "Headless demo failed while running `start`.",
   ))
 
-  use _status_output <- result.try(run_cli_command(
-    ["status"],
+  use _status_output <- result.try(wait_for_completed_status(
     repo_root,
     filepath.join(demo_root, "headless-status.log"),
-    "Headless demo failed while running `status`.",
+    20,
+    "Headless demo failed while waiting for `status` to show a completed run.",
   ))
 
   use report_output <- result.try(run_cli_command(
@@ -163,11 +163,11 @@ fn run_ui_demo(repo_root: String, demo_root: String) -> Result(String, String) {
   ))
 
   let status_output =
-    run_cli_command(
-      ["status"],
+    wait_for_completed_status(
       repo_root,
       filepath.join(demo_root, "ui-status.log"),
-      "UI demo failed while running `status` after dashboard validation.",
+      20,
+      "UI demo failed while waiting for `status` to show a completed run after dashboard validation.",
     )
 
   case status_output {
@@ -346,6 +346,49 @@ fn wait_for_ui_details(
         Error(_) -> {
           system.sleep(150)
           wait_for_ui_details(log_path, attempts - 1)
+        }
+      }
+  }
+}
+
+fn wait_for_completed_status(
+  repo_root: String,
+  log_path: String,
+  attempts: Int,
+  error_message: String,
+) -> Result(String, String) {
+  let status_output =
+    run_cli_command(["status"], repo_root, log_path, error_message)
+
+  case status_output {
+    Ok(output) ->
+      case string.contains(does: output, contain: " is completed") {
+        True -> Ok(output)
+        False ->
+          case attempts <= 0 {
+            True -> Error(error_message)
+            False -> {
+              system.sleep(150)
+              wait_for_completed_status(
+                repo_root,
+                log_path,
+                attempts - 1,
+                error_message,
+              )
+            }
+          }
+      }
+    Error(message) ->
+      case attempts <= 0 {
+        True -> Error(message)
+        False -> {
+          system.sleep(150)
+          wait_for_completed_status(
+            repo_root,
+            log_path,
+            attempts - 1,
+            error_message,
+          )
         }
       }
   }

@@ -4,8 +4,10 @@ import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import night_shift/codec/worktree_setup
+import night_shift/runtime_identity
 import night_shift/shell
 import night_shift/system
+import night_shift/types
 import night_shift/worktree_setup_model as model
 import simplifile
 
@@ -35,6 +37,7 @@ pub fn env_vars_for(
   repo_root: String,
   environment_name: String,
   setup_path: String,
+  runtime_context: Option(types.RuntimeContext),
 ) -> Result(List(#(String, String)), String) {
   use selected <- result.try(load_selected_environment(
     repo_root,
@@ -42,8 +45,9 @@ pub fn env_vars_for(
     setup_path,
   ))
   case selected {
-    Some(environment) -> Ok(environment.env_vars)
-    None -> Ok([])
+    Some(environment) ->
+      Ok(merge_runtime_env_vars(environment.env_vars, runtime_context))
+    None -> Ok(runtime_env_vars(runtime_context))
   }
 }
 
@@ -55,6 +59,7 @@ pub fn prepare_worktree(
   branch_name: String,
   phase: model.BootstrapPhase,
   log_path: String,
+  runtime_context: Option(types.RuntimeContext),
 ) -> Result(Nil, String) {
   use selected <- result.try(load_selected_environment(
     repo_root,
@@ -83,7 +88,7 @@ pub fn prepare_worktree(
         "worktree=" <> worktree_path,
         "branch=" <> branch_name,
         "environment=" <> environment_label,
-        "env_vars=" <> redacted_env_names(selected),
+        "env_vars=" <> redacted_env_names(selected, runtime_context),
         "",
       ],
       with: "\n",
@@ -100,7 +105,7 @@ pub fn prepare_worktree(
       run_environment_commands(
         commands_for_phase(environment, phase),
         phase_name,
-        environment.env_vars,
+        merge_runtime_env_vars(environment.env_vars, runtime_context),
         worktree_path,
         log_path,
         1,
@@ -137,7 +142,7 @@ pub fn preflight_environment(
             "[environment-preflight]",
             "repo_root=" <> repo_root,
             "environment=" <> environment.name,
-            "env_vars=" <> redacted_env_names(Some(environment)),
+            "env_vars=" <> redacted_env_names(Some(environment), None),
             "path=" <> system.get_env("PATH"),
             "",
           ],
@@ -203,17 +208,37 @@ fn load_selected_environment(
   }
 }
 
-fn redacted_env_names(selected: Option(model.WorktreeEnvironment)) -> String {
-  case selected {
-    None -> "(none)"
-    Some(environment) ->
-      case environment.env_vars {
-        [] -> "(none)"
-        env_vars ->
-          env_vars
-          |> list.map(fn(entry) { entry.0 })
-          |> string.join(with: ", ")
-      }
+fn redacted_env_names(
+  selected: Option(model.WorktreeEnvironment),
+  runtime_context: Option(types.RuntimeContext),
+) -> String {
+  let environment_names = case selected {
+    None -> []
+    Some(environment) -> environment.env_vars |> list.map(fn(entry) { entry.0 })
+  }
+  let runtime_names =
+    runtime_env_vars(runtime_context)
+    |> list.map(fn(entry) { entry.0 })
+
+  case list.append(environment_names, runtime_names) {
+    [] -> "(none)"
+    names -> string.join(names, with: ", ")
+  }
+}
+
+fn merge_runtime_env_vars(
+  env_vars: List(#(String, String)),
+  runtime_context: Option(types.RuntimeContext),
+) -> List(#(String, String)) {
+  list.append(env_vars, runtime_env_vars(runtime_context))
+}
+
+fn runtime_env_vars(
+  runtime_context: Option(types.RuntimeContext),
+) -> List(#(String, String)) {
+  case runtime_context {
+    Some(context) -> runtime_identity.env_vars(context)
+    None -> []
   }
 }
 

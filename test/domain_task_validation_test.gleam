@@ -1,3 +1,4 @@
+import gleam/option.{None}
 import night_shift/domain/task_validation
 import night_shift/types
 
@@ -87,6 +88,7 @@ fn task(id: String, dependencies: List(String)) -> types.Task {
     branch_name: "",
     pr_number: "",
     summary: "",
+    runtime_context: None,
   )
 }
 

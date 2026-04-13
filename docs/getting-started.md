@@ -114,6 +114,13 @@ Before it starts, Night Shift checks that the source repository is clean apart
 from changes inside `./.night-shift/`. That guard exists so worktree execution
 and delivery stay aligned with the source checkout.
 
+When a task worktree is prepared, Night Shift also generates deterministic
+runtime artifacts under the run directory and injects stable `NIGHT_SHIFT_*`
+variables into setup, maintenance, provider execution, and verification. The
+zero-config defaults are usually enough; add `runtime.named_ports` in
+`worktree-setup.toml` only when you want friendly aliases like
+`NIGHT_SHIFT_PORT_WEB`.
+
 ## Inspect Results
 
 Use these commands while a run is active or after it finishes:
@@ -124,9 +131,12 @@ night-shift report
 night-shift provenance
 ```
 
-`status` prints the current run state, confidence posture, provenance path,
-and report location. `report` prints the current markdown report directly, and
-`provenance` prints the run's evidence ledger from the saved artifact graph.
+`status` prints the current run state, planning and execution agent summaries,
+confidence posture, provenance path, notes source, event count, runtime
+identity counts, and report location. `report` prints the current markdown
+report directly, including per-task runtime manifest and handoff paths once
+worktrees have been prepared. `provenance` prints the run's evidence ledger
+from the saved artifact graph.
 
 ## Supporting Flows
 

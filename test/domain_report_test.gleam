@@ -140,6 +140,7 @@ fn replacement_task(
     branch_name: "night-shift/" <> id,
     pr_number: pr_number,
     summary: "Updated " <> id,
+    runtime_context: None,
   )
 }
 

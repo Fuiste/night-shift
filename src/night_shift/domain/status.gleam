@@ -60,6 +60,9 @@ pub fn summary(
               <> "Retained worktrees: "
               <> int.to_string(retained_worktree_count(run.tasks))
               <> "\n"
+              <> "Runtime identities: "
+              <> int.to_string(runtime_identity_count(run.tasks))
+              <> "\n"
               <> "Pruned superseded worktrees: "
               <> int.to_string(event_count(events, "worktree_pruned"))
               <> "\n"
@@ -98,6 +101,9 @@ pub fn summary(
               <> "\n"
               <> "Retained worktrees: "
               <> int.to_string(retained_worktree_count(run.tasks))
+              <> "\n"
+              <> "Runtime identities: "
+              <> int.to_string(runtime_identity_count(run.tasks))
               <> "\n"
               <> "Pruned superseded worktrees: "
               <> int.to_string(event_count(events, "worktree_pruned"))
@@ -177,6 +183,12 @@ fn queued_task_count(tasks: List(types.Task)) -> Int {
 fn retained_worktree_count(tasks: List(types.Task)) -> Int {
   tasks
   |> list.filter(fn(task) { task.worktree_path != "" })
+  |> list.length
+}
+
+fn runtime_identity_count(tasks: List(types.Task)) -> Int {
+  tasks
+  |> list.filter(fn(task) { task.runtime_context != None })
   |> list.length
 }
 

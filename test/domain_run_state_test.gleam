@@ -1,3 +1,4 @@
+import gleam/option.{None}
 import night_shift/domain/run_state
 import night_shift/types
 
@@ -51,5 +52,6 @@ fn task_with_state(id: String, state: types.TaskState) -> types.Task {
     branch_name: "",
     pr_number: "",
     summary: "",
+    runtime_context: None,
   )
 }
