@@ -156,6 +156,7 @@ fn sample_task() -> types.Task {
     branch_name: "night-shift/task-1",
     pr_number: "15",
     summary: "",
+    runtime_context: None,
   )
 }
 

@@ -140,6 +140,7 @@ pub fn doctor_flags_dirty_and_missing_worktrees_test() {
           branch_name: "night-shift/dirty-task",
           pr_number: "",
           summary: "",
+          runtime_context: None,
         ),
         types.Task(
           id: "missing-task",
@@ -157,6 +158,7 @@ pub fn doctor_flags_dirty_and_missing_worktrees_test() {
           branch_name: "night-shift/missing-task",
           pr_number: "",
           summary: "",
+          runtime_context: None,
         ),
       ],
     )
@@ -216,6 +218,7 @@ pub fn doctor_does_not_write_probe_log_into_worktree_test() {
           branch_name: "night-shift/clean-task",
           pr_number: "",
           summary: "",
+          runtime_context: None,
         ),
       ],
     )
@@ -274,8 +277,10 @@ fn review_run() -> types.RunRecord {
         branch_name: "night-shift/rewrite-root",
         pr_number: "15",
         summary: "Updated rewrite-root",
+        runtime_context: None,
       ),
     ],
+    handoff_states: [],
   )
 }
 
