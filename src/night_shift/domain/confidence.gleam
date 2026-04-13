@@ -185,6 +185,9 @@ fn positive_reasons(
 
 fn unresolved_decision_requests_count(run: types.RunRecord) -> Int {
   run.tasks
+  |> list.filter(fn(task) {
+    types.task_requires_manual_attention(run.decisions, task)
+  })
   |> list.map(fn(task) {
     list.length(types.unresolved_decision_requests(run.decisions, task))
   })
