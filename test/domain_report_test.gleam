@@ -28,6 +28,18 @@ pub fn render_live_review_report_includes_repo_state_and_supersession_test() {
           message: "Accepted a recovered execution payload for task rewrite-root.\nRaw payload: /tmp/raw.jsonish\nSanitized payload: /tmp/recovered.json",
           task_id: Some("rewrite-root"),
         ),
+        types.RunEvent(
+          kind: "execution_payload_repair_started",
+          at: "2026-04-13T18:01:30Z",
+          message: "Attempting JSON-only payload repair for task rewrite-root.\nOriginal raw payload: /tmp/original.jsonish",
+          task_id: Some("rewrite-root"),
+        ),
+        types.RunEvent(
+          kind: "execution_payload_repair_succeeded",
+          at: "2026-04-13T18:01:45Z",
+          message: "Accepted a repaired execution payload for task rewrite-root with recovered trust.\nOriginal raw payload: /tmp/original.jsonish\nPayload repair raw payload: /tmp/repaired-raw.jsonish\nPayload repair sanitized payload: /tmp/repaired.json",
+          task_id: Some("rewrite-root"),
+        ),
       ],
       Some(repo_state_runtime.RepoStateView(
         snapshot_captured_at: "2026-04-13T17:30:00Z",
@@ -53,6 +65,8 @@ pub fn render_live_review_report_includes_repo_state_and_supersession_test() {
     contain: "Pruned superseded worktrees: 1",
   )
   assert string.contains(does: rendered, contain: "## Execution Recovery")
+  assert string.contains(does: rendered, contain: "Payload repair attempts: 1")
+  assert string.contains(does: rendered, contain: "Payload repair successes: 1")
 }
 
 pub fn render_persisted_review_report_uses_snapshot_without_live_repo_state_test() {

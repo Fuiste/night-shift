@@ -66,6 +66,24 @@ pub fn summary(
               <> "Execution recovery warnings: "
               <> int.to_string(event_count(events, "execution_payload_warning"))
               <> "\n"
+              <> "Payload repair attempts: "
+              <> int.to_string(event_count(
+                events,
+                "execution_payload_repair_started",
+              ))
+              <> "\n"
+              <> "Payload repair successes: "
+              <> int.to_string(event_count(
+                events,
+                "execution_payload_repair_succeeded",
+              ))
+              <> "\n"
+              <> "Payload repair failures: "
+              <> int.to_string(event_count(
+                events,
+                "execution_payload_repair_failed",
+              ))
+              <> "\n"
               <> "Ready implementation tasks: "
               <> int.to_string(ready_implementation_task_count(run.tasks))
               <> "\n"
@@ -86,6 +104,24 @@ pub fn summary(
               <> "\n"
               <> "Execution recovery warnings: "
               <> int.to_string(event_count(events, "execution_payload_warning"))
+              <> "\n"
+              <> "Payload repair attempts: "
+              <> int.to_string(event_count(
+                events,
+                "execution_payload_repair_started",
+              ))
+              <> "\n"
+              <> "Payload repair successes: "
+              <> int.to_string(event_count(
+                events,
+                "execution_payload_repair_succeeded",
+              ))
+              <> "\n"
+              <> "Payload repair failures: "
+              <> int.to_string(event_count(
+                events,
+                "execution_payload_repair_failed",
+              ))
               <> "\n"
               <> "Ready tasks: "
               <> int.to_string(ready_task_count(run.tasks))

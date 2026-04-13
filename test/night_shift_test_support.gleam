@@ -475,6 +475,69 @@ pub fn write_dirty_invalid_execution_fake_provider(
   )
 }
 
+pub fn write_payload_repair_success_fake_provider(
+  path: String,
+) -> Result(Nil, simplifile.FileError) {
+  simplifile.write(
+    "#!/bin/sh\n"
+      <> "MODE=$1\n"
+      <> "PROMPT_FILE=$2\n"
+      <> "if [ \"$MODE\" = \"plan\" ]; then\n"
+      <> "  printf 'planning\\nNIGHT_SHIFT_RESULT_START\\n{\"tasks\":[{\"id\":\"demo-task\",\"title\":\"Payload repair task\",\"description\":\"Write a file and recover from malformed execution JSON.\",\"dependencies\":[],\"acceptance\":[\"Create REPAIRED.md.\"],\"demo_plan\":[\"Show REPAIRED.md.\"],\"execution_mode\":\"serial\"}]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "elif [ \"$MODE\" = \"plan-doc\" ]; then\n"
+      <> "  printf 'planning-doc\\nNIGHT_SHIFT_RESULT_START\\n# Brief\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "elif grep -q 'captured task worktree changes' \"$PROMPT_FILE\"; then\n"
+      <> "  printf 'execution\\nNIGHT_SHIFT_RESULT_START\\n{\"status\":\"completed\",\"summary\":\"Payload repaired successfully\",\"files_touched\":[\"REPAIRED.md\"],\"demo_evidence\":[\"REPAIRED.md created\"],\"pr\":{\"title\":\"Repair payload task\",\"summary\":\"Keep the repaired documentation update.\",\"demo\":[\"REPAIRED.md created\"],\"risks\":[]},\"follow_up_tasks\":[]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "else\n"
+      <> "  printf 'payload repair success\\n' > REPAIRED.md\n"
+      <> "  printf 'execution\\nNIGHT_SHIFT_RESULT_START\\n{\"status\":\"completed\",\"summary\":\"Broken payload with changes\",\"files_touched\":[\"REPAIRED.md\"],\"demo_evidence\":[\"REPAIRED.md created\"],\"pr\":{\"title\":\"t\",\"summary\":\"s\",\"demo\":[],\"risks\":[]},\"follow_up_tasks\":[}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "fi\n",
+    to: path,
+  )
+}
+
+pub fn write_payload_repair_warning_fake_provider(
+  path: String,
+) -> Result(Nil, simplifile.FileError) {
+  simplifile.write(
+    "#!/bin/sh\n"
+      <> "MODE=$1\n"
+      <> "PROMPT_FILE=$2\n"
+      <> "if [ \"$MODE\" = \"plan\" ]; then\n"
+      <> "  printf 'planning\\nNIGHT_SHIFT_RESULT_START\\n{\"tasks\":[{\"id\":\"demo-task\",\"title\":\"Payload repair warning task\",\"description\":\"Return recoverable trailing junk during payload repair.\",\"dependencies\":[],\"acceptance\":[\"Create REPAIRED.md.\"],\"demo_plan\":[\"Show REPAIRED.md.\"],\"execution_mode\":\"serial\"}]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "elif [ \"$MODE\" = \"plan-doc\" ]; then\n"
+      <> "  printf 'planning-doc\\nNIGHT_SHIFT_RESULT_START\\n# Brief\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "elif grep -q 'captured task worktree changes' \"$PROMPT_FILE\"; then\n"
+      <> "  printf 'execution\\nNIGHT_SHIFT_RESULT_START\\n{\"status\":\"completed\",\"summary\":\"Payload repaired with trailing junk\",\"files_touched\":[\"REPAIRED.md\"],\"demo_evidence\":[\"REPAIRED.md created\"],\"pr\":{\"title\":\"Repair payload task\",\"summary\":\"Recovered a noisy payload.\",\"demo\":[\"REPAIRED.md created\"],\"risks\":[]},\"follow_up_tasks\":[]}}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "else\n"
+      <> "  printf 'payload repair warning\\n' > REPAIRED.md\n"
+      <> "  printf 'execution\\nNIGHT_SHIFT_RESULT_START\\n{\"status\":\"completed\",\"summary\":\"Broken payload with changes\",\"files_touched\":[\"REPAIRED.md\"],\"demo_evidence\":[\"REPAIRED.md created\"],\"pr\":{\"title\":\"t\",\"summary\":\"s\",\"demo\":[],\"risks\":[]},\"follow_up_tasks\":[}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "fi\n",
+    to: path,
+  )
+}
+
+pub fn write_payload_repair_unsafe_fake_provider(
+  path: String,
+) -> Result(Nil, simplifile.FileError) {
+  simplifile.write(
+    "#!/bin/sh\n"
+      <> "MODE=$1\n"
+      <> "PROMPT_FILE=$2\n"
+      <> "if [ \"$MODE\" = \"plan\" ]; then\n"
+      <> "  printf 'planning\\nNIGHT_SHIFT_RESULT_START\\n{\"tasks\":[{\"id\":\"demo-task\",\"title\":\"Unsafe payload repair task\",\"description\":\"Return an unsafe repaired path.\",\"dependencies\":[],\"acceptance\":[\"Reject unsafe repaired files_touched.\"],\"demo_plan\":[\"Reject /tmp/outside.txt.\"],\"execution_mode\":\"serial\"}]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "elif [ \"$MODE\" = \"plan-doc\" ]; then\n"
+      <> "  printf 'planning-doc\\nNIGHT_SHIFT_RESULT_START\\n# Brief\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "elif grep -q 'captured task worktree changes' \"$PROMPT_FILE\"; then\n"
+      <> "  printf 'execution\\nNIGHT_SHIFT_RESULT_START\\n{\"status\":\"completed\",\"summary\":\"Unsafe payload repair\",\"files_touched\":[\"/tmp/outside.txt\"],\"demo_evidence\":[\"Unsafe path\"],\"pr\":{\"title\":\"Unsafe repair\",\"summary\":\"Unsafe path\",\"demo\":[],\"risks\":[]},\"follow_up_tasks\":[]}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "else\n"
+      <> "  printf 'payload repair unsafe\\n' > REPAIRED.md\n"
+      <> "  printf 'execution\\nNIGHT_SHIFT_RESULT_START\\n{\"status\":\"completed\",\"summary\":\"Broken payload with changes\",\"files_touched\":[\"REPAIRED.md\"],\"demo_evidence\":[\"REPAIRED.md created\"],\"pr\":{\"title\":\"t\",\"summary\":\"s\",\"demo\":[],\"risks\":[]},\"follow_up_tasks\":[}\\nNIGHT_SHIFT_RESULT_END\\n'\n"
+      <> "fi\n",
+    to: path,
+  )
+}
+
 pub fn write_invalid_follow_up_fake_provider(
   path: String,
 ) -> Result(Nil, simplifile.FileError) {

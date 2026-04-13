@@ -5,6 +5,15 @@ import gleam/string
 import night_shift/domain/task_validation
 import night_shift/types
 
+pub type PayloadRepairSummary {
+  PayloadRepairSummary(
+    prompt_path: String,
+    log_path: String,
+    raw_payload_path: Option(String),
+    sanitized_payload_path: Option(String),
+  )
+}
+
 pub fn pluralize(count: Int, noun: String) -> String {
   case count == 1 {
     True -> "1 " <> noun
@@ -96,6 +105,7 @@ pub fn decode_manual_attention_summary(
   log_path: String,
   raw_payload_path: String,
   sanitized_payload_path: Option(String),
+  repair_summary: Option(PayloadRepairSummary),
 ) -> String {
   task_failure_summary(
     "Night Shift found candidate worktree changes, but could not trust the structured execution result.",
@@ -112,6 +122,22 @@ pub fn decode_manual_attention_summary(
       <> raw_payload_path
       <> case sanitized_payload_path {
       Some(path) -> "\nSanitized payload: " <> path
+      None -> ""
+    }
+      <> case repair_summary {
+      Some(summary) ->
+        "\nPayload repair prompt: "
+        <> summary.prompt_path
+        <> "\nPayload repair log: "
+        <> summary.log_path
+        <> case summary.raw_payload_path {
+          Some(path) -> "\nPayload repair raw payload: " <> path
+          None -> ""
+        }
+        <> case summary.sanitized_payload_path {
+          Some(path) -> "\nPayload repair sanitized payload: " <> path
+          None -> ""
+        }
       None -> ""
     },
   )

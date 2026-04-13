@@ -221,6 +221,29 @@ pub fn repair_prompt(task: types.Task, verification_output: String) -> String {
   <> verification_output
 }
 
+pub fn payload_repair_prompt(task: types.Task, decode_failure: String) -> String {
+  "You are Night Shift's execution provider.\n"
+  <> "Night Shift captured task worktree changes, but your previous structured execution result was invalid.\n"
+  <> "Do not modify files, run mutating commands, apply patches, or change git state.\n"
+  <> "Inspect the current worktree only and return one corrected execution JSON object between the exact sentinel markers below.\n"
+  <> "The content between the markers must be exactly one valid JSON object with no trailing braces, notes, or extra text.\n"
+  <> "Do not include shell transcripts, markdown fences, or explanatory prose inside the JSON payload.\n"
+  <> "Status must be one of: completed, blocked, failed, manual_attention.\n"
+  <> "Every `files_touched` entry must be a repo-relative path like `src/app.gleam`, never an absolute path.\n"
+  <> "Include follow_up_tasks only if they are still warranted by the existing worktree state.\n"
+  <> "The JSON shape is:\n"
+  <> provider_payload.start_marker
+  <> "\n"
+  <> "{\"status\":\"completed\",\"summary\":\"...\",\"files_touched\":[\"...\"],\"demo_evidence\":[\"...\"],\"pr\":{\"title\":\"...\",\"summary\":\"...\",\"demo\":[\"...\"],\"risks\":[\"...\"]},\"follow_up_tasks\":[{\"id\":\"...\",\"title\":\"...\",\"description\":\"...\",\"dependencies\":[\"...\"],\"acceptance\":[\"...\"],\"demo_plan\":[\"...\"],\"decision_requests\":[],\"superseded_pr_numbers\":[1],\"task_kind\":\"implementation\",\"execution_mode\":\"serial\"}]}\n"
+  <> provider_payload.end_marker
+  <> "\n\n"
+  <> "Previous decode failure:\n"
+  <> decode_failure
+  <> "\n\n"
+  <> "Task:\n"
+  <> render_task(task)
+}
+
 fn render_task(task: types.Task) -> String {
   "- ID: "
   <> task.id

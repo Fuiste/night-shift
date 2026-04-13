@@ -3,6 +3,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
+import night_shift/codec/provider_payload
 import night_shift/domain/decisions as decision_domain
 import night_shift/domain/run_state
 import night_shift/domain/summary as domain_summary
@@ -275,7 +276,7 @@ pub fn await_batch(
               }
             Error(message) -> Error(message)
           }
-        Error(error) -> handle_await_task_error(run, task_run, error)
+        Error(error) -> handle_await_task_error(config, run, task_run, error)
       }
 
       use updated_run <- result.try(next_run_result)
@@ -614,6 +615,7 @@ fn validate_follow_up_tasks(
 }
 
 fn handle_await_task_error(
+  config: types.Config,
   run: types.RunRecord,
   task_run: provider.TaskRun,
   error: provider.AwaitTaskError,
@@ -622,18 +624,7 @@ fn handle_await_task_error(
     provider.PayloadDecodeFailed(message, artifacts) ->
       case task_run_has_candidate_changes(run, task_run) {
         True ->
-          mark_task_with_event(
-            run,
-            task_run.task,
-            types.ManualAttention,
-            domain_summary.decode_manual_attention_summary(
-              task_run.task,
-              task_run.log_path,
-              artifacts.raw_payload_path,
-              artifacts.sanitized_payload_path,
-            ),
-            "task_manual_attention",
-          )
+          attempt_payload_repair(config, run, task_run, message, artifacts)
         False ->
           mark_task_with_event(
             run,
@@ -654,6 +645,134 @@ fn handle_await_task_error(
   }
 }
 
+fn attempt_payload_repair(
+  config: types.Config,
+  run: types.RunRecord,
+  task_run: provider.TaskRun,
+  decode_failure_message: String,
+  original_artifacts: provider_payload.PayloadArtifacts,
+) -> Result(types.RunRecord, String) {
+  use started_run <- result.try(journal.append_event(
+    run,
+    types.RunEvent(
+      kind: "execution_payload_repair_started",
+      at: system.timestamp(),
+      message: "Attempting JSON-only payload repair for task "
+        <> task_run.task.id
+        <> ".\nOriginal raw payload: "
+        <> original_artifacts.raw_payload_path,
+      task_id: Some(task_run.task.id),
+    ),
+  ))
+
+  let repair_result = case
+    worktree_setup.env_vars_for(
+      run.repo_root,
+      run.environment_name,
+      project.worktree_setup_path(run.repo_root),
+    )
+  {
+    Ok(env_vars) ->
+      provider.repair_execution_payload(
+        run.execution_agent,
+        run.repo_root,
+        task_run.worktree_path,
+        env_vars,
+        run.run_path,
+        task_run.task,
+        decode_failure_message,
+      )
+    Error(message) ->
+      Error(provider.PayloadRepairFailure(
+        "Unable to prepare the payload-repair environment for task "
+          <> task_run.task.id
+          <> ". "
+          <> message,
+        provider.PayloadRepairArtifacts(
+          prompt_path: filepath.join(
+            run.run_path,
+            "logs/" <> task_run.task.id <> ".payload-repair.prompt.md",
+          ),
+          log_path: filepath.join(
+            run.run_path,
+            "logs/" <> task_run.task.id <> ".payload-repair.log",
+          ),
+          raw_payload_path: None,
+          sanitized_payload_path: None,
+        ),
+      ))
+  }
+
+  case repair_result {
+    Ok(awaited_execution) -> {
+      use repaired_run <- result.try(journal.append_event(
+        started_run,
+        types.RunEvent(
+          kind: "execution_payload_repair_succeeded",
+          at: system.timestamp(),
+          message: payload_repair_success_message(
+            task_run.task.id,
+            original_artifacts,
+            awaited_execution,
+          ),
+          task_id: Some(task_run.task.id),
+        ),
+      ))
+      use warned_run <- result.try(append_execution_payload_warning(
+        repaired_run,
+        task_run,
+        awaited_execution,
+      ))
+      case
+        complete_task(
+          config,
+          warned_run,
+          task_run,
+          awaited_execution.execution_result,
+        )
+      {
+        Ok(updated_run) -> Ok(updated_run)
+        Error(message) ->
+          mark_task_with_event(
+            warned_run,
+            task_run.task,
+            types.Failed,
+            domain_summary.completion_failure_summary(message),
+            "task_failed",
+          )
+      }
+    }
+    Error(repair_failure) -> {
+      use repair_failed_run <- result.try(journal.append_event(
+        started_run,
+        types.RunEvent(
+          kind: "execution_payload_repair_failed",
+          at: system.timestamp(),
+          message: payload_repair_failure_message(
+            task_run.task.id,
+            original_artifacts,
+            repair_failure,
+          ),
+          task_id: Some(task_run.task.id),
+        ),
+      ))
+      mark_task_with_event(
+        repair_failed_run,
+        task_run.task,
+        types.ManualAttention,
+        domain_summary.decode_manual_attention_summary(
+          task_run.task,
+          task_run.log_path,
+          original_artifacts.raw_payload_path,
+          original_artifacts.sanitized_payload_path,
+          Some(payload_repair_summary(repair_failure.artifacts)),
+        ),
+        "task_manual_attention",
+      )
+    }
+  }
+}
+
 fn task_run_has_candidate_changes(
   run: types.RunRecord,
   task_run: provider.TaskRun,
@@ -671,6 +790,61 @@ fn task_run_has_candidate_changes(
   }
 
   has_dirty_worktree || has_new_commit
+}
+
+fn payload_repair_success_message(
+  task_id: String,
+  original_artifacts: provider_payload.PayloadArtifacts,
+  awaited_execution: provider.AwaitedExecution,
+) -> String {
+  "Accepted a repaired execution payload for task "
+  <> task_id
+  <> " with "
+  <> provider_payload.payload_trust_label(awaited_execution.trust)
+  <> " trust.\nOriginal raw payload: "
+  <> original_artifacts.raw_payload_path
+  <> "\nPayload repair raw payload: "
+  <> awaited_execution.artifacts.raw_payload_path
+  <> case awaited_execution.artifacts.sanitized_payload_path {
+    Some(path) -> "\nPayload repair sanitized payload: " <> path
+    None -> ""
+  }
+}
+
+fn payload_repair_failure_message(
+  task_id: String,
+  original_artifacts: provider_payload.PayloadArtifacts,
+  repair_failure: provider.PayloadRepairFailure,
+) -> String {
+  "Payload repair failed for task "
+  <> task_id
+  <> ".\nOriginal raw payload: "
+  <> original_artifacts.raw_payload_path
+  <> "\nPayload repair prompt: "
+  <> repair_failure.artifacts.prompt_path
+  <> "\nPayload repair log: "
+  <> repair_failure.artifacts.log_path
+  <> case repair_failure.artifacts.raw_payload_path {
+    Some(path) -> "\nPayload repair raw payload: " <> path
+    None -> ""
+  }
+  <> case repair_failure.artifacts.sanitized_payload_path {
+    Some(path) -> "\nPayload repair sanitized payload: " <> path
+    None -> ""
+  }
+  <> "\nFailure: "
+  <> repair_failure.message
+}
+
+fn payload_repair_summary(
+  artifacts: provider.PayloadRepairArtifacts,
+) -> domain_summary.PayloadRepairSummary {
+  domain_summary.PayloadRepairSummary(
+    prompt_path: artifacts.prompt_path,
+    log_path: artifacts.log_path,
+    raw_payload_path: artifacts.raw_payload_path,
+    sanitized_payload_path: artifacts.sanitized_payload_path,
+  )
 }
 
 fn await_task_error_message(error: provider.AwaitTaskError) -> String {
