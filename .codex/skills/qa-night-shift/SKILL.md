@@ -1,23 +1,27 @@
 ---
 name: qa-night-shift
-description: Use when the user wants to QA test Night Shift against a local repo path, investigate recent Night Shift changes with small real tasks, or validate init/plan/start/status/report/resolve/resume behavior through real provider harnesses.
+description: Use when the user wants to QA test Night Shift against a user-specified scratch repo path, install the current worktree CLI, and run an approval-gated real-provider pass to validate init/plan/start/status/report/resolve/resume behavior.
 ---
 
 # QA Night Shift
 
 Use this skill when the user wants an investigation-oriented Night Shift pass
-against a local repository on their machine.
+against a user-specified scratch repository on their machine.
 
 The user should provide:
 
-- a local repo path
+- a local scratch repo path
 - optionally, the specific change, regression, or expected behavior to
   investigate
 
 ## Goal
 
-Exercise the real Night Shift lifecycle in the target repo with small,
+Exercise the real Night Shift lifecycle in the target scratch repo with small,
 targeted tasks so you can confirm expected behavior and gather evidence.
+
+Before the QA run starts, install the currently worked-on Night Shift CLI from
+the present worktree and show the user exactly what you plan to do. Do not run
+the actual QA pass until the user explicitly approves it.
 
 ## Start Here
 
@@ -27,18 +31,35 @@ Inspect the target repo before mutating anything:
 - inspect whether `.night-shift/` already exists
 - inspect `git status --short`
 - inspect configured remotes
-- inspect whether the repo appears to be an intentional testing target
+- inspect whether the repo appears to be an intentional scratch or testing
+  target
 
 Treat names like `test`, `qa`, `fixture`, `sandbox`, `demo`, or `scratch` as
 positive signals, not proof.
 
+Then install the local CLI from the current worktree before proposing the QA
+pass.
+
+Run:
+
+```sh
+.codex/skills/update-local-night-shift-cli/scripts/install_local_cli.sh --source /path/to/current/worktree
+```
+
+Use the actual current repo path for `--source`. Let the install script derive
+its label unless the user asked for a specific one.
+
 ## Safety Gate
 
-This skill is for real Night Shift runs, including real delivery behavior.
+This skill is for real Night Shift runs, including real delivery behavior and
+real inference spend.
 
-- If the repo does not clearly look like a testing repo, stop and confirm with
-  the user before mutating it.
+- If the repo does not clearly look like a scratch or testing repo, stop and
+  confirm with the user before mutating it.
 - If it does look like an intentional testing target, proceed.
+- Even for an obvious scratch repo, do not run `night-shift plan`,
+  `night-shift start`, `night-shift resume`, or other inference-consuming QA
+  steps until the user approves the presented plan.
 
 Do not quietly assume a normal product repo is safe to use for QA.
 
@@ -70,9 +91,28 @@ Reset examples:
 
 Do not reset by default.
 
+## Approval Gate
+
+After inspection and local CLI installation, pause and present the exact QA
+pass before executing it.
+
+Include:
+
+- the target scratch repo path
+- whether `.night-shift/` already exists
+- the current repo cleanliness signals that matter to the run
+- which Night Shift CLI install you just pointed `night-shift` at
+- the small task or notes you intend to use
+- the specific `night-shift` commands you expect to run
+- a brief reminder that the pass uses a real repo and real inference tokens
+
+Wait for an explicit acceptance from the user. No acceptance, no QA run.
+
 ## Investigation Flow
 
 Prefer a small, request-shaped QA loop instead of broad autonomous work.
+
+Only enter this section after the approval gate is satisfied.
 
 Typical flow:
 
@@ -146,9 +186,13 @@ Collect evidence from:
 
 When a run finishes, inspect the generated report before drawing conclusions.
 
-## Wrap Up
+## Follow Up
 
-End with a QA summary tailored to the request:
+After the approved QA pass finishes, follow up in the way that best matches the
+chat context: investigation summary, bug confirmation, suggested next step,
+request for a narrower rerun, or another concrete handoff.
+
+Always include a QA summary tailored to the request:
 
 - what you tested
 - what happened
