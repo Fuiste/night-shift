@@ -155,12 +155,19 @@ fn diagnose_task(
         ],
       )
     types.Running ->
-      diagnose_running_task(task, execution_log, worktree_exists, mounted_worktree)
+      diagnose_running_task(
+        task,
+        run_path,
+        execution_log,
+        worktree_exists,
+        mounted_worktree,
+      )
   }
 }
 
 fn diagnose_running_task(
   task: types.Task,
+  run_path: String,
   execution_log: String,
   worktree_exists: Bool,
   mounted_worktree: Result(Option(String), String),
@@ -184,10 +191,12 @@ fn diagnose_running_task(
               "Recorded worktree path no longer exists on disk.",
             ],
           )
-        True ->
+        True -> {
+          let doctor_git_log =
+            filepath.join(run_path, "logs/" <> task.id <> ".doctor.has-changes.log")
           case git.has_changes(
             task.worktree_path,
-            filepath.join(task.worktree_path, ".night-shift-doctor.log"),
+            doctor_git_log,
           ) {
             True ->
               TaskAssessment(
@@ -200,6 +209,7 @@ fn diagnose_running_task(
             False ->
               diagnose_clean_running_task(task, execution_log, mounted_worktree)
           }
+        }
       }
   }
 }

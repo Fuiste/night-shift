@@ -4,9 +4,11 @@ import gleam/string
 import night_shift/dashboard
 import night_shift/domain/provenance as provenance_domain
 import night_shift/domain/repo_state
+import night_shift/git
 import night_shift/journal
 import night_shift/report
 import night_shift/repo_state_runtime
+import night_shift/shell
 import night_shift/system
 import night_shift/types
 import night_shift/usecase/doctor
@@ -165,6 +167,71 @@ pub fn doctor_flags_dirty_and_missing_worktrees_test() {
   assert string.contains(does: rendered, contain: "[manual_attention] Dirty task")
   assert string.contains(does: rendered, contain: "[irrecoverable] Missing task")
 
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn doctor_does_not_write_probe_log_into_worktree_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    support.absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-doctor-clean-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let brief_path = filepath.join(base_dir, "brief.md")
+  let worktree_path = filepath.join(base_dir, "clean-worktree")
+  let probe_path = filepath.join(worktree_path, ".night-shift-doctor.log")
+  let git_log = filepath.join(base_dir, "worktree-add.log")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
+  support.seed_git_repo(repo_root, base_dir)
+  let assert Ok(_) =
+    git.create_worktree(
+      repo_root,
+      worktree_path,
+      "night-shift/clean-task",
+      "main",
+      git_log,
+    )
+  let assert Ok(run) = support.start_run(repo_root, brief_path, types.Codex, 1)
+  let updated_run =
+    types.RunRecord(
+      ..run,
+      tasks: [
+        types.Task(
+          id: "clean-task",
+          title: "Clean task",
+          description: "",
+          dependencies: [],
+          acceptance: [],
+          demo_plan: [],
+          decision_requests: [],
+          superseded_pr_numbers: [],
+          kind: types.ImplementationTask,
+          execution_mode: types.Serial,
+          state: types.Running,
+          worktree_path: worktree_path,
+          branch_name: "night-shift/clean-task",
+          pr_number: "",
+          summary: "",
+        ),
+      ],
+    )
+  let assert Ok(_) = journal.rewrite_run(updated_run)
+  let assert Ok(rendered) =
+    doctor.execute(repo_root, types.LatestRun, types.default_config())
+
+  assert string.contains(does: rendered, contain: "[resume_with_warning] Clean task")
+  let assert Error(_) = simplifile.read(probe_path)
+
+  let _ =
+    shell.run(
+      "git worktree remove --force " <> shell.quote(worktree_path),
+      repo_root,
+      filepath.join(base_dir, "worktree-remove.log"),
+    )
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
 
