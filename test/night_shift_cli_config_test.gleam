@@ -1,0 +1,209 @@
+import gleam/option.{None, Some}
+import gleam/string
+import night_shift/agent_config
+import night_shift/cli
+import night_shift/config
+import night_shift/types
+import night_shift/worktree_setup
+
+pub fn parse_start_command_test() {
+  let assert Ok(types.Start(types.RunId("run-123"), False)) =
+    cli.parse(["start", "--run", "run-123"])
+}
+
+pub fn parse_init_command_test() {
+  let assert Ok(types.Init(agent_overrides, True, True)) =
+    cli.parse([
+      "init",
+      "--provider",
+      "cursor",
+      "--generate-setup",
+      "--yes",
+    ])
+
+  assert agent_overrides.provider == Some(types.Cursor)
+}
+
+pub fn parse_reset_command_test() {
+  let assert Ok(types.Reset(True, True)) =
+    cli.parse(["reset", "--yes", "--force"])
+}
+
+pub fn parse_plan_command_test() {
+  let assert Ok(types.Plan(Some("notes.md"), None, False, agent_overrides)) =
+    cli.parse(["plan", "--notes", "notes.md"])
+  assert agent_overrides == types.empty_agent_overrides()
+}
+
+pub fn parse_plan_command_with_doc_and_provider_test() {
+  let assert Ok(types.Plan(
+    Some("notes.md"),
+    Some("custom.md"),
+    False,
+    agent_overrides,
+  )) =
+    cli.parse([
+      "plan",
+      "--notes",
+      "notes.md",
+      "--doc",
+      "custom.md",
+      "--provider",
+      "cursor",
+    ])
+
+  assert agent_overrides.provider == Some(types.Cursor)
+}
+
+pub fn parse_plan_from_reviews_without_notes_test() {
+  let assert Ok(types.Plan(None, None, True, agent_overrides)) =
+    cli.parse(["plan", "--from-reviews"])
+
+  assert agent_overrides == types.empty_agent_overrides()
+}
+
+pub fn parse_status_defaults_to_latest_test() {
+  let assert Ok(types.Status(types.LatestRun)) = cli.parse(["status"])
+}
+
+pub fn parse_start_command_with_ui_test() {
+  let assert Ok(types.Start(types.LatestRun, True)) =
+    cli.parse(["start", "--ui"])
+}
+
+pub fn parse_start_command_without_brief_test() {
+  let assert Ok(types.Start(types.LatestRun, False)) = cli.parse(["start"])
+}
+
+pub fn parse_plan_requires_notes_test() {
+  let assert Error(message) = cli.parse(["plan"])
+  assert message == "The plan command requires --notes <file-or-inline-text>."
+}
+
+pub fn parse_resolve_defaults_to_latest_test() {
+  let assert Ok(types.Resolve(types.LatestRun)) = cli.parse(["resolve"])
+}
+
+pub fn parse_resume_command_with_ui_test() {
+  let assert Ok(types.Resume(types.RunId("run-123"), True)) =
+    cli.parse(["resume", "--run", "run-123", "--ui"])
+}
+
+pub fn parse_resume_rejects_environment_flag_test() {
+  let assert Error(message) = cli.parse(["resume", "--environment", "dev"])
+  assert message == "Unsupported flag: --environment"
+}
+
+pub fn parse_review_command_guides_to_plan_from_reviews_test() {
+  let assert Error(message) = cli.parse(["review", "--environment", "dev"])
+  assert message
+    == "`night-shift review` was replaced by `night-shift plan --from-reviews`."
+}
+
+pub fn parse_demo_command_test() {
+  let assert Ok(types.Demo(False)) = cli.parse(["--demo"])
+}
+
+pub fn parse_demo_command_with_ui_test() {
+  let assert Ok(types.Demo(True)) = cli.parse(["--demo", "--ui"])
+}
+
+pub fn parse_default_config_values_test() {
+  let assert Ok(parsed) =
+    config.parse("base_branch = \"develop\"\nmax_workers = 2")
+  assert parsed.base_branch == "develop"
+  assert parsed.max_workers == 2
+  assert parsed.default_profile == "default"
+}
+
+pub fn parse_empty_worktree_setup_rejected_test() {
+  let assert Error(message) = worktree_setup.parse("")
+  assert string.contains(does: message, contain: "empty")
+}
+
+pub fn parse_multiline_worktree_command_lists_test() {
+  let source =
+    "version = 1\n"
+    <> "default_environment = \"default\"\n\n"
+    <> "[environments.default.env]\n"
+    <> "HUSKY = \"0\"\n\n"
+    <> "[environments.default.setup]\n"
+    <> "default = [\n"
+    <> "  \"pnpm install --frozen-lockfile\",\n"
+    <> "]\n"
+    <> "macos = []\n"
+    <> "linux = []\n"
+    <> "windows = []\n\n"
+    <> "[environments.default.maintenance]\n"
+    <> "default = [\n"
+    <> "  \"pnpm run lint\",\n"
+    <> "  \"pnpm run test\",\n"
+    <> "]\n"
+    <> "macos = []\n"
+    <> "linux = []\n"
+    <> "windows = []\n"
+
+  let assert Ok(parsed) = worktree_setup.parse(source)
+  let assert Ok(environment) =
+    worktree_setup.find_environment(parsed, "default")
+
+  assert environment.env_vars == [#("HUSKY", "0")]
+  assert environment.setup.default == ["pnpm install --frozen-lockfile"]
+  assert environment.maintenance.default == ["pnpm run lint", "pnpm run test"]
+}
+
+pub fn parse_profile_config_test() {
+  let source =
+    "default_profile = \"default\"\n"
+    <> "planning_profile = \"planner\"\n"
+    <> "[profiles.planner]\n"
+    <> "provider = \"codex\"\n"
+    <> "model = \"gpt-5.4-mini\"\n"
+    <> "reasoning = \"medium\"\n"
+    <> "[profiles.planner.provider_overrides]\n"
+    <> "mode = \"plan\"\n"
+
+  let assert Ok(parsed) = config.parse(source)
+  let assert [default_profile, planner, ..] = parsed.profiles
+
+  assert parsed.planning_profile == "planner"
+  assert default_profile.name == "default"
+  assert planner.name == "planner"
+  assert planner.provider == types.Codex
+  assert planner.model == Some("gpt-5.4-mini")
+  assert planner.reasoning == Some(types.Medium)
+  assert planner.provider_overrides
+    == [types.ProviderOverride(key: "mode", value: "plan")]
+}
+
+pub fn default_profile_is_phase_fallback_test() {
+  let source =
+    "default_profile = \"reviewer\"\n"
+    <> "[profiles.reviewer]\n"
+    <> "provider = \"cursor\"\n"
+
+  let assert Ok(parsed) = config.parse(source)
+  let assert Ok(planning_agent) =
+    agent_config.resolve_plan_agent(parsed, types.empty_agent_overrides())
+  let assert Ok(#(_planning_agent, execution_agent)) =
+    agent_config.resolve_start_agents(parsed, types.empty_agent_overrides())
+  let assert Ok(review_agent) =
+    agent_config.resolve_review_agent(parsed, types.empty_agent_overrides())
+
+  assert planning_agent.profile_name == "reviewer"
+  assert planning_agent.provider == types.Cursor
+  assert execution_agent.profile_name == "reviewer"
+  assert review_agent.profile_name == "reviewer"
+}
+
+pub fn parse_notifiers_and_verification_commands_test() {
+  let source =
+    "notifiers = [\"console\", \"report_file\"]\n"
+    <> "[verification]\n"
+    <> "commands = [\"gleam test\", \"npm test\"]\n"
+
+  let assert Ok(parsed) = config.parse(source)
+
+  assert parsed.notifiers == [types.ConsoleNotifier, types.ReportFileNotifier]
+  assert parsed.verification_commands == ["gleam test", "npm test"]
+}

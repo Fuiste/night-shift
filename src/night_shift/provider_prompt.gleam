@@ -3,6 +3,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
 import night_shift/codec/provider_payload
+import night_shift/domain/repo_state
 import night_shift/types
 import night_shift/worktree_setup
 
@@ -10,7 +11,7 @@ pub fn planner_prompt(
   brief_contents: String,
   decisions: List(types.RecordedDecision),
   completed_tasks: List(types.Task),
-  repo_state_snapshot: Option(types.RepoStateSnapshot),
+  repo_state_snapshot: Option(repo_state.RepoStateSnapshot),
 ) -> String {
   planner_prompt_with_feedback(
     brief_contents,
@@ -25,7 +26,7 @@ pub fn planner_prompt_with_feedback(
   brief_contents: String,
   decisions: List(types.RecordedDecision),
   completed_tasks: List(types.Task),
-  repo_state_snapshot: Option(types.RepoStateSnapshot),
+  repo_state_snapshot: Option(repo_state.RepoStateSnapshot),
   retry_feedback: Option(String),
 ) -> String {
   "You are Night Shift's planning provider.\n"
@@ -82,7 +83,7 @@ pub fn planning_document_prompt(
   notes_contents notes_contents: Option(String),
   existing_doc_contents existing_doc_contents: String,
   doc_path doc_path: String,
-  repo_state_snapshot repo_state_snapshot: Option(types.RepoStateSnapshot),
+  repo_state_snapshot repo_state_snapshot: Option(repo_state.RepoStateSnapshot),
 ) -> String {
   planning_document_prompt_with_feedback(
     notes_contents,
@@ -97,7 +98,7 @@ pub fn planning_document_prompt_with_feedback(
   notes_contents notes_contents: Option(String),
   existing_doc_contents existing_doc_contents: String,
   doc_path doc_path: String,
-  repo_state_snapshot repo_state_snapshot: Option(types.RepoStateSnapshot),
+  repo_state_snapshot repo_state_snapshot: Option(repo_state.RepoStateSnapshot),
   retry_feedback retry_feedback: Option(String),
 ) -> String {
   "You are Night Shift's planning provider.\n"
@@ -282,7 +283,7 @@ fn render_completed_tasks(tasks: List(types.Task)) -> String {
 }
 
 fn render_repo_state_snapshot(
-  repo_state_snapshot: Option(types.RepoStateSnapshot),
+  repo_state_snapshot: Option(repo_state.RepoStateSnapshot),
 ) -> String {
   case repo_state_snapshot {
     None -> "(none)"
@@ -340,7 +341,7 @@ fn render_inline_list(values: List(String)) -> String {
 }
 
 fn render_review_planning_guidance(
-  repo_state_snapshot: Option(types.RepoStateSnapshot),
+  repo_state_snapshot: Option(repo_state.RepoStateSnapshot),
 ) -> String {
   case repo_state_snapshot {
     None -> ""

@@ -3,10 +3,11 @@ import gleam/list
 import gleam/order
 import gleam/result
 import gleam/string
+import night_shift/domain/repo_state
 import night_shift/types
 
 pub fn derive_superseded_pr_numbers(
-  snapshot: types.RepoStateSnapshot,
+  snapshot: repo_state.RepoStateSnapshot,
   tasks: List(types.Task),
 ) -> Result(List(types.Task), String) {
   let impacted_prs =
@@ -42,8 +43,8 @@ pub fn derive_superseded_pr_numbers(
 }
 
 fn impacted_pr_layers(
-  prs: List(types.RepoPullRequestSnapshot),
-) -> Result(List(List(types.RepoPullRequestSnapshot)), String) {
+  prs: List(repo_state.RepoPullRequestSnapshot),
+) -> Result(List(List(repo_state.RepoPullRequestSnapshot)), String) {
   use depth_pairs <- result.try(
     prs
     |> list.try_map(fn(pr) {
@@ -67,8 +68,8 @@ fn implementation_task_layers(
 }
 
 fn impacted_pr_depth(
-  pr: types.RepoPullRequestSnapshot,
-  prs: List(types.RepoPullRequestSnapshot),
+  pr: repo_state.RepoPullRequestSnapshot,
+  prs: List(repo_state.RepoPullRequestSnapshot),
   seen_heads: List(String),
 ) -> Result(Int, String) {
   case list.contains(seen_heads, pr.head_ref_name) {
@@ -113,7 +114,7 @@ fn implementation_task_depth(
 }
 
 fn match_layers(
-  impacted_layers: List(List(types.RepoPullRequestSnapshot)),
+  impacted_layers: List(List(repo_state.RepoPullRequestSnapshot)),
   implementation_layers: List(List(types.Task)),
 ) -> Result(List(#(String, Int)), String) {
   case list.length(impacted_layers) == list.length(implementation_layers) {
@@ -137,7 +138,9 @@ fn match_layers(
 }
 
 fn match_layer_pairs(
-  layer_pairs: List(#(List(types.RepoPullRequestSnapshot), List(types.Task))),
+  layer_pairs: List(
+    #(List(repo_state.RepoPullRequestSnapshot), List(types.Task)),
+  ),
 ) -> Result(List(#(String, Int)), String) {
   layer_pairs
   |> list.try_fold([], fn(acc, pair) {
@@ -174,8 +177,8 @@ fn match_layer_pairs(
 }
 
 fn group_pr_layers(
-  depth_pairs: List(#(Int, types.RepoPullRequestSnapshot)),
-) -> List(List(types.RepoPullRequestSnapshot)) {
+  depth_pairs: List(#(Int, repo_state.RepoPullRequestSnapshot)),
+) -> List(List(repo_state.RepoPullRequestSnapshot)) {
   depth_pairs
   |> list.sort(fn(left, right) {
     case int.compare(left.0, right.0) {
@@ -204,10 +207,10 @@ fn group_task_layers(
 }
 
 fn append_pr_to_layer(
-  layers: List(#(Int, List(types.RepoPullRequestSnapshot))),
+  layers: List(#(Int, List(repo_state.RepoPullRequestSnapshot))),
   depth: Int,
-  pr: types.RepoPullRequestSnapshot,
-) -> List(#(Int, List(types.RepoPullRequestSnapshot))) {
+  pr: repo_state.RepoPullRequestSnapshot,
+) -> List(#(Int, List(repo_state.RepoPullRequestSnapshot))) {
   case layers {
     [] -> [#(depth, [pr])]
     [#(existing_depth, prs), ..rest] ->
@@ -251,9 +254,9 @@ fn implementation_parent_tasks(
 }
 
 fn find_pr_by_head_ref(
-  prs: List(types.RepoPullRequestSnapshot),
+  prs: List(repo_state.RepoPullRequestSnapshot),
   head_ref_name: String,
-) -> Result(types.RepoPullRequestSnapshot, Nil) {
+) -> Result(repo_state.RepoPullRequestSnapshot, Nil) {
   prs
   |> list.find(fn(pr) { pr.head_ref_name == head_ref_name })
   |> result.map_error(fn(_) { Nil })

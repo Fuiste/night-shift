@@ -58,8 +58,8 @@ fn pr_snapshot(
   base_ref_name: String,
   actionable: Bool,
   impacted: Bool,
-) -> types.RepoPullRequestSnapshot {
-  types.RepoPullRequestSnapshot(
+) -> repo_state.RepoPullRequestSnapshot {
+  repo_state.RepoPullRequestSnapshot(
     number: number,
     title: "PR " <> int.to_string(number),
     url: "https://example.com/pr/" <> int.to_string(number),

@@ -5,6 +5,7 @@
 
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import night_shift/domain/repo_state
 
 /// Default filename used for the repo-local execution brief.
 pub const default_brief_filename = "execution-brief.md"
@@ -297,31 +298,6 @@ pub fn planning_provenance_uses_reviews(provenance: PlanningProvenance) -> Bool 
   }
 }
 
-/// Snapshot of one open Night Shift pull request at planning time.
-pub type RepoPullRequestSnapshot {
-  RepoPullRequestSnapshot(
-    number: Int,
-    title: String,
-    url: String,
-    head_ref_name: String,
-    base_ref_name: String,
-    review_decision: String,
-    failing_checks: List(String),
-    review_comments: List(String),
-    actionable: Bool,
-    impacted: Bool,
-  )
-}
-
-/// Captured repo-local view of open Night Shift pull requests.
-pub type RepoStateSnapshot {
-  RepoStateSnapshot(
-    captured_at: String,
-    digest: String,
-    open_pull_requests: List(RepoPullRequestSnapshot),
-  )
-}
-
 /// A planner-emitted task that should be merged into a running graph later.
 pub type FollowUpTask {
   FollowUpTask(
@@ -473,7 +449,7 @@ pub type RunRecord {
     max_workers: Int,
     notes_source: Option(NotesSource),
     planning_provenance: Option(PlanningProvenance),
-    repo_state_snapshot: Option(RepoStateSnapshot),
+    repo_state_snapshot: Option(repo_state.RepoStateSnapshot),
     decisions: List(RecordedDecision),
     planning_dirty: Bool,
     status: RunStatus,

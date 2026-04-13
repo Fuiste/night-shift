@@ -1,5 +1,6 @@
 import gleam/option.{type Option, None, Some}
 import gleam/result
+import night_shift/domain/repo_state
 import night_shift/journal
 import night_shift/types
 import night_shift/usecase/support/filesystem
@@ -14,7 +15,7 @@ pub fn prepare_planning_run(
   max_workers: Int,
   notes_source: Option(types.NotesSource),
   planning_provenance: types.PlanningProvenance,
-  repo_state_snapshot: Option(types.RepoStateSnapshot),
+  repo_state_snapshot: Option(repo_state.RepoStateSnapshot),
 ) -> Result(#(types.RunRecord, Bool), String) {
   case journal.latest_reusable_run(repo_root) {
     Ok(Some(existing_run)) -> {

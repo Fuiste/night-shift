@@ -1,15 +1,37 @@
 import gleam/int
 import gleam/list
 import gleam/string
-import night_shift/types
 
 @external(erlang, "night_shift_repo_state_ffi", "sha256_hex")
 fn sha256_hex(value: String) -> String
 
+pub type RepoPullRequestSnapshot {
+  RepoPullRequestSnapshot(
+    number: Int,
+    title: String,
+    url: String,
+    head_ref_name: String,
+    base_ref_name: String,
+    review_decision: String,
+    failing_checks: List(String),
+    review_comments: List(String),
+    actionable: Bool,
+    impacted: Bool,
+  )
+}
+
+pub type RepoStateSnapshot {
+  RepoStateSnapshot(
+    captured_at: String,
+    digest: String,
+    open_pull_requests: List(RepoPullRequestSnapshot),
+  )
+}
+
 pub fn snapshot(
   captured_at: String,
-  open_pull_requests: List(types.RepoPullRequestSnapshot),
-) -> types.RepoStateSnapshot {
+  open_pull_requests: List(RepoPullRequestSnapshot),
+) -> RepoStateSnapshot {
   let impacted_heads =
     impacted_head_refs(
       open_pull_requests,
@@ -18,38 +40,35 @@ pub fn snapshot(
   let annotated =
     open_pull_requests
     |> list.map(fn(pr) {
-      types.RepoPullRequestSnapshot(
+      RepoPullRequestSnapshot(
         ..pr,
         impacted: list.contains(impacted_heads, pr.head_ref_name),
       )
     })
 
-  types.RepoStateSnapshot(
+  RepoStateSnapshot(
     captured_at: captured_at,
     digest: digest(annotated),
     open_pull_requests: annotated,
   )
 }
 
-pub fn open_pr_count(snapshot: types.RepoStateSnapshot) -> Int {
+pub fn open_pr_count(snapshot: RepoStateSnapshot) -> Int {
   list.length(snapshot.open_pull_requests)
 }
 
-pub fn actionable_pr_count(snapshot: types.RepoStateSnapshot) -> Int {
+pub fn actionable_pr_count(snapshot: RepoStateSnapshot) -> Int {
   snapshot.open_pull_requests
   |> list.filter(fn(pr) { pr.actionable })
   |> list.length
 }
 
-pub fn drifted(
-  stored: types.RepoStateSnapshot,
-  live: types.RepoStateSnapshot,
-) -> Bool {
+pub fn drifted(stored: RepoStateSnapshot, live: RepoStateSnapshot) -> Bool {
   stored.digest != live.digest
 }
 
 fn actionable_head_refs(
-  open_pull_requests: List(types.RepoPullRequestSnapshot),
+  open_pull_requests: List(RepoPullRequestSnapshot),
 ) -> List(String) {
   open_pull_requests
   |> list.filter(fn(pr) { pr.actionable })
@@ -57,7 +76,7 @@ fn actionable_head_refs(
 }
 
 fn impacted_head_refs(
-  open_pull_requests: List(types.RepoPullRequestSnapshot),
+  open_pull_requests: List(RepoPullRequestSnapshot),
   acc: List(String),
 ) -> List(String) {
   let expanded =
@@ -78,7 +97,7 @@ fn impacted_head_refs(
   }
 }
 
-fn digest(open_pull_requests: List(types.RepoPullRequestSnapshot)) -> String {
+fn digest(open_pull_requests: List(RepoPullRequestSnapshot)) -> String {
   open_pull_requests
   |> list.map(canonical_pr_line)
   |> list.sort(fn(left, right) { string.compare(left, right) })
@@ -86,7 +105,7 @@ fn digest(open_pull_requests: List(types.RepoPullRequestSnapshot)) -> String {
   |> sha256_hex
 }
 
-fn canonical_pr_line(pr: types.RepoPullRequestSnapshot) -> String {
+fn canonical_pr_line(pr: RepoPullRequestSnapshot) -> String {
   string.join(
     [
       "number=" <> int_string(pr.number),

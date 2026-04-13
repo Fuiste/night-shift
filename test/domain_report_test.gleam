@@ -1,5 +1,6 @@
 import gleam/option.{None, Some}
 import gleam/string
+import night_shift/domain/repo_state
 import night_shift/repo_state_runtime
 import night_shift/report
 import night_shift/types
@@ -127,12 +128,12 @@ fn replacement_task(
   )
 }
 
-fn repo_state_snapshot() -> types.RepoStateSnapshot {
-  types.RepoStateSnapshot(
+fn repo_state_snapshot() -> repo_state.RepoStateSnapshot {
+  repo_state.RepoStateSnapshot(
     captured_at: "2026-04-13T17:30:00Z",
     digest: "digest",
     open_pull_requests: [
-      types.RepoPullRequestSnapshot(
+      repo_state.RepoPullRequestSnapshot(
         number: 12,
         title: "Root rewrite",
         url: "https://example.test/pr/12",
@@ -144,7 +145,7 @@ fn repo_state_snapshot() -> types.RepoStateSnapshot {
         actionable: True,
         impacted: True,
       ),
-      types.RepoPullRequestSnapshot(
+      repo_state.RepoPullRequestSnapshot(
         number: 13,
         title: "Descendant links",
         url: "https://example.test/pr/13",

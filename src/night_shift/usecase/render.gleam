@@ -4,6 +4,7 @@ import gleam/option.{type Option, None, Some}
 import gleam/string
 import night_shift/agent_config
 import night_shift/domain/decisions as decision_domain
+import night_shift/domain/review_run_projection
 import night_shift/repo_state_runtime
 import night_shift/types
 import night_shift/usecase/result
@@ -57,7 +58,7 @@ pub fn render_status(view: result.StatusResult) -> String {
   <> agent_config.summary(view.run.execution_agent)
   <> "\nNotes: "
   <> render_notes_source(view.run.notes_source)
-  <> render_repo_state_fragment(view.repo_state_view)
+  <> render_repo_state_fragment(view.run, view.repo_state_view)
   <> "\n"
   <> view.summary
   <> "\nEvents: "
@@ -139,7 +140,7 @@ fn render_run_outcome(
   <> render_planning_provenance(run.planning_provenance)
   <> "\nNotes: "
   <> render_notes_source(run.notes_source)
-  <> render_repo_state_fragment(repo_state_view)
+  <> render_repo_state_fragment(run, repo_state_view)
   <> "\nReport: "
   <> run.report_path
   <> "\nJournal: "
@@ -175,11 +176,16 @@ fn render_optional_list(entries: List(String)) -> String {
 }
 
 fn render_repo_state_fragment(
+  run: types.RunRecord,
   repo_state_view: Option(repo_state_runtime.RepoStateView),
 ) -> String {
-  case repo_state_view {
-    Some(view) -> "\n" <> repo_state_runtime.render_summary(view)
-    None -> ""
+  case review_run_projection.repo_state_summary(run, repo_state_view) {
+    Some(summary) -> "\n" <> review_run_projection.render_status_lines(summary)
+    None ->
+      case repo_state_view {
+        Some(view) -> "\n" <> repo_state_runtime.render_summary(view)
+        None -> ""
+      }
   }
 }
 

@@ -3,6 +3,7 @@ import gleam/json
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
+import night_shift/domain/repo_state
 import night_shift/types
 
 pub fn encode_run(run: types.RunRecord) -> String {
@@ -111,7 +112,9 @@ fn encode_planning_provenance(provenance: types.PlanningProvenance) -> json.Json
   }
 }
 
-fn encode_repo_state_snapshot(snapshot: types.RepoStateSnapshot) -> json.Json {
+fn encode_repo_state_snapshot(
+  snapshot: repo_state.RepoStateSnapshot,
+) -> json.Json {
   json.object([
     #("captured_at", json.string(snapshot.captured_at)),
     #("digest", json.string(snapshot.digest)),
@@ -123,7 +126,7 @@ fn encode_repo_state_snapshot(snapshot: types.RepoStateSnapshot) -> json.Json {
 }
 
 fn encode_repo_pull_request_snapshot(
-  snapshot: types.RepoPullRequestSnapshot,
+  snapshot: repo_state.RepoPullRequestSnapshot,
 ) -> json.Json {
   json.object([
     #("number", json.int(snapshot.number)),
@@ -491,14 +494,14 @@ fn planning_provenance_decoder() -> decode.Decoder(types.PlanningProvenance) {
   }
 }
 
-fn repo_state_snapshot_decoder() -> decode.Decoder(types.RepoStateSnapshot) {
+fn repo_state_snapshot_decoder() -> decode.Decoder(repo_state.RepoStateSnapshot) {
   use captured_at <- decode.field("captured_at", decode.string)
   use digest <- decode.field("digest", decode.string)
   use open_pull_requests <- decode.field(
     "open_pull_requests",
     decode.list(repo_pull_request_snapshot_decoder()),
   )
-  decode.success(types.RepoStateSnapshot(
+  decode.success(repo_state.RepoStateSnapshot(
     captured_at: captured_at,
     digest: digest,
     open_pull_requests: open_pull_requests,
@@ -506,7 +509,7 @@ fn repo_state_snapshot_decoder() -> decode.Decoder(types.RepoStateSnapshot) {
 }
 
 fn repo_pull_request_snapshot_decoder() -> decode.Decoder(
-  types.RepoPullRequestSnapshot,
+  repo_state.RepoPullRequestSnapshot,
 ) {
   use number <- decode.field("number", decode.int)
   use title <- decode.field("title", decode.string)
@@ -524,7 +527,7 @@ fn repo_pull_request_snapshot_decoder() -> decode.Decoder(
   )
   use actionable <- decode.field("actionable", decode.bool)
   use impacted <- decode.field("impacted", decode.bool)
-  decode.success(types.RepoPullRequestSnapshot(
+  decode.success(repo_state.RepoPullRequestSnapshot(
     number: number,
     title: title,
     url: url,

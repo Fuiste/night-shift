@@ -1,6 +1,7 @@
 //// Public journal facade over Night Shift persistence.
 
 import gleam/option.{type Option}
+import night_shift/domain/repo_state
 import night_shift/infra/run_store
 import night_shift/types
 
@@ -53,7 +54,7 @@ pub fn create_pending_run_with_context(
   max_workers: Int,
   notes_source: Option(types.NotesSource),
   planning_provenance: Option(types.PlanningProvenance),
-  repo_state_snapshot: Option(types.RepoStateSnapshot),
+  repo_state_snapshot: Option(repo_state.RepoStateSnapshot),
 ) -> Result(types.RunRecord, String) {
   run_store.create_pending_run_with_context(
     repo_root,

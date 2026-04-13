@@ -11,6 +11,7 @@ import gleam/result
 import gleam/string
 import night_shift/codec/artifact_path
 import night_shift/codec/provider_payload
+import night_shift/domain/repo_state
 import night_shift/infra/log_cleanup
 import night_shift/journal
 import night_shift/provider_command
@@ -89,7 +90,7 @@ pub fn plan_document(
   repo_root: String,
   notes_source: Option(types.NotesSource),
   doc_path: String,
-  repo_state_snapshot: Option(types.RepoStateSnapshot),
+  repo_state_snapshot: Option(repo_state.RepoStateSnapshot),
 ) -> Result(#(String, String), String) {
   let artifact_path = planning_artifact_path(repo_root)
   use _ <- result.try(create_directory(artifact_path))
@@ -180,7 +181,7 @@ pub fn plan_tasks(
   repo_root: String,
   brief_path: String,
   run_path: String,
-  repo_state_snapshot: Option(types.RepoStateSnapshot),
+  repo_state_snapshot: Option(repo_state.RepoStateSnapshot),
   decisions: List(types.RecordedDecision),
   completed_tasks: List(types.Task),
 ) -> Result(List(types.Task), String) {
@@ -203,7 +204,7 @@ pub fn plan_tasks_attempt(
   repo_root: String,
   brief_path: String,
   run_path: String,
-  repo_state_snapshot: Option(types.RepoStateSnapshot),
+  repo_state_snapshot: Option(repo_state.RepoStateSnapshot),
   decisions: List(types.RecordedDecision),
   completed_tasks: List(types.Task),
   attempt: Int,
@@ -536,7 +537,7 @@ fn plan_document_attempt(
   repo_root: String,
   notes_source: Option(types.NotesSource),
   doc_path: String,
-  repo_state_snapshot: Option(types.RepoStateSnapshot),
+  repo_state_snapshot: Option(repo_state.RepoStateSnapshot),
   artifact_path: String,
   notes_contents: Option(String),
   existing_doc_contents: String,
@@ -626,7 +627,7 @@ fn maybe_retry_plan_document(
   repo_root: String,
   notes_source: Option(types.NotesSource),
   doc_path: String,
-  repo_state_snapshot: Option(types.RepoStateSnapshot),
+  repo_state_snapshot: Option(repo_state.RepoStateSnapshot),
   artifact_path: String,
   notes_contents: Option(String),
   existing_doc_contents: String,
