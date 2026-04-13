@@ -1030,6 +1030,7 @@ pub fn reset_command_removes_project_home_and_worktrees_test() {
         branch_name: "night-shift/reset-demo",
         pr_number: "",
         summary: "",
+        runtime_context: None,
       ),
     ])
   let assert Ok(_) = journal.rewrite_run(run_with_worktree)

@@ -145,5 +145,6 @@ fn sample_task() -> types.Task {
     branch_name: "",
     pr_number: "",
     summary: "",
+    runtime_context: None,
   )
 }

@@ -1,5 +1,6 @@
 import gleam/int
 import gleam/list
+import gleam/option.{None}
 import gleam/string
 import night_shift/types
 
@@ -66,6 +67,7 @@ pub fn review_task(
     branch_name: head_ref_name,
     pr_number: int.to_string(number),
     summary: "",
+    runtime_context: None,
   )
 }
 

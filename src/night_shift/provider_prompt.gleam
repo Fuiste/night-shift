@@ -154,6 +154,8 @@ pub fn execution_prompt(task: types.Task) -> String {
   <> "Implement the task in the current git worktree.\n"
   <> "Run your own validation before responding.\n"
   <> "Do not exceed the task scope.\n"
+  <> "Night Shift already prepared runtime identity artifacts for this worktree. Reuse them instead of inventing ad hoc ports or service names.\n"
+  <> "If needed, inspect `NIGHT_SHIFT_RUNTIME_MANIFEST` or `NIGHT_SHIFT_HANDOFF_FILE` for the current runtime contract.\n"
   <> "Return only one JSON object between the exact sentinel markers below.\n"
   <> "The content between the markers must be exactly one valid JSON object with no trailing braces, notes, or extra text.\n"
   <> "Do not include shell transcripts, markdown fences, or explanatory prose inside the JSON payload.\n"
@@ -259,6 +261,41 @@ fn render_task(task: types.Task) -> String {
   <> render_decision_requests(task.decision_requests)
   <> "\n- Supersedes:\n"
   <> render_superseded_pr_numbers(task.superseded_pr_numbers)
+  <> render_runtime_context(task.runtime_context)
+}
+
+fn render_runtime_context(context: Option(types.RuntimeContext)) -> String {
+  case context {
+    None -> "\n- Runtime identity:\n  - not prepared yet"
+    Some(runtime) ->
+      "\n- Runtime identity:\n"
+      <> "  - Worktree ID: "
+      <> runtime.worktree_id
+      <> "\n  - Compose project: "
+      <> runtime.compose_project
+      <> "\n  - Port base: "
+      <> int.to_string(runtime.port_base)
+      <> "\n  - Manifest: "
+      <> runtime.manifest_path
+      <> "\n  - Handoff: "
+      <> runtime.handoff_path
+      <> render_runtime_ports(runtime.named_ports)
+  }
+}
+
+fn render_runtime_ports(named_ports: List(types.RuntimePort)) -> String {
+  case named_ports {
+    [] -> "\n  - Named ports: none"
+    _ ->
+      "\n  - Named ports:\n"
+      <> {
+        named_ports
+        |> list.map(fn(port) {
+          "    - " <> port.name <> ": " <> int.to_string(port.value)
+        })
+        |> string.join(with: "\n")
+      }
+  }
 }
 
 fn render_lines(lines: List(String)) -> String {

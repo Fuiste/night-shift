@@ -403,6 +403,7 @@ fn planned_task_decoder() -> decode.Decoder(types.Task) {
     branch_name: "",
     pr_number: "",
     summary: "",
+    runtime_context: None,
   ))
 }
 

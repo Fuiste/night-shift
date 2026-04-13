@@ -167,6 +167,14 @@ In review-driven runs, pay attention to repo-state evidence:
   manual attention
 - whether `status` and `report` show payload-repair attempts, successes, and
   failures with usable artifact paths
+- whether prepared tasks get runtime identity evidence in `status`, `report`,
+  and `.night-shift/runs/<run-id>/runtime/<task-id>/`
+- whether `night-shift.env`, `night-shift.runtime.json`, and
+  `night-shift.handoff.md` exist under the run runtime directory instead of
+  inside the git worktree
+- whether setup or maintenance commands can consume injected
+  `NIGHT_SHIFT_COMPOSE_PROJECT`, `NIGHT_SHIFT_PORT_BASE`, and
+  `NIGHT_SHIFT_RUNTIME_MANIFEST` values without extra operator wiring
 
 Use small tasks that validate the requested behavior instead of inviting large
 feature work.

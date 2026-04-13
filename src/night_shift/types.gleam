@@ -314,6 +314,25 @@ pub type FollowUpTask {
   )
 }
 
+/// One named derived port exposed to a task runtime.
+pub type RuntimePort {
+  RuntimePort(name: String, value: Int)
+}
+
+/// Persisted runtime identity for one task worktree.
+pub type RuntimeContext {
+  RuntimeContext(
+    worktree_id: String,
+    compose_project: String,
+    port_base: Int,
+    named_ports: List(RuntimePort),
+    runtime_dir: String,
+    env_file_path: String,
+    manifest_path: String,
+    handoff_path: String,
+  )
+}
+
 /// A scheduled unit of work inside a Night Shift run.
 pub type Task {
   Task(
@@ -332,6 +351,7 @@ pub type Task {
     branch_name: String,
     pr_number: String,
     summary: String,
+    runtime_context: Option(RuntimeContext),
   )
 }
 

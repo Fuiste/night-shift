@@ -36,26 +36,11 @@ pub fn initialize_project_home(
 }
 
 pub fn local_demo_command() -> String {
-  let cwd = system.cwd()
-  let erlang_root = filepath.join(cwd, "build/dev/erlang")
-  let ebin_paths = [
-    filepath.join(erlang_root, "night_shift/ebin"),
-    filepath.join(erlang_root, "gleam_stdlib/ebin"),
-    filepath.join(erlang_root, "gleam_json/ebin"),
-    filepath.join(erlang_root, "filepath/ebin"),
-    filepath.join(erlang_root, "simplifile/ebin"),
-    filepath.join(erlang_root, "gleeunit/ebin"),
-  ]
-
-  "erl"
-  <> {
-    ebin_paths
-    |> list.map(fn(path) { " -pa " <> shell.quote(path) })
-    |> string.join(with: "")
-  }
-  <> " -noshell -eval "
-  <> shell.quote("'night_shift@@main':run(night_shift).")
-  <> " -extra"
+  "zsh -lc "
+  <> shell.quote(
+    "cd " <> shell.quote(system.cwd()) <> " && gleam run -- \"$@\"",
+  )
+  <> " night-shift"
 }
 
 pub fn script_capture_command(command: String) -> String {
@@ -279,8 +264,9 @@ pub fn write_test_worktree_setup(
   setup_commands: List(String),
   maintenance_commands: List(String),
 ) -> Result(Nil, simplifile.FileError) {
-  write_test_worktree_setup_with_preflight(
+  write_test_worktree_setup_with_runtime_and_preflight(
     path,
+    [],
     [],
     setup_commands,
     maintenance_commands,
@@ -293,10 +279,51 @@ pub fn write_test_worktree_setup_with_preflight(
   setup_commands: List(String),
   maintenance_commands: List(String),
 ) -> Result(Nil, simplifile.FileError) {
+  write_test_worktree_setup_with_runtime_and_preflight(
+    path,
+    [],
+    preflight_commands,
+    setup_commands,
+    maintenance_commands,
+  )
+}
+
+pub fn write_test_worktree_setup_with_runtime(
+  path: String,
+  named_ports: List(String),
+  setup_commands: List(String),
+  maintenance_commands: List(String),
+) -> Result(Nil, simplifile.FileError) {
+  write_test_worktree_setup_with_runtime_and_preflight(
+    path,
+    named_ports,
+    [],
+    setup_commands,
+    maintenance_commands,
+  )
+}
+
+pub fn write_test_worktree_setup_with_runtime_and_preflight(
+  path: String,
+  named_ports: List(String),
+  preflight_commands: List(String),
+  setup_commands: List(String),
+  maintenance_commands: List(String),
+) -> Result(Nil, simplifile.FileError) {
+  let runtime_section = case named_ports {
+    [] -> ""
+    _ ->
+      "[environments.default.runtime]\n"
+      <> "named_ports = "
+      <> render_command_list(named_ports)
+      <> "\n\n"
+  }
+
   simplifile.write(
     "version = 1\n"
       <> "default_environment = \"default\"\n\n"
       <> "[environments.default.env]\n\n"
+      <> runtime_section
       <> "[environments.default.preflight]\n"
       <> "default = "
       <> render_command_list(preflight_commands)
