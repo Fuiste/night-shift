@@ -5,6 +5,7 @@ import gleam/result
 import gleam/string
 import night_shift/codec/artifact_path
 import night_shift/codec/journal as journal_codec
+import night_shift/domain/repo_state
 import night_shift/project
 import night_shift/report
 import night_shift/system
@@ -64,7 +65,7 @@ pub fn create_pending_run_with_context(
   max_workers: Int,
   notes_source: Option(types.NotesSource),
   planning_provenance: Option(types.PlanningProvenance),
-  repo_state_snapshot: Option(types.RepoStateSnapshot),
+  repo_state_snapshot: Option(repo_state.RepoStateSnapshot),
 ) -> Result(types.RunRecord, String) {
   let run_id = make_run_id()
   let project_home = repo_state_path(repo_root)

@@ -4,6 +4,7 @@ import gleam/option.{type Option, None, Some}
 import gleam/string
 import night_shift/agent_config
 import night_shift/domain/repo_state
+import night_shift/domain/review_run_projection
 import night_shift/repo_state_runtime
 import night_shift/types
 
@@ -50,77 +51,54 @@ fn render_repo_state_section(
   run: types.RunRecord,
   repo_state_view: Option(repo_state_runtime.RepoStateView),
 ) -> String {
-  case run.repo_state_snapshot, repo_state_view {
-    None, None -> ""
-    snapshot, view ->
+  case review_run_projection.repo_state_summary(run, repo_state_view) {
+    None -> ""
+    Some(summary) ->
       "\n## Repo State\n"
-      <> render_captured_repo_state(snapshot)
-      <> render_live_repo_state(view)
+      <> "- Captured open PRs: "
+      <> int.to_string(summary.captured_open_pr_count)
+      <> "\n- Captured actionable PRs: "
+      <> int.to_string(summary.captured_actionable_pr_count)
+      <> "\n- Snapshot captured: "
+      <> summary.snapshot_captured_at
+      <> render_live_repo_state(summary)
       <> render_repo_snapshot_group(
         "Actionable PRs",
-        repo_snapshot_entries(snapshot, fn(pr) { pr.actionable }),
+        summary.actionable_pull_requests
+          |> list.map(render_repo_pull_request_snapshot),
       )
       <> render_repo_snapshot_group(
         "Impacted PRs",
-        repo_snapshot_entries(snapshot, fn(pr) { pr.impacted }),
+        summary.impacted_pull_requests
+          |> list.map(render_repo_pull_request_snapshot),
       )
-  }
-}
-
-fn render_captured_repo_state(
-  snapshot: Option(types.RepoStateSnapshot),
-) -> String {
-  case snapshot {
-    Some(snapshot) ->
-      "- Captured open PRs: "
-      <> int.to_string(repo_state.open_pr_count(snapshot))
-      <> "\n- Captured actionable PRs: "
-      <> int.to_string(repo_state.actionable_pr_count(snapshot))
-      <> "\n- Snapshot captured: "
-      <> snapshot.captured_at
-    None -> "- Captured open PRs: unavailable"
   }
 }
 
 fn render_live_repo_state(
-  repo_state_view: Option(repo_state_runtime.RepoStateView),
+  summary: review_run_projection.RepoStateSummary,
 ) -> String {
-  case repo_state_view {
-    Some(view) ->
+  case summary.current_open_pr_count, summary.current_actionable_pr_count {
+    Some(open_pr_count), Some(actionable_pr_count) ->
       "\n- Current open PRs: "
-      <> int.to_string(view.open_pr_count)
+      <> int.to_string(open_pr_count)
       <> "\n- Current actionable PRs: "
-      <> int.to_string(view.actionable_pr_count)
+      <> int.to_string(actionable_pr_count)
       <> "\n- Drift: "
-      <> repo_state_runtime.drift_label(view.drift)
-      <> repo_state_details(view.drift)
-    None -> ""
-  }
-}
-
-fn repo_state_details(drift: repo_state_runtime.RepoStateDrift) -> String {
-  case drift {
-    repo_state_runtime.RepoStateDriftUnknown(message) ->
-      "\n- Drift details: " <> message
-    _ -> ""
-  }
-}
-
-fn repo_snapshot_entries(
-  snapshot: Option(types.RepoStateSnapshot),
-  include: fn(types.RepoPullRequestSnapshot) -> Bool,
-) -> List(String) {
-  case snapshot {
-    None -> []
-    Some(snapshot) ->
-      snapshot.open_pull_requests
-      |> list.filter(include)
-      |> list.map(render_repo_pull_request_snapshot)
+      <> case summary.drift {
+        Some(drift) -> drift
+        None -> "unknown"
+      }
+      <> case summary.drift_details {
+        Some(details) -> "\n- Drift details: " <> details
+        None -> ""
+      }
+    _, _ -> ""
   }
 }
 
 fn render_repo_pull_request_snapshot(
-  pr: types.RepoPullRequestSnapshot,
+  pr: repo_state.RepoPullRequestSnapshot,
 ) -> String {
   "- #"
   <> int.to_string(pr.number)
@@ -223,43 +201,23 @@ fn render_review_replacement_section(
   run: types.RunRecord,
   events: List(types.RunEvent),
 ) -> String {
-  let lineage_lines = review_lineage_lines(run.tasks)
-  let supersession_events = event_messages(events, "pr_superseded")
-  let supersession_warnings =
-    event_messages(events, "review_supersession_warning")
-
-  case lineage_lines, supersession_events, supersession_warnings {
-    [], [], [] -> ""
-    _, _, _ ->
+  case review_run_projection.build(run, events, None) {
+    Some(projection) ->
       "\n## Review-Driven Replacement\n"
-      <> render_review_lineage(lineage_lines)
-      <> render_event_group("Supersession Outcome", supersession_events)
-      <> render_event_group("Supersession Warnings", supersession_warnings)
+      <> render_review_lineage(
+        projection.lineage_entries
+        |> list.map(review_run_projection.render_lineage_entry),
+      )
+      <> render_event_group(
+        "Supersession Outcome",
+        projection.supersession_outcomes,
+      )
+      <> render_event_group(
+        "Supersession Warnings",
+        projection.supersession_warnings,
+      )
+    None -> ""
   }
-}
-
-fn review_lineage_lines(tasks: List(types.Task)) -> List(String) {
-  tasks
-  |> list.filter_map(fn(task) {
-    case task.superseded_pr_numbers {
-      [] -> Error(Nil)
-      superseded_pr_numbers -> {
-        let replacement_fragment = case task.pr_number {
-          "" -> "replacement PR pending"
-          pr_number -> "replacement PR #" <> pr_number
-        }
-        Ok(
-          "- "
-          <> task.id
-          <> " -> supersedes "
-          <> render_pr_numbers(superseded_pr_numbers)
-          <> " ("
-          <> replacement_fragment
-          <> ")",
-        )
-      }
-    }
-  })
 }
 
 fn render_review_lineage(lines: List(String)) -> String {

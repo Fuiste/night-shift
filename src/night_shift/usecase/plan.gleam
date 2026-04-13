@@ -2,6 +2,7 @@ import filepath
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import night_shift/agent_config
+import night_shift/domain/repo_state
 import night_shift/github
 import night_shift/orchestrator
 import night_shift/project
@@ -93,7 +94,7 @@ fn load_repo_state_snapshot(
   repo_root: String,
   from_reviews: Bool,
   config: types.Config,
-) -> Result(Option(types.RepoStateSnapshot), String) {
+) -> Result(Option(repo_state.RepoStateSnapshot), String) {
   case from_reviews {
     False -> Ok(None)
     True -> {

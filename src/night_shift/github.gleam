@@ -10,7 +10,6 @@ import gleam/string
 import night_shift/domain/repo_state
 import night_shift/shell
 import night_shift/system
-import night_shift/types
 import simplifile
 
 /// Minimal pull request identity returned after delivery.
@@ -119,7 +118,7 @@ pub fn repo_state_snapshot(
   cwd: String,
   branch_prefix: String,
   log_path: String,
-) -> Result(types.RepoStateSnapshot, String) {
+) -> Result(repo_state.RepoStateSnapshot, String) {
   use prs <- result.try(list_night_shift_prs(cwd, branch_prefix, log_path))
   use review_items <- result.try(
     prs
@@ -422,13 +421,13 @@ fn comment_decoder() -> decode.Decoder(String) {
 
 fn review_work_item_snapshot(
   review_item: ReviewWorkItem,
-) -> types.RepoPullRequestSnapshot {
+) -> repo_state.RepoPullRequestSnapshot {
   let actionable =
     review_item.review_decision == "REVIEW_REQUIRED"
     || review_item.failing_checks != []
     || has_non_empty_review_feedback(review_item.review_comments)
 
-  types.RepoPullRequestSnapshot(
+  repo_state.RepoPullRequestSnapshot(
     number: review_item.number,
     title: review_item.title,
     url: review_item.url,

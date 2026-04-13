@@ -5,6 +5,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import night_shift/config
+import night_shift/domain/review_run_projection
 import night_shift/journal
 import night_shift/project
 import night_shift/repo_state_runtime
@@ -225,10 +226,12 @@ pub fn runs_json(repo_root: String) -> Result(String, String) {
 pub fn run_json(repo_root: String, run_id: String) -> Result(String, String) {
   use #(run, events) <- result.try(journal.load(repo_root, types.RunId(run_id)))
   let repo_state_view = load_repo_state_view(run)
+  let review_projection =
+    review_run_projection.build(run, events, repo_state_view)
   let rendered_report = report.render_live(run, events, repo_state_view)
   Ok(
     json.object([
-      #("run", run_detail_json(run, repo_state_view)),
+      #("run", run_detail_json(run, review_projection)),
       #("events", json.array(events, event_json)),
       #("report", json.string(rendered_report)),
     ])
@@ -250,7 +253,7 @@ fn run_summary_json(run: types.RunRecord) -> json.Json {
 
 fn run_detail_json(
   run: types.RunRecord,
-  repo_state_view: Option(repo_state_runtime.RepoStateView),
+  review_projection: Option(review_run_projection.ReviewRunProjection),
 ) -> json.Json {
   json.object([
     #("run_id", json.string(run.run_id)),
@@ -264,7 +267,13 @@ fn run_detail_json(
     #("status", json.string(types.run_status_to_string(run.status))),
     #("created_at", json.string(run.created_at)),
     #("updated_at", json.string(run.updated_at)),
-    #("repo_state", json.nullable(from: repo_state_view, of: repo_state_json)),
+    #(
+      "repo_state",
+      json.nullable(
+        from: projection_repo_state(review_projection),
+        of: repo_state_json,
+      ),
+    ),
     #("tasks", json.array(run.tasks, task_json)),
   ])
 }
@@ -291,13 +300,36 @@ fn load_repo_state_view(
   }
 }
 
-fn repo_state_json(view: repo_state_runtime.RepoStateView) -> json.Json {
+fn repo_state_json(summary: review_run_projection.RepoStateSummary) -> json.Json {
   json.object([
-    #("snapshot_captured_at", json.string(view.snapshot_captured_at)),
-    #("open_pr_count", json.int(view.open_pr_count)),
-    #("actionable_pr_count", json.int(view.actionable_pr_count)),
-    #("drift", json.string(repo_state_runtime.drift_label(view.drift))),
+    #("snapshot_captured_at", json.string(summary.snapshot_captured_at)),
+    #(
+      "open_pr_count",
+      json.int(review_run_projection.current_or_captured_open_count(summary)),
+    ),
+    #(
+      "actionable_pr_count",
+      json.int(review_run_projection.current_or_captured_actionable_count(
+        summary,
+      )),
+    ),
+    #(
+      "drift",
+      json.string(case summary.drift {
+        Some(drift) -> drift
+        None -> "unknown"
+      }),
+    ),
   ])
+}
+
+fn projection_repo_state(
+  review_projection: Option(review_run_projection.ReviewRunProjection),
+) -> Option(review_run_projection.RepoStateSummary) {
+  case review_projection {
+    Some(projection) -> Some(projection.repo_state)
+    None -> None
+  }
 }
 
 fn agent_json(agent: types.ResolvedAgentConfig) -> json.Json {
