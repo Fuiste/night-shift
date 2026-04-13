@@ -179,7 +179,7 @@ fn group_pr_layers(
   depth_pairs
   |> list.sort(fn(left, right) {
     case int.compare(left.0, right.0) {
-      order.Eq -> int.compare(left.1.number, right.1.number)
+      order.Eq -> int.compare({ left.1 }.number, { right.1 }.number)
       other -> other
     }
   })
@@ -194,7 +194,7 @@ fn group_task_layers(
   depth_pairs
   |> list.sort(fn(left, right) {
     case int.compare(left.0, right.0) {
-      order.Eq -> string.compare(left.1.id, right.1.id)
+      order.Eq -> string.compare({ left.1 }.id, { right.1 }.id)
       other -> other
     }
   })
