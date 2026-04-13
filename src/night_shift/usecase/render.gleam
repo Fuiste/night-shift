@@ -4,6 +4,7 @@ import gleam/option.{type Option, None, Some}
 import gleam/string
 import night_shift/agent_config
 import night_shift/domain/decisions as decision_domain
+import night_shift/repo_state_runtime
 import night_shift/types
 import night_shift/usecase/result
 
@@ -28,8 +29,12 @@ pub fn render_plan(view: result.PlanResult) -> String {
       <> types.run_status_to_string(view.run.status)
       <> "\nBrief: "
       <> view.brief_path
+      <> "\nPlanning input: "
+      <> types.planning_provenance_label(view.planning_provenance)
       <> "\nNotes: "
-      <> types.notes_source_label(view.notes_source)
+      <> render_notes_source(
+        types.planning_provenance_notes_source(view.planning_provenance),
+      )
       <> "\nPlanning: "
       <> agent_config.summary(view.run.planning_agent)
       <> "\nArtifacts: "
@@ -52,6 +57,7 @@ pub fn render_status(view: result.StatusResult) -> String {
   <> agent_config.summary(view.run.execution_agent)
   <> "\nNotes: "
   <> render_notes_source(view.run.notes_source)
+  <> render_repo_state_fragment(view.repo_state_view)
   <> "\n"
   <> view.summary
   <> "\nEvents: "
@@ -63,20 +69,22 @@ pub fn render_status(view: result.StatusResult) -> String {
 pub fn render_resolve(view: result.ResolveResult) -> String {
   prefix_warnings(view.warnings, case view.summary {
     Some(message) -> message
-    None -> render_run_outcome(view.run, view.next_action)
+    None -> render_run_outcome(view.run, view.next_action, None)
   })
 }
 
 pub fn render_start(view: result.StartResult) -> String {
-  prefix_warnings(view.warnings, render_run_outcome(view.run, view.next_action))
+  prefix_warnings(
+    view.warnings,
+    render_run_outcome(view.run, view.next_action, view.repo_state_view),
+  )
 }
 
 pub fn render_resume(view: result.ResumeResult) -> String {
-  prefix_warnings(view.warnings, render_run_outcome(view.run, view.next_action))
-}
-
-pub fn render_review(view: result.ReviewResult) -> String {
-  prefix_warnings(view.warnings, render_run_outcome(view.run, view.next_action))
+  prefix_warnings(
+    view.warnings,
+    render_run_outcome(view.run, view.next_action, view.repo_state_view),
+  )
 }
 
 pub fn render_reset(view: result.ResetResult) -> String {
@@ -86,6 +94,7 @@ pub fn render_reset(view: result.ResetResult) -> String {
     render_optional_list(view.removed_worktrees),
     view.prune_status,
     view.home_status,
+    "Local Night Shift branches and remote PRs were not modified.",
     case view.failed_worktrees {
       [] -> ""
       _ ->
@@ -113,7 +122,11 @@ pub fn render_resolve_prompt(run: types.RunRecord) -> String {
   <> "\nNext action: answer the questions below to make this run ready to start."
 }
 
-fn render_run_outcome(run: types.RunRecord, next_action: String) -> String {
+fn render_run_outcome(
+  run: types.RunRecord,
+  next_action: String,
+  repo_state_view: Option(repo_state_runtime.RepoStateView),
+) -> String {
   "Run "
   <> run.run_id
   <> " finished with status "
@@ -122,8 +135,11 @@ fn render_run_outcome(run: types.RunRecord, next_action: String) -> String {
   <> agent_config.summary(run.planning_agent)
   <> "\nExecution: "
   <> agent_config.summary(run.execution_agent)
+  <> "\nPlanning input: "
+  <> render_planning_provenance(run.planning_provenance)
   <> "\nNotes: "
   <> render_notes_source(run.notes_source)
+  <> render_repo_state_fragment(repo_state_view)
   <> "\nReport: "
   <> run.report_path
   <> "\nJournal: "
@@ -139,6 +155,15 @@ fn render_notes_source(notes_source: Option(types.NotesSource)) -> String {
   }
 }
 
+fn render_planning_provenance(
+  planning_provenance: Option(types.PlanningProvenance),
+) -> String {
+  case planning_provenance {
+    Some(provenance) -> types.planning_provenance_label(provenance)
+    None -> "(legacy)"
+  }
+}
+
 fn render_optional_list(entries: List(String)) -> String {
   case entries {
     [] -> ""
@@ -146,6 +171,15 @@ fn render_optional_list(entries: List(String)) -> String {
       entries
       |> list.map(fn(entry) { "- " <> entry })
       |> string.join(with: "\n")
+  }
+}
+
+fn render_repo_state_fragment(
+  repo_state_view: Option(repo_state_runtime.RepoStateView),
+) -> String {
+  case repo_state_view {
+    Some(view) -> "\n" <> repo_state_runtime.render_summary(view)
+    None -> ""
   }
 }
 

@@ -1,6 +1,6 @@
 ---
 title: Run Lifecycle
-description: Understand how Night Shift moves between planning, execution, resolution, review, and reset.
+description: Understand how Night Shift moves between planning, execution, resolution, review-driven replanning, and reset.
 permalink: /run-lifecycle/
 ---
 
@@ -66,21 +66,39 @@ Night Shift reloads the saved run, validates the saved environment, recovers
 in-flight tasks, and continues orchestration. It does not re-resolve provider
 or environment settings; it reuses what the run journal already saved.
 
-## Review Mode
+## Review-Driven Replanning
 
-`review` is a separate entry point for stabilizing open Night Shift pull
-requests:
+Night Shift no longer has a separate `review` execution entry point. Review
+feedback is folded back into planning with `plan --from-reviews`:
 
 ```sh
-night-shift review
-night-shift review --profile reviewer --environment default
+night-shift plan --from-reviews
+night-shift plan --from-reviews --notes notes/context.md
 ```
 
-It inspects open Night Shift PRs, turns requested changes and failing checks
-into review tasks, seeds a run with those tasks, and then executes that run.
+This command inspects open Night Shift pull requests, captures the current PR
+tree as repo state, and asks the planner to produce the smallest fresh
+successor stack that reconciles the actionable feedback. Night Shift derives
+the superseded-PR lineage itself after planning; the provider only designs the
+replacement task graph.
 
-Unlike `start` and `resume`, `review` can select a worktree environment
-explicitly with `--environment <name>`.
+If the brief explicitly asks for a strict serial stack, Night Shift validates
+that the implementation tasks form a single chain. For review-driven replans,
+Night Shift also validates that the new implementation graph can be mapped
+cleanly onto the impacted open-PR subtree. If either invariant fails, planning
+stops rather than guessing.
+
+When review-driven planning supersedes existing PRs, Night Shift opens new PRs
+with `Supersedes #...` metadata and only auto-closes the old PRs after the
+replacement run completes successfully.
+
+`status`, `report`, and the dashboard surface the stored repo-state snapshot
+for these runs, including captured open/actionable PR counts, the actionable
+and impacted subtree, replacement lineage, and whether the live PR tree has
+drifted since planning. `night-shift report` is the live operator view here:
+it recomputes drift against the current PR tree when the run has a stored
+review snapshot, while the on-disk `report.md` remains the stable persisted
+artifact for the run.
 
 ## Reset
 
@@ -93,8 +111,16 @@ night-shift reset --yes --force
 ```
 
 It removes `./.night-shift/`, attempts to remove recorded Night Shift
-worktrees, and prunes git worktree metadata. If a run is still active, you need
-`--force`. If the terminal is non-interactive, you need `--yes`.
+worktrees, and prunes git worktree metadata. It does not delete local Night
+Shift branches or close remote pull requests. If a run is still active, you
+need `--force`. If the terminal is non-interactive, you need `--yes`.
+
+Completed task worktrees stay mounted after a run finishes so you can inspect
+or resume them later. For successful review-driven replacement runs, Night
+Shift now prunes the safe subset automatically: clean worktrees from older
+successful runs whose PRs were fully superseded by the replacement run. Dirty,
+blocked, failed, or manual-attention worktrees are retained. `reset` remains
+the full cleanup path.
 
 ## Dashboard
 
@@ -109,9 +135,10 @@ Night Shift binds to `127.0.0.1`, prefers port `8787`, and serves:
 
 - run history for the current repository
 - run summary metadata
+- repo-state summary for review-driven runs, including open PR counts and drift
 - task status
 - event timeline
 - report content
 
-There are no browser-side controls for starting, resuming, or reviewing runs in
-this version.
+There are no browser-side controls for starting or resuming runs in this
+version.

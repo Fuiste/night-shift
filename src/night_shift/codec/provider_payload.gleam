@@ -21,6 +21,20 @@ pub type PayloadArtifacts {
   )
 }
 
+pub type ExecutionPayloadTrust {
+  ExactPayload
+  SanitizedPayload
+  RecoveredPayload
+}
+
+pub type DecodedExecutionPayload {
+  DecodedExecutionPayload(
+    execution_result: types.ExecutionResult,
+    trust: ExecutionPayloadTrust,
+    artifacts: PayloadArtifacts,
+  )
+}
+
 pub type ExecutionDecodeError {
   PayloadExtractionFailure(message: String)
   JsonDecodeFailure(message: String, artifacts: PayloadArtifacts)
@@ -56,6 +70,7 @@ pub fn decode_execution_result(
   failure_prefix: String,
 ) -> Result(types.ExecutionResult, String) {
   decode_execution_result_detailed(output, log_path, failure_prefix)
+  |> result.map(fn(decoded) { decoded.execution_result })
   |> result.map_error(execution_decode_error_message)
 }
 
@@ -63,7 +78,7 @@ pub fn decode_execution_result_detailed(
   output: String,
   log_path: String,
   failure_prefix: String,
-) -> Result(types.ExecutionResult, ExecutionDecodeError) {
+) -> Result(DecodedExecutionPayload, ExecutionDecodeError) {
   use payload <- result.try(
     extract_payload(output)
     |> result.map_error(PayloadExtractionFailure),
@@ -75,12 +90,22 @@ pub fn decode_execution_result_detailed(
   )
 
   case decode_execution_payload(payload) {
-    Ok(#(decoded, sanitized_payload)) -> {
+    Ok(#(decoded, trust, sanitized_payload)) -> {
       use _sanitized_payload_path <- result.try(persist_sanitized_payload(
         log_path,
         sanitized_payload,
       ))
-      Ok(decoded)
+      Ok(DecodedExecutionPayload(
+        execution_result: decoded,
+        trust: trust,
+        artifacts: PayloadArtifacts(
+          raw_payload_path: raw_payload_path,
+          sanitized_payload_path: case sanitized_payload {
+            Some(_) -> Some(sanitized_payload_artifact_path(log_path))
+            None -> None
+          },
+        ),
+      ))
     }
     Error(sanitized_payload) ->
       Error(JsonDecodeFailure(
@@ -184,50 +209,56 @@ fn execution_decode_failure(
 
 fn decode_execution_payload(
   payload: String,
-) -> Result(#(types.ExecutionResult, Option(String)), Option(String)) {
-  case json.parse(payload, execution_decoder()) {
-    Ok(decoded) -> Ok(#(decoded, None))
-    Error(_) ->
-      try_execution_payload_candidates(payload, candidate_payloads(payload))
+) -> Result(#(types.ExecutionResult, ExecutionPayloadTrust, Option(String)), Option(String)) {
+  let trimmed_payload = string.trim(payload)
+
+  case json.parse(trimmed_payload, execution_decoder()) {
+    Ok(decoded) -> Ok(#(decoded, ExactPayload, None))
+    Error(_) -> {
+      let balanced_candidate = case sanitize_json_payload(trimmed_payload) {
+        Ok(sanitized) -> sanitized
+        Error(_) -> trimmed_payload
+      }
+      case
+        decode_execution_candidate(
+          balanced_candidate,
+          trimmed_payload,
+          SanitizedPayload,
+        )
+      {
+        Ok(decoded) -> Ok(decoded)
+        Error(last_candidate) -> {
+          let recovered_candidate = recover_json_prefix(trimmed_payload)
+          case
+            decode_execution_candidate(
+              recovered_candidate,
+              trimmed_payload,
+              RecoveredPayload,
+            )
+          {
+            Ok(decoded) -> Ok(decoded)
+            Error(_) -> Error(last_candidate)
+          }
+        }
+      }
+    }
   }
 }
 
-fn try_execution_payload_candidates(
+fn decode_execution_candidate(
+  candidate: String,
   original_payload: String,
-  candidates: List(String),
-) -> Result(#(types.ExecutionResult, Option(String)), Option(String)) {
-  case candidates {
-    [] -> Error(None)
-    [candidate, ..rest] ->
-      case json.parse(candidate, execution_decoder()) {
-        Ok(decoded) ->
-          case candidate == string.trim(original_payload) {
-            True -> Ok(#(decoded, None))
-            False -> Ok(#(decoded, Some(candidate)))
-          }
-        Error(_) ->
-          case rest {
-            [] ->
-              case candidate == string.trim(original_payload) {
-                True -> Error(None)
-                False -> Error(Some(candidate))
-              }
-            _ -> try_execution_payload_candidates(original_payload, rest)
-          }
+  trust: ExecutionPayloadTrust,
+) -> Result(#(types.ExecutionResult, ExecutionPayloadTrust, Option(String)), Option(String)) {
+  let trimmed_candidate = string.trim(candidate)
+  case trimmed_candidate == "" || trimmed_candidate == string.trim(original_payload) {
+    True -> Error(None)
+    False ->
+      case json.parse(trimmed_candidate, execution_decoder()) {
+        Ok(decoded) -> Ok(#(decoded, trust, Some(trimmed_candidate)))
+        Error(_) -> Error(Some(trimmed_candidate))
       }
   }
-}
-
-fn candidate_payloads(payload: String) -> List(String) {
-  let trimmed_payload = string.trim(payload)
-  let balanced_candidate = case sanitize_json_payload(trimmed_payload) {
-    Ok(sanitized) -> sanitized
-    Error(_) -> trimmed_payload
-  }
-  let prefix_candidate = recover_json_prefix(trimmed_payload)
-
-  [balanced_candidate, prefix_candidate]
-  |> unique_non_empty(trimmed_payload, [])
 }
 
 fn persist_sanitized_payload(
@@ -270,25 +301,11 @@ fn recover_json_prefix_loop(payload: String, width: Int) -> String {
   }
 }
 
-fn unique_non_empty(
-  candidates: List(String),
-  original_payload: String,
-  acc: List(String),
-) -> List(String) {
-  case candidates {
-    [] -> list.reverse(acc)
-    [candidate, ..rest] -> {
-      let trimmed_candidate = string.trim(candidate)
-      let next = case
-        trimmed_candidate == ""
-        || trimmed_candidate == string.trim(original_payload)
-        || list.contains(acc, trimmed_candidate)
-      {
-        True -> acc
-        False -> [trimmed_candidate, ..acc]
-      }
-      unique_non_empty(rest, original_payload, next)
-    }
+pub fn payload_trust_label(trust: ExecutionPayloadTrust) -> String {
+  case trust {
+    ExactPayload -> "exact"
+    SanitizedPayload -> "sanitized"
+    RecoveredPayload -> "recovered"
   }
 }
 
@@ -356,6 +373,7 @@ fn planned_task_decoder() -> decode.Decoder(types.Task) {
   use acceptance <- decode.field("acceptance", decode.list(decode.string))
   use demo_plan <- decode.field("demo_plan", decode.list(decode.string))
   use decision_requests <- decode.then(optional_decision_requests_decoder())
+  use superseded_pr_numbers <- decode.then(optional_superseded_pr_numbers_decoder())
   use kind <- decode.then(task_kind_decoder())
   use execution_mode <- decode.then(execution_mode_decoder())
   decode.success(types.Task(
@@ -366,6 +384,7 @@ fn planned_task_decoder() -> decode.Decoder(types.Task) {
     acceptance: acceptance,
     demo_plan: demo_plan,
     decision_requests: decision_requests,
+    superseded_pr_numbers: superseded_pr_numbers,
     kind: kind,
     execution_mode: execution_mode,
     state: types.Queued,
@@ -417,6 +436,7 @@ fn follow_up_task_decoder() -> decode.Decoder(types.FollowUpTask) {
   use acceptance <- decode.field("acceptance", decode.list(decode.string))
   use demo_plan <- decode.field("demo_plan", decode.list(decode.string))
   use decision_requests <- decode.then(optional_decision_requests_decoder())
+  use superseded_pr_numbers <- decode.then(optional_superseded_pr_numbers_decoder())
   use kind <- decode.then(task_kind_decoder())
   use execution_mode <- decode.then(execution_mode_decoder())
   decode.success(types.FollowUpTask(
@@ -427,6 +447,7 @@ fn follow_up_task_decoder() -> decode.Decoder(types.FollowUpTask) {
     acceptance: acceptance,
     demo_plan: demo_plan,
     decision_requests: decision_requests,
+    superseded_pr_numbers: superseded_pr_numbers,
     kind: kind,
     execution_mode: execution_mode,
   ))
@@ -514,6 +535,19 @@ fn optional_decision_requests_decoder() -> decode.Decoder(
         decode.list(decision_request_decoder()),
       )
       decode.success(requests)
+    },
+    or: [decode.success([])],
+  )
+}
+
+fn optional_superseded_pr_numbers_decoder() -> decode.Decoder(List(Int)) {
+  decode.one_of(
+    {
+      use values <- decode.field(
+        "superseded_pr_numbers",
+        decode.list(decode.int),
+      )
+      decode.success(values)
     },
     or: [decode.success([])],
   )

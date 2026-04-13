@@ -78,6 +78,30 @@ pub fn review_task_keeps_requested_feedback_in_description_test() {
   assert string.contains(task.description, "- CI / test")
 }
 
+pub fn render_body_includes_superseded_section_when_present_test() {
+  let run = sample_run()
+  let task = types.Task(..sample_task(), superseded_pr_numbers: [11, 12])
+  let execution_result =
+    types.ExecutionResult(
+      status: types.Completed,
+      summary: "Implemented the replacement stack.",
+      files_touched: [],
+      demo_evidence: [],
+      pr: types.PrPlan(
+        title: "[night-shift] Replace docs stack",
+        summary: "Replaces the old docs stack.",
+        demo: [],
+        risks: [],
+      ),
+      follow_up_tasks: [],
+    )
+
+  let body =
+    pull_request.render_body(run, task, execution_result, "$ gleam test")
+
+  assert string.contains(body, "## Supersedes\n- #11\n- #12")
+}
+
 fn sample_run() -> types.RunRecord {
   types.RunRecord(
     run_id: "run-123",
@@ -93,6 +117,8 @@ fn sample_run() -> types.RunRecord {
     environment_name: "",
     max_workers: 1,
     notes_source: None,
+    planning_provenance: None,
+    repo_state_snapshot: None,
     decisions: [],
     planning_dirty: False,
     status: types.RunPending,
@@ -111,6 +137,7 @@ fn sample_task() -> types.Task {
     acceptance: [],
     demo_plan: [],
     decision_requests: [],
+    superseded_pr_numbers: [],
     kind: types.ImplementationTask,
     execution_mode: types.Serial,
     state: types.Ready,

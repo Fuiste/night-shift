@@ -23,6 +23,20 @@ pub fn encode_run(run: types.RunRecord) -> String {
       "notes_source",
       json.nullable(from: run.notes_source, of: encode_notes_source),
     ),
+    #(
+      "planning_provenance",
+      json.nullable(
+        from: run.planning_provenance,
+        of: encode_planning_provenance,
+      ),
+    ),
+    #(
+      "repo_state_snapshot",
+      json.nullable(
+        from: run.repo_state_snapshot,
+        of: encode_repo_state_snapshot,
+      ),
+    ),
     #("decisions", json.array(run.decisions, encode_recorded_decision)),
     #("planning_dirty", json.bool(run.planning_dirty)),
     #("status", json.string(types.run_status_to_string(run.status))),
@@ -81,6 +95,51 @@ fn encode_recorded_decision(decision: types.RecordedDecision) -> json.Json {
   ])
 }
 
+fn encode_planning_provenance(provenance: types.PlanningProvenance) -> json.Json {
+  case provenance {
+    types.NotesOnly(notes_source) ->
+      json.object([
+        #("kind", json.string("notes_only")),
+        #("notes_source", encode_notes_source(notes_source)),
+      ])
+    types.ReviewsOnly ->
+      json.object([#("kind", json.string("reviews_only"))])
+    types.ReviewsAndNotes(notes_source) ->
+      json.object([
+        #("kind", json.string("reviews_and_notes")),
+        #("notes_source", encode_notes_source(notes_source)),
+      ])
+  }
+}
+
+fn encode_repo_state_snapshot(snapshot: types.RepoStateSnapshot) -> json.Json {
+  json.object([
+    #("captured_at", json.string(snapshot.captured_at)),
+    #("digest", json.string(snapshot.digest)),
+    #(
+      "open_pull_requests",
+      json.array(snapshot.open_pull_requests, encode_repo_pull_request_snapshot),
+    ),
+  ])
+}
+
+fn encode_repo_pull_request_snapshot(
+  snapshot: types.RepoPullRequestSnapshot,
+) -> json.Json {
+  json.object([
+    #("number", json.int(snapshot.number)),
+    #("title", json.string(snapshot.title)),
+    #("url", json.string(snapshot.url)),
+    #("head_ref_name", json.string(snapshot.head_ref_name)),
+    #("base_ref_name", json.string(snapshot.base_ref_name)),
+    #("review_decision", json.string(snapshot.review_decision)),
+    #("failing_checks", json.array(snapshot.failing_checks, json.string)),
+    #("review_comments", json.array(snapshot.review_comments, json.string)),
+    #("actionable", json.bool(snapshot.actionable)),
+    #("impacted", json.bool(snapshot.impacted)),
+  ])
+}
+
 fn encode_resolved_agent(agent: types.ResolvedAgentConfig) -> json.Json {
   json.object([
     #("profile_name", json.string(agent.profile_name)),
@@ -117,6 +176,10 @@ fn encode_task(task: types.Task) -> json.Json {
     #(
       "decision_requests",
       json.array(task.decision_requests, encode_decision_request),
+    ),
+    #(
+      "superseded_pr_numbers",
+      json.array(task.superseded_pr_numbers, json.int),
     ),
     #("task_kind", json.string(types.task_kind_to_string(task.kind))),
     #(
@@ -171,16 +234,29 @@ fn run_decoder() -> decode.Decoder(types.RunRecord) {
     decode.optional(decode.string),
   )
   use max_workers <- decode.field("max_workers", decode.int)
-  use notes_source <- decode.field(
+  use notes_source <- decode.optional_field(
     "notes_source",
+    None,
     decode.optional(notes_source_decoder()),
   )
-  use decisions <- decode.field(
+  use planning_provenance <- decode.optional_field(
+    "planning_provenance",
+    None,
+    decode.optional(planning_provenance_decoder()),
+  )
+  use repo_state_snapshot <- decode.optional_field(
+    "repo_state_snapshot",
+    None,
+    decode.optional(repo_state_snapshot_decoder()),
+  )
+  use decisions <- decode.optional_field(
     "decisions",
+    None,
     decode.optional(decode.list(recorded_decision_decoder())),
   )
-  use planning_dirty <- decode.field(
+  use planning_dirty <- decode.optional_field(
     "planning_dirty",
+    None,
     decode.optional(decode.bool),
   )
   use status <- decode.field("status", run_status_decoder())
@@ -204,6 +280,15 @@ fn run_decoder() -> decode.Decoder(types.RunRecord) {
     },
     max_workers: max_workers,
     notes_source: notes_source,
+    planning_provenance: case planning_provenance {
+      Some(provenance) -> Some(provenance)
+      None ->
+        case notes_source {
+          Some(source) -> Some(types.NotesOnly(source))
+          None -> None
+        }
+    },
+    repo_state_snapshot: repo_state_snapshot,
     decisions: case decisions {
       Some(entries) -> entries
       None -> []
@@ -249,6 +334,8 @@ fn legacy_run_decoder() -> decode.Decoder(types.RunRecord) {
     environment_name: "",
     max_workers: max_workers,
     notes_source: None,
+    planning_provenance: None,
+    repo_state_snapshot: None,
     decisions: [],
     planning_dirty: False,
     status: status,
@@ -317,6 +404,7 @@ fn task_decoder() -> decode.Decoder(types.Task) {
   use acceptance <- decode.field("acceptance", decode.list(decode.string))
   use demo_plan <- decode.field("demo_plan", decode.list(decode.string))
   use decision_requests <- decode.then(optional_decision_requests_decoder())
+  use superseded_pr_numbers <- decode.then(optional_superseded_pr_numbers_decoder())
   use kind <- decode.then(task_kind_decoder())
   use execution_mode <- decode.then(task_execution_mode_decoder())
   use state <- decode.field("state", task_state_decoder())
@@ -332,6 +420,7 @@ fn task_decoder() -> decode.Decoder(types.Task) {
     acceptance: acceptance,
     demo_plan: demo_plan,
     decision_requests: decision_requests,
+    superseded_pr_numbers: superseded_pr_numbers,
     kind: kind,
     execution_mode: execution_mode,
     state: state,
@@ -388,6 +477,65 @@ fn notes_source_decoder() -> decode.Decoder(types.NotesSource) {
   }
 }
 
+fn planning_provenance_decoder() -> decode.Decoder(types.PlanningProvenance) {
+  use kind <- decode.field("kind", decode.string)
+  use notes_source <- decode.optional_field(
+    "notes_source",
+    None,
+    decode.optional(notes_source_decoder()),
+  )
+  case kind, notes_source {
+    "notes_only", Some(source) -> decode.success(types.NotesOnly(source))
+    "reviews_only", _ -> decode.success(types.ReviewsOnly)
+    "reviews_and_notes", Some(source) ->
+      decode.success(types.ReviewsAndNotes(source))
+    _, _ -> decode.failure(types.ReviewsOnly, "PlanningProvenance")
+  }
+}
+
+fn repo_state_snapshot_decoder() -> decode.Decoder(types.RepoStateSnapshot) {
+  use captured_at <- decode.field("captured_at", decode.string)
+  use digest <- decode.field("digest", decode.string)
+  use open_pull_requests <- decode.field(
+    "open_pull_requests",
+    decode.list(repo_pull_request_snapshot_decoder()),
+  )
+  decode.success(types.RepoStateSnapshot(
+    captured_at: captured_at,
+    digest: digest,
+    open_pull_requests: open_pull_requests,
+  ))
+}
+
+fn repo_pull_request_snapshot_decoder(
+) -> decode.Decoder(types.RepoPullRequestSnapshot) {
+  use number <- decode.field("number", decode.int)
+  use title <- decode.field("title", decode.string)
+  use url <- decode.field("url", decode.string)
+  use head_ref_name <- decode.field("head_ref_name", decode.string)
+  use base_ref_name <- decode.field("base_ref_name", decode.string)
+  use review_decision <- decode.field("review_decision", decode.string)
+  use failing_checks <- decode.field("failing_checks", decode.list(decode.string))
+  use review_comments <- decode.field(
+    "review_comments",
+    decode.list(decode.string),
+  )
+  use actionable <- decode.field("actionable", decode.bool)
+  use impacted <- decode.field("impacted", decode.bool)
+  decode.success(types.RepoPullRequestSnapshot(
+    number: number,
+    title: title,
+    url: url,
+    head_ref_name: head_ref_name,
+    base_ref_name: base_ref_name,
+    review_decision: review_decision,
+    failing_checks: failing_checks,
+    review_comments: review_comments,
+    actionable: actionable,
+    impacted: impacted,
+  ))
+}
+
 fn task_execution_mode_decoder() -> decode.Decoder(types.ExecutionMode) {
   decode.one_of(task_mode_field_decoder(), or: [task_parallel_safe_decoder()])
 }
@@ -434,6 +582,19 @@ fn optional_decision_requests_decoder() -> decode.Decoder(
         decode.list(decision_request_decoder()),
       )
       decode.success(requests)
+    },
+    or: [decode.success([])],
+  )
+}
+
+fn optional_superseded_pr_numbers_decoder() -> decode.Decoder(List(Int)) {
+  decode.one_of(
+    {
+      use values <- decode.field(
+        "superseded_pr_numbers",
+        decode.list(decode.int),
+      )
+      decode.success(values)
     },
     or: [decode.success([])],
   )

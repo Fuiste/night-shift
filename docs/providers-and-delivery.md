@@ -47,9 +47,15 @@ That executable is expected to implement:
 - `fake-provider plan-doc <prompt-file>`
 - `fake-provider execute <prompt-file> <worktree> <repo-root>`
 
+Execution payloads should follow the same discipline as real providers:
+
+- emit exactly one JSON object between the Night Shift sentinel markers
+- keep shell transcript noise outside that JSON payload
+- return repo-relative `files_touched` paths
+
 If you also need deterministic PR fixture behavior, set `NIGHT_SHIFT_GH_BIN`
 to a `gh`-compatible executable that Night Shift should use for pull request
-delivery and review mode.
+delivery and review-driven planning.
 
 ## Delivery Model
 
@@ -59,7 +65,18 @@ Night Shift's current delivery model is:
 - dependent tasks may be delivered as stacked pull requests
 - verification runs locally before PR creation
 - the local markdown report is updated throughout the run
-- review mode reopens open Night Shift PRs as stabilization tasks
+- `night-shift report` is the live audit view for review-driven runs and can
+  show current drift against the saved open-PR snapshot
+- review-driven planning creates fresh successor PRs rather than mutating existing PR branches in place
+- successor PRs can declare `Supersedes #...`, and Night Shift only comments on and closes superseded PRs after the replacement run succeeds
+- providers do not author supersession lineage; Night Shift derives it from the impacted open-PR subtree and the validated replacement graph
+- if a review-driven plan cannot be mapped cleanly onto the impacted subtree, Night Shift blocks planning instead of guessing
+- after a successful replacement run, Night Shift prunes clean worktrees from
+  older successful superseded runs and records any skipped dirty/missing
+  worktrees as warnings
+- when an execution payload is schema-valid after sanitization or recovery,
+  Night Shift accepts it, normalizes safe path differences, and records a
+  warning event instead of forcing manual attention
 
 Delivery behavior is shaped by `base_branch`, `branch_prefix`,
 `pr_title_prefix`, and `[verification].commands` in `config.toml`.
@@ -71,6 +88,7 @@ prefers port `8787`, and serves a monitor-only UI for:
 
 - run history
 - summary metadata for the selected run
+- repo-state summary for review-driven runs, including snapshot time and drift
 - task status
 - event timeline
 - report content

@@ -14,7 +14,7 @@ If you are new to the project, start here:
 - [Getting Started](getting-started.md) for install, prerequisites, and the
   first runnable flow
 - [Run Lifecycle](run-lifecycle.md) for how `plan`, `start`, `resolve`,
-  `resume`, `review`, and `reset` fit together
+  `resume`, `plan --from-reviews`, and `reset` fit together
 - [Configuration](configuration.md) for `config.toml` profiles and override
   precedence
 - [Worktree Environments](worktree-environments.md) for
@@ -46,6 +46,6 @@ Supporting flows handle the messier parts of reality:
 
 - `resolve` records answers for manual-attention tasks and replans in place
 - `resume` reattaches to an interrupted run
-- `review` turns open Night Shift PRs into stabilization work
-- `reset` removes Night Shift state and tracked task worktrees
+- `plan --from-reviews` turns open Night Shift PR feedback into a fresh successor stack
+- `reset` removes Night Shift state and tracked task worktrees, but does not touch local branches or remote PRs
 - `--demo` exercises a fixture-backed proof path

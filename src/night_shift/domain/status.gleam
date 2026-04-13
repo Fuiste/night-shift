@@ -57,6 +57,15 @@ pub fn summary(
               <> bool_label(run.planning_dirty)
               <> planning_validation_fragment(events)
               <> "\n"
+              <> "Retained worktrees: "
+              <> int.to_string(retained_worktree_count(run.tasks))
+              <> "\n"
+              <> "Pruned superseded worktrees: "
+              <> int.to_string(event_count(events, "worktree_pruned"))
+              <> "\n"
+              <> "Execution recovery warnings: "
+              <> int.to_string(event_count(events, "execution_payload_warning"))
+              <> "\n"
               <> "Ready implementation tasks: "
               <> int.to_string(ready_implementation_task_count(run.tasks))
               <> "\n"
@@ -68,6 +77,15 @@ pub fn summary(
             False ->
               "Outstanding decisions: "
               <> int.to_string(decisions.outstanding_decision_count(run))
+              <> "\n"
+              <> "Retained worktrees: "
+              <> int.to_string(retained_worktree_count(run.tasks))
+              <> "\n"
+              <> "Pruned superseded worktrees: "
+              <> int.to_string(event_count(events, "worktree_pruned"))
+              <> "\n"
+              <> "Execution recovery warnings: "
+              <> int.to_string(event_count(events, "execution_payload_warning"))
               <> "\n"
               <> "Ready tasks: "
               <> int.to_string(ready_task_count(run.tasks))
@@ -117,6 +135,12 @@ fn ready_implementation_task_count(tasks: List(types.Task)) -> Int {
 fn queued_task_count(tasks: List(types.Task)) -> Int {
   tasks
   |> list.filter(fn(task) { task.state == types.Queued })
+  |> list.length
+}
+
+fn retained_worktree_count(tasks: List(types.Task)) -> Int {
+  tasks
+  |> list.filter(fn(task) { task.worktree_path != "" })
   |> list.length
 }
 
@@ -192,4 +216,10 @@ fn latest_event_message_loop(
         False -> latest_event_message_loop(rest, kind)
       }
   }
+}
+
+fn event_count(events: List(types.RunEvent), kind: String) -> Int {
+  events
+  |> list.filter(fn(event) { event.kind == kind })
+  |> list.length
 }

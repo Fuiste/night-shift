@@ -14,12 +14,12 @@ pub fn usage() -> String {
   <> "    Prompts interactively for provider, model, and initial worktree setup when those answers are not supplied.\n"
   <> "  reset [--yes] [--force]\n"
   <> "  plan --notes <file-or-inline-text> [--doc <path>] [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>]\n"
+  <> "  plan --from-reviews [--notes <file-or-inline-text>] [--doc <path>] [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>]\n"
   <> "  start [--run <id>|latest] [--ui]\n"
   <> "  status [--run <id>|latest]\n"
   <> "  report [--run <id>|latest]\n"
   <> "  resolve [--run <id>|latest]\n"
   <> "  resume [--run <id>|latest] [--ui]\n"
-  <> "  review [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>] [--environment <name>]\n"
 }
 
 /// Parse raw command-line arguments into a `Command`.
@@ -50,7 +50,10 @@ pub fn parse(args: List(String)) -> Result(types.Command, String) {
         ["report", ..rest] -> parse_run_lookup(rest, types.Report)
         ["resolve", ..rest] -> parse_run_lookup(rest, types.Resolve)
         ["resume", ..rest] -> parse_resume(rest)
-        ["review", ..rest] -> parse_review(rest)
+        ["review", ..] ->
+          Error(
+            "`night-shift review` was replaced by `night-shift plan --from-reviews`.",
+          )
         [command, ..] -> Error("Unknown command: " <> command)
       }
   }
@@ -65,34 +68,41 @@ fn contains_demo_flag(args: List(String)) -> Bool {
 }
 
 fn parse_plan(args: List(String)) -> Result(types.Command, String) {
-  parse_plan_flags(args, Error(Nil), None, types.empty_agent_overrides())
+  parse_plan_flags(args, None, None, False, types.empty_agent_overrides())
 }
 
 fn parse_plan_flags(
   args: List(String),
-  notes_path: Result(String, Nil),
+  notes_path: Option(String),
   doc_path: Option(String),
+  from_reviews: Bool,
   agent_overrides: types.AgentOverrides,
 ) -> Result(types.Command, String) {
   case args {
     [] ->
-      case notes_path {
-        Ok(path) -> Ok(types.Plan(path, doc_path, agent_overrides))
-        Error(Nil) ->
+      case from_reviews, notes_path {
+        True, _ -> Ok(types.Plan(notes_path, doc_path, True, agent_overrides))
+        False, Some(path) ->
+          Ok(types.Plan(Some(path), doc_path, False, agent_overrides))
+        False, None ->
           Error("The plan command requires --notes <file-or-inline-text>.")
       }
 
     ["--notes", path, ..rest] ->
-      parse_plan_flags(rest, Ok(path), doc_path, agent_overrides)
+      parse_plan_flags(rest, Some(path), doc_path, from_reviews, agent_overrides)
+
+    ["--from-reviews", ..rest] ->
+      parse_plan_flags(rest, notes_path, doc_path, True, agent_overrides)
 
     ["--doc", path, ..rest] ->
-      parse_plan_flags(rest, notes_path, Some(path), agent_overrides)
+      parse_plan_flags(rest, notes_path, Some(path), from_reviews, agent_overrides)
 
     ["--profile", profile_name, ..rest] ->
       parse_plan_flags(
         rest,
         notes_path,
         doc_path,
+        from_reviews,
         types.AgentOverrides(..agent_overrides, profile: Some(profile_name)),
       )
 
@@ -102,6 +112,7 @@ fn parse_plan_flags(
         rest,
         notes_path,
         doc_path,
+        from_reviews,
         types.AgentOverrides(..agent_overrides, provider: Some(provider)),
       )
     }
@@ -111,6 +122,7 @@ fn parse_plan_flags(
         rest,
         notes_path,
         doc_path,
+        from_reviews,
         types.AgentOverrides(..agent_overrides, model: Some(model)),
       )
 
@@ -120,6 +132,7 @@ fn parse_plan_flags(
         rest,
         notes_path,
         doc_path,
+        from_reviews,
         types.AgentOverrides(..agent_overrides, reasoning: Some(reasoning)),
       )
     }
@@ -247,51 +260,6 @@ fn parse_resume_flags(
       parse_resume_flags(rest, types.RunId(run_id), ui_enabled)
     ["--ui", ..rest] -> parse_resume_flags(rest, run, True)
     [flag, ..] -> Error("Unsupported flag: " <> flag)
-  }
-}
-
-fn parse_review(args: List(String)) -> Result(types.Command, String) {
-  parse_review_flags(args, types.empty_agent_overrides(), None)
-}
-
-fn parse_review_flags(
-  args: List(String),
-  agent_overrides: types.AgentOverrides,
-  environment_name: Option(String),
-) -> Result(types.Command, String) {
-  case args {
-    [] -> Ok(types.Review(agent_overrides, environment_name))
-    ["--profile", profile_name, ..rest] ->
-      parse_review_flags(
-        rest,
-        types.AgentOverrides(..agent_overrides, profile: Some(profile_name)),
-        environment_name,
-      )
-    ["--provider", raw_provider, ..rest] -> {
-      use provider <- result.try(types.provider_from_string(raw_provider))
-      parse_review_flags(
-        rest,
-        types.AgentOverrides(..agent_overrides, provider: Some(provider)),
-        environment_name,
-      )
-    }
-    ["--model", model, ..rest] ->
-      parse_review_flags(
-        rest,
-        types.AgentOverrides(..agent_overrides, model: Some(model)),
-        environment_name,
-      )
-    ["--reasoning", raw_reasoning, ..rest] -> {
-      use reasoning <- result.try(types.reasoning_from_string(raw_reasoning))
-      parse_review_flags(
-        rest,
-        types.AgentOverrides(..agent_overrides, reasoning: Some(reasoning)),
-        environment_name,
-      )
-    }
-    ["--environment", name, ..rest] ->
-      parse_review_flags(rest, agent_overrides, Some(name))
-    [flag, ..] -> Error("Unsupported review flag: " <> flag)
   }
 }
 

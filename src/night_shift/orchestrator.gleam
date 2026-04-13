@@ -12,11 +12,13 @@ import gleam/string
 import night_shift/domain/decision_contract
 import night_shift/domain/decisions as decision_domain
 import night_shift/domain/plan_hygiene
+import night_shift/domain/review_lineage
 import night_shift/domain/run_state
 import night_shift/domain/summary as domain_summary
 import night_shift/domain/task_graph
 import night_shift/domain/task_validation
 import night_shift/git
+import night_shift/github
 import night_shift/infra/task_delivery
 import night_shift/infra/task_verifier
 import night_shift/journal
@@ -26,6 +28,7 @@ import night_shift/system
 import night_shift/types
 import night_shift/worktree_setup
 import night_shift/worktree_setup_model
+import simplifile
 
 /// Start executing a run from its current persisted state.
 pub fn start(
@@ -130,6 +133,7 @@ fn load_planned_tasks(
       run.repo_root,
       run.brief_path,
       run.run_path,
+      run.repo_state_snapshot,
       run.decisions,
       completed_tasks,
       attempt,
@@ -150,11 +154,36 @@ fn load_planned_tasks(
             Ok(#(reconciled_tasks, warnings)) ->
               case plan_hygiene.normalize_planned_tasks(reconciled_tasks) {
                 Ok(normalized_tasks) ->
-                  Ok(#(
-                    normalized_tasks,
-                    warnings,
-                    retry_events(attempt, retry_feedback),
-                  ))
+                  case finalize_planned_tasks(run, normalized_tasks) {
+                    Ok(finalized_tasks) ->
+                      Ok(#(
+                        finalized_tasks,
+                        warnings,
+                        retry_events(attempt, retry_feedback),
+                      ))
+                    Error(issues) -> {
+                      let message = domain_summary.planning_validation_summary(
+                        issues,
+                      )
+                      case attempt < 2 && retryable_planning_issue(message) {
+                        True ->
+                          load_planned_tasks(
+                            run,
+                            attempt + 1,
+                            Some(
+                              corrective_retry_feedback(
+                                message,
+                                retry_feedback,
+                              ),
+                            ),
+                          )
+                        False -> {
+                          use _ <- result.try(reject_invalid_plan(run, issues))
+                          Error(message)
+                        }
+                      }
+                    }
+                  }
                 // Give the planner one corrective retry when the shape is close
                 // enough to explain what invariant it violated.
                 Error(message) ->
@@ -314,7 +343,11 @@ fn finish_run(run: types.RunRecord) -> Result(types.RunRecord, String) {
     _ -> "Night Shift stopped."
   }
 
-  journal.mark_status(run, status, message)
+  use finalized_run <- result.try(journal.mark_status(run, status, message))
+  case status {
+    types.RunCompleted -> finalize_review_supersessions(finalized_run)
+    _ -> Ok(finalized_run)
+  }
 }
 
 fn launch_batch(
@@ -541,17 +574,30 @@ fn await_batch(
     [] -> Ok(run)
     [task_run, ..rest] -> {
       let next_run_result = case provider.await_task_detailed(task_run) {
-        Ok(execution_result) ->
-          case complete_task(config, run, task_run, execution_result) {
-            Ok(updated_run) -> Ok(updated_run)
-            Error(message) ->
-              mark_task_with_event(
-                run,
-                task_run.task,
-                types.Failed,
-                domain_summary.completion_failure_summary(message),
-                "task_failed",
-              )
+        Ok(awaited_execution) ->
+          case
+            append_execution_payload_warning(run, task_run, awaited_execution)
+          {
+            Ok(warned_run) ->
+              case
+                complete_task(
+                  config,
+                  warned_run,
+                  task_run,
+                  awaited_execution.execution_result,
+                )
+              {
+                Ok(updated_run) -> Ok(updated_run)
+                Error(message) ->
+                  mark_task_with_event(
+                    warned_run,
+                    task_run.task,
+                    types.Failed,
+                    domain_summary.completion_failure_summary(message),
+                    "task_failed",
+                  )
+              }
+            Error(message) -> Error(message)
           }
         Error(error) -> handle_await_task_error(run, task_run, error)
       }
@@ -559,6 +605,26 @@ fn await_batch(
       use updated_run <- result.try(next_run_result)
       await_batch(config, updated_run, rest)
     }
+  }
+}
+
+fn append_execution_payload_warning(
+  run: types.RunRecord,
+  task_run: provider.TaskRun,
+  awaited_execution: provider.AwaitedExecution,
+) -> Result(types.RunRecord, String) {
+  case provider.execution_trust_warning(awaited_execution, task_run.task.id) {
+    Some(message) ->
+      journal.append_event(
+        run,
+        types.RunEvent(
+          kind: "execution_payload_warning",
+          at: system.timestamp(),
+          message: message,
+          task_id: Some(task_run.task.id),
+        ),
+      )
+    None -> Ok(run)
   }
 }
 
@@ -894,6 +960,60 @@ fn validate_planned_tasks(
   }
 }
 
+fn finalize_planned_tasks(
+  run: types.RunRecord,
+  planned_tasks: List(types.Task),
+) -> Result(List(types.Task), List(task_validation.ValidationIssue)) {
+  use brief_contents <- result.try(load_brief_for_validation(run.brief_path))
+  use _ <- result.try(task_validation.validate_explicit_serial_requirements(
+    brief_contents,
+    planned_tasks,
+  ))
+  derive_review_lineage_if_needed(run, planned_tasks)
+}
+
+fn load_brief_for_validation(
+  brief_path: String,
+) -> Result(String, List(task_validation.ValidationIssue)) {
+  case simplifile.read(brief_path) {
+    Ok(contents) -> Ok(contents)
+    Error(error) ->
+      Error([
+        task_validation.UnreadablePlanningBrief(
+          path: brief_path,
+          reason: simplifile.describe_error(error),
+        ),
+      ])
+  }
+}
+
+fn derive_review_lineage_if_needed(
+  run: types.RunRecord,
+  planned_tasks: List(types.Task),
+) -> Result(List(types.Task), List(task_validation.ValidationIssue)) {
+  case run.planning_provenance {
+    Some(provenance) ->
+      case types.planning_provenance_uses_reviews(provenance) {
+        True ->
+          case run.repo_state_snapshot {
+            Some(snapshot) ->
+              review_lineage.derive_superseded_pr_numbers(snapshot, planned_tasks)
+              |> result.map_error(fn(message) {
+                [task_validation.ReviewSupersessionMappingMismatch(message)]
+              })
+            None ->
+              Error([
+                task_validation.ReviewSupersessionMappingMismatch(
+                  "Review-driven replacement planning requires a repo-state snapshot.",
+                ),
+              ])
+          }
+        False -> Ok(planned_tasks)
+      }
+    None -> Ok(planned_tasks)
+  }
+}
+
 fn reject_invalid_plan(
   run: types.RunRecord,
   issues: List(task_validation.ValidationIssue),
@@ -937,6 +1057,10 @@ fn retryable_planning_issue(message: String) -> Bool {
   || string.contains(does: lowered, contain: "fragmented tiny plan")
   || string.contains(does: lowered, contain: "reuse the recorded decision key")
   || string.contains(does: lowered, contain: "dependencies")
+  || string.contains(does: lowered, contain: "strict serial")
+  || string.contains(does: lowered, contain: "exactly ")
+  || string.contains(does: lowered, contain: "superseded pull request")
+  || string.contains(does: lowered, contain: "impacted pr subtree shape")
 }
 
 fn corrective_retry_feedback(
@@ -951,7 +1075,376 @@ fn corrective_retry_feedback(
   prefix
   <> "The previous planning attempt failed because:\n"
   <> message
-  <> "\nRetry once. Return only a valid Night Shift plan between the sentinel markers, reuse prior decision keys when they still apply, and keep tiny docs-only work to the minimum meaningful number of implementation tasks."
+  <> "\nRetry once. Return only a valid Night Shift plan between the sentinel markers, reuse prior decision keys when they still apply, keep tiny docs-only work to the minimum meaningful number of implementation tasks, respect any explicit strict serial chain requirements, and leave superseded_pr_numbers empty because Night Shift derives review lineage after planning."
+}
+
+fn finalize_review_supersessions(
+  run: types.RunRecord,
+) -> Result(types.RunRecord, String) {
+  case run.planning_provenance {
+    Some(provenance) ->
+      case types.planning_provenance_uses_reviews(provenance) {
+        True -> {
+          let mappings = collect_superseded_replacements(run.tasks)
+          use superseded_run <- result.try(close_superseded_pull_requests(
+            run,
+            mappings,
+          ))
+          prune_superseded_successful_worktrees(
+            superseded_run,
+            collect_superseded_pr_numbers(mappings),
+          )
+        }
+        False -> Ok(run)
+      }
+    None -> Ok(run)
+  }
+}
+
+fn collect_superseded_replacements(
+  tasks: List(types.Task),
+) -> List(#(Int, List(Int))) {
+  tasks
+  |> list.fold([], fn(acc, task) {
+    case task.state == types.Completed, parse_pr_number(task.pr_number) {
+      True, Ok(replacement_pr_number) ->
+        task.superseded_pr_numbers
+        |> list.fold(acc, fn(acc, superseded_pr_number) {
+          record_superseded_replacement(
+            acc,
+            superseded_pr_number,
+            replacement_pr_number,
+          )
+        })
+      _, _ -> acc
+    }
+  })
+}
+
+fn record_superseded_replacement(
+  mappings: List(#(Int, List(Int))),
+  superseded_pr_number: Int,
+  replacement_pr_number: Int,
+) -> List(#(Int, List(Int))) {
+  case mappings {
+    [] -> [#(superseded_pr_number, [replacement_pr_number])]
+    [#(existing_pr_number, replacements), ..rest] ->
+      case existing_pr_number == superseded_pr_number {
+        True -> [
+          #(
+            existing_pr_number,
+            append_unique_int(replacements, replacement_pr_number),
+          ),
+          ..rest
+        ]
+        False -> [
+          #(existing_pr_number, replacements),
+          ..record_superseded_replacement(
+            rest,
+            superseded_pr_number,
+            replacement_pr_number,
+          )
+        ]
+      }
+  }
+}
+
+fn close_superseded_pull_requests(
+  run: types.RunRecord,
+  mappings: List(#(Int, List(Int))),
+) -> Result(types.RunRecord, String) {
+  case mappings {
+    [] -> Ok(run)
+    [#(superseded_pr_number, replacement_pr_numbers), ..rest] -> {
+      let log_path =
+        filepath.join(
+          run.run_path,
+          "logs/review-supersession-"
+            <> int.to_string(superseded_pr_number)
+            <> ".log",
+        )
+      let replacement_summary = render_pr_numbers(replacement_pr_numbers)
+      let event = case
+        github.mark_pull_request_superseded(
+          run.repo_root,
+          superseded_pr_number,
+          replacement_pr_numbers,
+          log_path,
+        )
+      {
+        Ok(_) ->
+          types.RunEvent(
+            kind: "pr_superseded",
+            at: system.timestamp(),
+            message: "Closed superseded PR #"
+              <> int.to_string(superseded_pr_number)
+              <> " after opening replacement PRs "
+              <> replacement_summary
+              <> ".",
+            task_id: None,
+          )
+        Error(message) ->
+          types.RunEvent(
+            kind: "review_supersession_warning",
+            at: system.timestamp(),
+            message: "Replacement PRs "
+              <> replacement_summary
+              <> " were created, but Night Shift could not close superseded PR #"
+              <> int.to_string(superseded_pr_number)
+              <> ": "
+              <> message,
+            task_id: None,
+          )
+      }
+      use updated_run <- result.try(journal.append_event(run, event))
+      close_superseded_pull_requests(updated_run, rest)
+    }
+  }
+}
+
+fn append_unique_int(values: List(Int), candidate: Int) -> List(Int) {
+  case list.contains(values, candidate) {
+    True -> values
+    False -> list.append(values, [candidate])
+  }
+}
+
+fn parse_pr_number(pr_number: String) -> Result(Int, Nil) {
+  int.parse(pr_number)
+}
+
+fn render_pr_numbers(pr_numbers: List(Int)) -> String {
+  pr_numbers
+  |> list.map(fn(pr_number) { "#" <> int.to_string(pr_number) })
+  |> string.join(with: ", ")
+}
+
+fn collect_superseded_pr_numbers(mappings: List(#(Int, List(Int)))) -> List(Int) {
+  mappings
+  |> list.map(fn(mapping) { mapping.0 })
+}
+
+fn prune_superseded_successful_worktrees(
+  run: types.RunRecord,
+  superseded_pr_numbers: List(Int),
+) -> Result(types.RunRecord, String) {
+  case superseded_pr_numbers {
+    [] -> Ok(run)
+    _ ->
+      case journal.list_runs(run.repo_root) {
+        Ok(prior_runs) -> {
+          let candidates =
+            prior_runs
+            |> list.filter(fn(candidate) {
+              run_is_prune_candidate(run, candidate, superseded_pr_numbers)
+            })
+          use #(pruned_run, pruned_any) <- result.try(
+            prune_candidate_runs(run, candidates),
+          )
+          case pruned_any {
+            True ->
+              finalize_worktree_prune_metadata(
+                pruned_run,
+                filepath.join(pruned_run.run_path, "logs/worktree-prune.log"),
+              )
+            False -> Ok(pruned_run)
+          }
+        }
+        Error(message) ->
+          append_worktree_prune_warning(
+            run,
+            "Night Shift completed review supersession cleanup, but could not inspect prior runs for safe worktree pruning: "
+              <> message,
+          )
+      }
+  }
+}
+
+fn run_is_prune_candidate(
+  current_run: types.RunRecord,
+  candidate: types.RunRecord,
+  superseded_pr_numbers: List(Int),
+) -> Bool {
+  candidate.run_id != current_run.run_id
+  && candidate.status == types.RunCompleted
+  && run_pr_numbers_fully_superseded(candidate, superseded_pr_numbers)
+}
+
+fn run_pr_numbers_fully_superseded(
+  run: types.RunRecord,
+  superseded_pr_numbers: List(Int),
+) -> Bool {
+  let candidate_pr_numbers =
+    run.tasks
+    |> list.filter_map(fn(task) {
+      case task.state == types.Completed && task.worktree_path != "" {
+        True ->
+          case parse_pr_number(task.pr_number) {
+            Ok(pr_number) -> Ok(pr_number)
+            Error(_) -> Error(Nil)
+          }
+        False -> Error(Nil)
+      }
+    })
+
+  case candidate_pr_numbers {
+    [] -> False
+    _ -> list.all(candidate_pr_numbers, fn(pr_number) {
+      list.contains(superseded_pr_numbers, pr_number)
+    })
+  }
+}
+
+fn prune_candidate_runs(
+  run: types.RunRecord,
+  candidates: List(types.RunRecord),
+) -> Result(#(types.RunRecord, Bool), String) {
+  case candidates {
+    [] -> Ok(#(run, False))
+    [candidate, ..rest] -> {
+      use #(updated_run, candidate_pruned) <- result.try(
+        prune_run_worktrees(run, candidate),
+      )
+      use #(final_run, rest_pruned) <- result.try(
+        prune_candidate_runs(updated_run, rest),
+      )
+      Ok(#(final_run, candidate_pruned || rest_pruned))
+    }
+  }
+}
+
+fn prune_run_worktrees(
+  run: types.RunRecord,
+  candidate: types.RunRecord,
+) -> Result(#(types.RunRecord, Bool), String) {
+  prune_run_worktrees_loop(run, candidate, candidate.tasks, False)
+}
+
+fn prune_run_worktrees_loop(
+  run: types.RunRecord,
+  candidate: types.RunRecord,
+  tasks: List(types.Task),
+  pruned_any: Bool,
+) -> Result(#(types.RunRecord, Bool), String) {
+  case tasks {
+    [] -> Ok(#(run, pruned_any))
+    [task, ..rest] -> {
+      use #(updated_run, task_pruned) <- result.try(
+        prune_worktree_if_safe(run, candidate, task),
+      )
+      prune_run_worktrees_loop(
+        updated_run,
+        candidate,
+        rest,
+        pruned_any || task_pruned,
+      )
+    }
+  }
+}
+
+fn prune_worktree_if_safe(
+  run: types.RunRecord,
+  candidate: types.RunRecord,
+  task: types.Task,
+) -> Result(#(types.RunRecord, Bool), String) {
+  case task.worktree_path {
+    "" -> Ok(#(run, False))
+    worktree_path -> {
+      let log_path =
+        filepath.join(
+          run.run_path,
+          "logs/worktree-prune-" <> candidate.run_id <> "-" <> task.id <> ".log",
+        )
+      case simplifile.read_directory(at: worktree_path) {
+        Error(_) ->
+          append_worktree_prune_warning(
+            run,
+            "Night Shift skipped pruning superseded worktree for run "
+              <> candidate.run_id
+              <> " task "
+              <> task.id
+              <> " because the path no longer exists: "
+              <> worktree_path,
+          )
+          |> result.map(fn(updated_run) { #(updated_run, False) })
+        Ok(_) ->
+          case git.has_changes(worktree_path, log_path) {
+            True ->
+              append_worktree_prune_warning(
+                run,
+                "Night Shift retained superseded worktree for run "
+                  <> candidate.run_id
+                  <> " task "
+                  <> task.id
+                  <> " because it still has local changes: "
+                  <> worktree_path,
+              )
+              |> result.map(fn(updated_run) { #(updated_run, False) })
+            False ->
+              case git.remove_worktree(run.repo_root, worktree_path, log_path) {
+                Ok(_) ->
+                  journal.append_event(
+                    run,
+                    types.RunEvent(
+                      kind: "worktree_pruned",
+                      at: system.timestamp(),
+                      message: "Pruned clean superseded worktree for run "
+                        <> candidate.run_id
+                        <> " task "
+                        <> task.id
+                        <> " at "
+                        <> worktree_path
+                        <> ".",
+                      task_id: None,
+                    ),
+                  )
+                  |> result.map(fn(updated_run) { #(updated_run, True) })
+                Error(message) ->
+                  append_worktree_prune_warning(
+                    run,
+                    "Night Shift could not prune superseded worktree for run "
+                      <> candidate.run_id
+                      <> " task "
+                      <> task.id
+                      <> ": "
+                      <> message,
+                  )
+                  |> result.map(fn(updated_run) { #(updated_run, False) })
+              }
+          }
+      }
+    }
+  }
+}
+
+fn finalize_worktree_prune_metadata(
+  run: types.RunRecord,
+  log_path: String,
+) -> Result(types.RunRecord, String) {
+  case git.prune_worktrees(run.repo_root, log_path) {
+    Ok(_) -> Ok(run)
+    Error(message) ->
+      append_worktree_prune_warning(
+        run,
+        "Night Shift pruned clean superseded worktrees, but `git worktree prune` reported a warning: "
+          <> message,
+      )
+  }
+}
+
+fn append_worktree_prune_warning(
+  run: types.RunRecord,
+  message: String,
+) -> Result(types.RunRecord, String) {
+  journal.append_event(
+    run,
+    types.RunEvent(
+      kind: "worktree_prune_warning",
+      at: system.timestamp(),
+      message: message,
+      task_id: None,
+    ),
+  )
 }
 
 fn handle_await_task_error(

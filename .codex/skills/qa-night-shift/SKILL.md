@@ -86,6 +86,43 @@ Typical flow:
 8. use `night-shift resolve` or `night-shift resume` only if the run actually
    requires it
 
+For review-driven investigations, replace steps 3-4 with:
+
+1. inspect open Night Shift PRs and their review state
+2. run `night-shift plan --from-reviews`
+3. optionally add `--notes <file-or-inline-text>` when the user wants extra
+   operator context blended into the replanning pass
+
+In review-driven runs, pay attention to repo-state evidence:
+
+- the stored open-PR snapshot captured during planning
+- whether `status`, `report`, or the dashboard show repo-state drift
+- whether `night-shift report` shows the actionable/impacted subtree and
+  replacement lineage, while the persisted `report.md` remains readable
+  without live GitHub refresh
+- whether successor PRs include `Supersedes #...`
+- whether persisted tasks carry derived `superseded_pr_numbers` even though the
+  planner prompt asks providers to leave them empty
+- whether root-level feedback marks descendants as impacted in the review-driven prompt or resulting plan
+- whether review-driven replanning blocks with a clear validation error when
+  the replacement graph cannot be mapped cleanly onto the impacted PR subtree
+- when the note explicitly asks for a strict serial stack, whether the planner
+  is retried or rejected unless implementation tasks form one chain
+- whether superseded PRs stay open until the replacement run completes
+- whether old PRs are commented on and auto-closed only after successful
+  completion
+- whether completed task worktrees remain mounted after success, which is the
+  current intended hygiene model
+- whether successful replacement runs automatically prune only the clean
+  worktrees from older superseded successful runs
+- whether dirty or missing superseded worktrees are retained and called out as
+  warnings instead of being removed silently
+- whether `reset` removes Night Shift state and mounted worktrees without
+  deleting local branches or closing remote PRs
+- whether noisy-but-valid execution payloads are accepted with
+  `execution_payload_warning` evidence instead of being routed to manual
+  attention
+
 Use small tasks that validate the requested behavior instead of inviting large
 feature work.
 

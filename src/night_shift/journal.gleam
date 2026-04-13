@@ -44,6 +44,30 @@ pub fn create_pending_run(
   )
 }
 
+pub fn create_pending_run_with_context(
+  repo_root: String,
+  brief_path: String,
+  planning_agent: types.ResolvedAgentConfig,
+  execution_agent: types.ResolvedAgentConfig,
+  environment_name: String,
+  max_workers: Int,
+  notes_source: Option(types.NotesSource),
+  planning_provenance: Option(types.PlanningProvenance),
+  repo_state_snapshot: Option(types.RepoStateSnapshot),
+) -> Result(types.RunRecord, String) {
+  run_store.create_pending_run_with_context(
+    repo_root,
+    brief_path,
+    planning_agent,
+    execution_agent,
+    environment_name,
+    max_workers,
+    notes_source,
+    planning_provenance,
+    repo_state_snapshot,
+  )
+}
+
 pub fn activate_run(run: types.RunRecord) -> Result(types.RunRecord, String) {
   run_store.activate_run(run)
 }

@@ -35,14 +35,17 @@ pub fn resolve_start_agents(
   Ok(#(planning_agent, execution_agent))
 }
 
-/// Resolve the provider config used for the review phase.
+/// Resolve the provider config used for legacy review callers.
+///
+/// Review-driven planning now reuses the planning profile, so this helper is a
+/// compatibility alias rather than a distinct phase.
 pub fn resolve_review_agent(
   config: types.Config,
   overrides: types.AgentOverrides,
 ) -> Result(types.ResolvedAgentConfig, String) {
   resolve_profile(
     config,
-    fallback_phase_profile(config.review_profile, config),
+    fallback_phase_profile(config.planning_profile, config),
     overrides,
   )
 }

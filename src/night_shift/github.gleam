@@ -7,8 +7,10 @@ import gleam/json
 import gleam/list
 import gleam/result
 import gleam/string
+import night_shift/domain/repo_state
 import night_shift/shell
 import night_shift/system
+import night_shift/types
 import simplifile
 
 /// Minimal pull request identity returned after delivery.
@@ -113,6 +115,40 @@ pub fn review_item(
   }
 }
 
+pub fn repo_state_snapshot(
+  cwd: String,
+  branch_prefix: String,
+  log_path: String,
+) -> Result(types.RepoStateSnapshot, String) {
+  use prs <- result.try(list_night_shift_prs(cwd, branch_prefix, log_path))
+  use review_items <- result.try(prs |> list.try_map(fn(pr) {
+    review_item(cwd, pr.number, log_path)
+  }))
+  Ok(
+    repo_state.snapshot(
+      system.timestamp(),
+      review_items |> list.map(review_work_item_snapshot),
+    ),
+  )
+}
+
+pub fn mark_pull_request_superseded(
+  cwd: String,
+  pr_number: Int,
+  replacement_pr_numbers: List(Int),
+  log_path: String,
+) -> Result(Nil, String) {
+  let replacement_labels =
+    replacement_pr_numbers
+    |> list.map(fn(number) { "#" <> int.to_string(number) })
+    |> string.join(with: ", ")
+  let message =
+    "Night Shift superseded this pull request with " <> replacement_labels <> "."
+
+  use _ <- result.try(comment_pull_request(cwd, pr_number, message, log_path))
+  close_pull_request(cwd, pr_number, log_path)
+}
+
 fn list_pull_requests(
   cwd: String,
   branch_name: String,
@@ -175,6 +211,30 @@ fn create_pull_request(
     True -> Ok(string.trim(result.output))
     False -> Error(string.trim(result.output))
   }
+}
+
+fn comment_pull_request(
+  cwd: String,
+  pr_number: Int,
+  body: String,
+  log_path: String,
+) -> Result(Nil, String) {
+  let command =
+    gh_pr_command("comment ")
+    <> int.to_string(pr_number)
+    <> " --body "
+    <> shell.quote(body)
+
+  run_gh(command, cwd, log_path)
+}
+
+fn close_pull_request(
+  cwd: String,
+  pr_number: Int,
+  log_path: String,
+) -> Result(Nil, String) {
+  let command = gh_pr_command("close ") <> int.to_string(pr_number)
+  run_gh(command, cwd, log_path)
 }
 
 fn edit_pull_request(
@@ -357,6 +417,33 @@ fn review_decoder() -> decode.Decoder(String) {
 fn comment_decoder() -> decode.Decoder(String) {
   use body <- decode.field("body", decode.string)
   decode.success("Comment: " <> body)
+}
+
+fn review_work_item_snapshot(
+  review_item: ReviewWorkItem,
+) -> types.RepoPullRequestSnapshot {
+  let actionable =
+    review_item.review_decision == "REVIEW_REQUIRED"
+    || review_item.failing_checks != []
+    || has_non_empty_review_feedback(review_item.review_comments)
+
+  types.RepoPullRequestSnapshot(
+    number: review_item.number,
+    title: review_item.title,
+    url: review_item.url,
+    head_ref_name: review_item.head_ref_name,
+    base_ref_name: review_item.base_ref_name,
+    review_decision: review_item.review_decision,
+    failing_checks: review_item.failing_checks,
+    review_comments: review_item.review_comments,
+    actionable: actionable,
+    impacted: actionable,
+  )
+}
+
+fn has_non_empty_review_feedback(review_comments: List(String)) -> Bool {
+  review_comments
+  |> list.any(fn(comment) { string.trim(comment) != "" })
 }
 
 fn identity(value: Result(String, Nil)) -> Result(String, Nil) {

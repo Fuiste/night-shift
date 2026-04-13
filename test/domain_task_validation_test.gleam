@@ -41,6 +41,35 @@ pub fn validate_follow_up_tasks_rejects_file_path_dependencies_test() {
     == "task `smoke` depends on unknown task id `docs/wiki/combinators.md`"
 }
 
+pub fn validate_explicit_serial_requirements_accepts_true_chain_test() {
+  let brief =
+    "Use exactly 3 implementation tasks in a strict serial dependency chain."
+  let tasks = [
+    task("rewrite-root", []),
+    task("update-nav", ["rewrite-root"]),
+    task("refresh-links", ["update-nav"]),
+  ]
+
+  let assert Ok(Nil) =
+    task_validation.validate_explicit_serial_requirements(brief, tasks)
+}
+
+pub fn validate_explicit_serial_requirements_rejects_star_shape_test() {
+  let brief =
+    "Use exactly 3 implementation tasks in a strict serial dependency chain."
+  let tasks = [
+    task("rewrite-root", []),
+    task("update-nav", ["rewrite-root"]),
+    task("refresh-links", ["rewrite-root"]),
+  ]
+
+  let assert Error(issues) =
+    task_validation.validate_explicit_serial_requirements(brief, tasks)
+
+  assert task_validation.render_issues(issues)
+    == "planner must return implementation tasks as one strict serial dependency chain"
+}
+
 fn task(id: String, dependencies: List(String)) -> types.Task {
   types.Task(
     id: id,
@@ -50,6 +79,7 @@ fn task(id: String, dependencies: List(String)) -> types.Task {
     acceptance: [],
     demo_plan: [],
     decision_requests: [],
+    superseded_pr_numbers: [],
     kind: types.ImplementationTask,
     execution_mode: types.Serial,
     state: types.Queued,
@@ -69,6 +99,7 @@ fn follow_up(id: String, dependencies: List(String)) -> types.FollowUpTask {
     acceptance: [],
     demo_plan: [],
     decision_requests: [],
+    superseded_pr_numbers: [],
     kind: types.ImplementationTask,
     execution_mode: types.Serial,
   )

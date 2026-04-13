@@ -38,7 +38,6 @@ pub fn render(config: types.Config) -> String {
     "default_profile = " <> shared.render_string(config.default_profile),
     "planning_profile = " <> shared.render_string(config.planning_profile),
     "execution_profile = " <> shared.render_string(config.execution_profile),
-    "review_profile = " <> shared.render_string(config.review_profile),
     "",
     "base_branch = " <> shared.render_string(config.base_branch),
     "max_workers = " <> int.to_string(config.max_workers),

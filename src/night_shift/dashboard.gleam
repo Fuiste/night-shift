@@ -2,9 +2,13 @@
 
 import gleam/json
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/option.{type Option, None, Some}
 import gleam/result
+import night_shift/config
 import night_shift/journal
+import night_shift/project
+import night_shift/repo_state_runtime
+import night_shift/report
 import night_shift/types
 
 /// A running local dashboard session.
@@ -129,6 +133,12 @@ pub fn index_html(initial_run_id: String) -> String {
   <> "        ['Execution model', run.execution_agent.model || 'default'], ['Execution reasoning', run.execution_agent.reasoning || 'default'], ['Repo', run.repo_root], ['Created', run.created_at],\n"
   <> "        ['Updated', run.updated_at], ['Brief', run.brief_path], ['Max workers', String(run.max_workers)]\n"
   <> "      ];\n"
+  <> "      if (run.repo_state) {\n"
+  <> "        fields.push(['Open PRs', String(run.repo_state.open_pr_count)]);\n"
+  <> "        fields.push(['Actionable PRs', String(run.repo_state.actionable_pr_count)]);\n"
+  <> "        fields.push(['Snapshot captured', run.repo_state.snapshot_captured_at]);\n"
+  <> "        fields.push(['Drift', run.repo_state.drift]);\n"
+  <> "      }\n"
   <> "      document.getElementById('run-meta').innerHTML = fields.map(([label, value]) => `<div class=\"meta-card\"><div class=\"label\">${label}</div><div class=\"value\"></div></div>`).join('');\n"
   <> "      Array.from(document.querySelectorAll('#run-meta .value')).forEach((node, index) => { node.textContent = fields[index][1] || '—'; });\n"
   <> "      document.getElementById('status-line').textContent = `Viewing run ${run.run_id} (${run.status}).`;\n"
@@ -214,12 +224,13 @@ pub fn runs_json(repo_root: String) -> Result(String, String) {
 /// Encode one run, its events, and its report as dashboard JSON.
 pub fn run_json(repo_root: String, run_id: String) -> Result(String, String) {
   use #(run, events) <- result.try(journal.load(repo_root, types.RunId(run_id)))
-  use report <- result.try(journal.read_report(repo_root, types.RunId(run_id)))
+  let repo_state_view = load_repo_state_view(run)
+  let rendered_report = report.render_live(run, events, repo_state_view)
   Ok(
     json.object([
-      #("run", run_detail_json(run)),
+      #("run", run_detail_json(run, repo_state_view)),
       #("events", json.array(events, event_json)),
-      #("report", json.string(report)),
+      #("report", json.string(rendered_report)),
     ])
     |> json.to_string,
   )
@@ -237,7 +248,10 @@ fn run_summary_json(run: types.RunRecord) -> json.Json {
   ])
 }
 
-fn run_detail_json(run: types.RunRecord) -> json.Json {
+fn run_detail_json(
+  run: types.RunRecord,
+  repo_state_view: Option(repo_state_runtime.RepoStateView),
+) -> json.Json {
   json.object([
     #("run_id", json.string(run.run_id)),
     #("repo_root", json.string(run.repo_root)),
@@ -250,6 +264,7 @@ fn run_detail_json(run: types.RunRecord) -> json.Json {
     #("status", json.string(types.run_status_to_string(run.status))),
     #("created_at", json.string(run.created_at)),
     #("updated_at", json.string(run.updated_at)),
+    #("repo_state", json.nullable(from: repo_state_view, of: repo_state_json)),
     #("tasks", json.array(run.tasks, task_json)),
   ])
 }
@@ -263,6 +278,25 @@ fn task_json(task: types.Task) -> json.Json {
     #("branch_name", json.string(task.branch_name)),
     #("pr_number", json.string(task.pr_number)),
     #("summary", json.string(task.summary)),
+  ])
+}
+
+fn load_repo_state_view(
+  run: types.RunRecord,
+) -> Option(repo_state_runtime.RepoStateView) {
+  case config.load(project.config_path(run.repo_root)) {
+    Ok(loaded_config) ->
+      repo_state_runtime.inspect(run, loaded_config.branch_prefix).view
+    Error(_) -> None
+  }
+}
+
+fn repo_state_json(view: repo_state_runtime.RepoStateView) -> json.Json {
+  json.object([
+    #("snapshot_captured_at", json.string(view.snapshot_captured_at)),
+    #("open_pr_count", json.int(view.open_pr_count)),
+    #("actionable_pr_count", json.int(view.actionable_pr_count)),
+    #("drift", json.string(repo_state_runtime.drift_label(view.drift))),
   ])
 }
 

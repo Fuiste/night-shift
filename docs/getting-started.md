@@ -144,6 +144,18 @@ night-shift resume
 night-shift resume --ui
 ```
 
+If open Night Shift pull requests received feedback and you want a fresh
+replacement stack instead of in-place edits:
+
+```sh
+night-shift plan --from-reviews
+night-shift plan --from-reviews --notes notes/context.md
+```
+
+That flow captures the current open-PR tree, asks the planner for the smallest
+successor stack that reconciles the feedback, and surfaces repo-state drift in
+`status`, `report`, and the dashboard.
+
 If you want a dry proof that the end-to-end harness is wired correctly:
 
 ```sh

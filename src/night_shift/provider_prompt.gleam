@@ -1,3 +1,4 @@
+import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
@@ -9,14 +10,22 @@ pub fn planner_prompt(
   brief_contents: String,
   decisions: List(types.RecordedDecision),
   completed_tasks: List(types.Task),
+  repo_state_snapshot: Option(types.RepoStateSnapshot),
 ) -> String {
-  planner_prompt_with_feedback(brief_contents, decisions, completed_tasks, None)
+  planner_prompt_with_feedback(
+    brief_contents,
+    decisions,
+    completed_tasks,
+    repo_state_snapshot,
+    None,
+  )
 }
 
 pub fn planner_prompt_with_feedback(
   brief_contents: String,
   decisions: List(types.RecordedDecision),
   completed_tasks: List(types.Task),
+  repo_state_snapshot: Option(types.RepoStateSnapshot),
   retry_feedback: Option(String),
 ) -> String {
   "You are Night Shift's planning provider.\n"
@@ -36,6 +45,7 @@ pub fn planner_prompt_with_feedback(
   <> "Every manual-attention request must be answerable at runtime: either provide one or more options, or set allow_freeform = true.\n"
   <> "recommended_option is optional guidance and does not require an options list.\n"
   <> "For implementation tasks, set decision_requests to an empty list.\n"
+  <> "For implementation tasks, always set superseded_pr_numbers to []. Night Shift derives review-driven PR lineage after planning.\n"
   <> "Use task_kind = implementation for normal coding or research work.\n"
   <> "Use execution_mode = parallel for independent low-conflict work, serial for normal implementation work that may share context, and exclusive only when the task must run alone.\n"
   <> "Dependencies must be task ids only.\n"
@@ -46,11 +56,12 @@ pub fn planner_prompt_with_feedback(
   <> "Especially for file-location decisions, carry the accepted target forward directly rather than re-asking with a new key or wording.\n"
   <> "Do not emit tasks whose ids are already completed.\n"
   <> "Use lowercase kebab-case ids.\n"
+  <> render_review_planning_guidance(repo_state_snapshot)
   <> render_retry_feedback(retry_feedback)
   <> "\n"
   <> provider_payload.start_marker
   <> "\n"
-  <> "{\"tasks\":[...]}\n"
+  <> "{\"tasks\":[{\"id\":\"...\",\"title\":\"...\",\"description\":\"...\",\"dependencies\":[\"...\"],\"acceptance\":[\"...\"],\"demo_plan\":[\"...\"],\"decision_requests\":[],\"superseded_pr_numbers\":[],\"task_kind\":\"implementation\",\"execution_mode\":\"serial\"}]}\n"
   <> provider_payload.end_marker
   <> "\n"
   <> "\n"
@@ -60,27 +71,33 @@ pub fn planner_prompt_with_feedback(
   <> "Completed tasks to preserve:\n"
   <> render_completed_tasks(completed_tasks)
   <> "\n\n"
+  <> "Open PR review context:\n"
+  <> render_repo_state_snapshot(repo_state_snapshot)
+  <> "\n\n"
   <> "Brief:\n"
   <> brief_contents
 }
 
 pub fn planning_document_prompt(
-  notes_contents notes_contents: String,
+  notes_contents notes_contents: Option(String),
   existing_doc_contents existing_doc_contents: String,
   doc_path doc_path: String,
+  repo_state_snapshot repo_state_snapshot: Option(types.RepoStateSnapshot),
 ) -> String {
   planning_document_prompt_with_feedback(
     notes_contents,
     existing_doc_contents,
     doc_path,
+    repo_state_snapshot,
     None,
   )
 }
 
 pub fn planning_document_prompt_with_feedback(
-  notes_contents notes_contents: String,
+  notes_contents notes_contents: Option(String),
   existing_doc_contents existing_doc_contents: String,
   doc_path doc_path: String,
+  repo_state_snapshot repo_state_snapshot: Option(types.RepoStateSnapshot),
   retry_feedback retry_feedback: Option(String),
 ) -> String {
   "You are Night Shift's planning provider.\n"
@@ -123,8 +140,12 @@ pub fn planning_document_prompt_with_feedback(
   }
   <> "\n"
   <> "\n"
+  <> "Open PR review context:\n"
+  <> render_repo_state_snapshot(repo_state_snapshot)
+  <> "\n"
+  <> "\n"
   <> "New notes:\n"
-  <> notes_contents
+  <> render_optional_notes_contents(notes_contents)
 }
 
 pub fn execution_prompt(task: types.Task) -> String {
@@ -134,13 +155,15 @@ pub fn execution_prompt(task: types.Task) -> String {
   <> "Do not exceed the task scope.\n"
   <> "Return only one JSON object between the exact sentinel markers below.\n"
   <> "The content between the markers must be exactly one valid JSON object with no trailing braces, notes, or extra text.\n"
+  <> "Do not include shell transcripts, markdown fences, or explanatory prose inside the JSON payload.\n"
   <> "Status must be one of: completed, blocked, failed, manual_attention.\n"
+  <> "Every `files_touched` entry must be a repo-relative path like `src/app.gleam`, never an absolute path.\n"
   <> "Every follow_up_tasks dependency must reference an existing task id or a follow-up task id created in the same follow_up_tasks array.\n"
   <> "Never use file paths, branch names, or acceptance items as follow_up_tasks dependencies.\n"
   <> "The JSON shape is:\n"
   <> provider_payload.start_marker
   <> "\n"
-  <> "{\"status\":\"completed\",\"summary\":\"...\",\"files_touched\":[\"...\"],\"demo_evidence\":[\"...\"],\"pr\":{\"title\":\"...\",\"summary\":\"...\",\"demo\":[\"...\"],\"risks\":[\"...\"]},\"follow_up_tasks\":[{\"id\":\"...\",\"title\":\"...\",\"description\":\"...\",\"dependencies\":[\"...\"],\"acceptance\":[\"...\"],\"demo_plan\":[\"...\"],\"decision_requests\":[],\"task_kind\":\"implementation\",\"execution_mode\":\"serial\"}]}\n"
+  <> "{\"status\":\"completed\",\"summary\":\"...\",\"files_touched\":[\"...\"],\"demo_evidence\":[\"...\"],\"pr\":{\"title\":\"...\",\"summary\":\"...\",\"demo\":[\"...\"],\"risks\":[\"...\"]},\"follow_up_tasks\":[{\"id\":\"...\",\"title\":\"...\",\"description\":\"...\",\"dependencies\":[\"...\"],\"acceptance\":[\"...\"],\"demo_plan\":[\"...\"],\"decision_requests\":[],\"superseded_pr_numbers\":[1],\"task_kind\":\"implementation\",\"execution_mode\":\"serial\"}]}\n"
   <> provider_payload.end_marker
   <> "\n"
   <> "\n"
@@ -210,6 +233,8 @@ fn render_task(task: types.Task) -> String {
   <> render_lines(task.demo_plan)
   <> "\n- Decision requests:\n"
   <> render_decision_requests(task.decision_requests)
+  <> "\n- Supersedes:\n"
+  <> render_superseded_pr_numbers(task.superseded_pr_numbers)
 }
 
 fn render_lines(lines: List(String)) -> String {
@@ -253,6 +278,83 @@ fn render_completed_tasks(tasks: List(types.Task)) -> String {
       tasks
       |> list.map(fn(task) { "- " <> task.id <> ": " <> task.title })
       |> string.join(with: "\n")
+  }
+}
+
+fn render_repo_state_snapshot(
+  repo_state_snapshot: Option(types.RepoStateSnapshot),
+) -> String {
+  case repo_state_snapshot {
+    None -> "(none)"
+    Some(snapshot) -> {
+      let lines =
+        snapshot.open_pull_requests
+        |> list.map(fn(pr) {
+          "- #"
+          <> int.to_string(pr.number)
+          <> " "
+          <> pr.head_ref_name
+          <> " <- "
+          <> pr.base_ref_name
+          <> " | actionable="
+          <> bool_label(pr.actionable)
+          <> " | impacted="
+          <> bool_label(pr.impacted)
+          <> " | decision="
+          <> pr.review_decision
+          <> " | failing_checks="
+          <> render_inline_list(pr.failing_checks)
+          <> " | comments="
+          <> render_inline_list(pr.review_comments)
+        })
+      case lines {
+        [] -> "(none)"
+        _ -> string.join(lines, with: "\n")
+      }
+    }
+  }
+}
+
+fn render_optional_notes_contents(notes_contents: Option(String)) -> String {
+  case notes_contents {
+    Some(contents) -> contents
+    None -> "(none)"
+  }
+}
+
+fn render_superseded_pr_numbers(pr_numbers: List(Int)) -> String {
+  case pr_numbers {
+    [] -> "  - None"
+    _ ->
+      pr_numbers
+      |> list.map(fn(number) { "  - #" <> int.to_string(number) })
+      |> string.join(with: "\n")
+  }
+}
+
+fn render_inline_list(values: List(String)) -> String {
+  case values {
+    [] -> "(none)"
+    _ -> string.join(values, with: " | ")
+  }
+}
+
+fn render_review_planning_guidance(
+  repo_state_snapshot: Option(types.RepoStateSnapshot),
+) -> String {
+  case repo_state_snapshot {
+    None -> ""
+    Some(_) ->
+      "When open PR review context is supplied, preserve human-auditable stack boundaries.\n"
+      <> "Prefer the smallest successor subtree that resolves the feedback.\n"
+      <> "Plan fresh replacement work instead of patching existing PR branches in place.\n"
+  }
+}
+
+fn bool_label(value: Bool) -> String {
+  case value {
+    True -> "true"
+    False -> "false"
   }
 }
 

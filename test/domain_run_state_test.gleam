@@ -43,6 +43,7 @@ fn task_with_state(id: String, state: types.TaskState) -> types.Task {
     acceptance: [],
     demo_plan: [],
     decision_requests: [],
+    superseded_pr_numbers: [],
     kind: types.ImplementationTask,
     execution_mode: types.Serial,
     state: state,
