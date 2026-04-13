@@ -193,6 +193,12 @@ fn render_summary(
       <> int.to_string(event_count(events, "worktree_pruned")),
     "- Execution recovery warnings: "
       <> int.to_string(event_count(events, "execution_payload_warning")),
+    "- Payload repair attempts: "
+      <> int.to_string(event_count(events, "execution_payload_repair_started")),
+    "- Payload repair successes: "
+      <> int.to_string(event_count(events, "execution_payload_repair_succeeded")),
+    "- Payload repair failures: "
+      <> int.to_string(event_count(events, "execution_payload_repair_failed")),
   ]
   |> string.join(with: "\n")
 }
@@ -253,12 +259,27 @@ fn render_worktree_hygiene_section(
 
 fn render_execution_recovery_section(events: List(types.RunEvent)) -> String {
   let warnings = event_messages(events, "execution_payload_warning")
-  case warnings {
-    [] -> ""
-    _ ->
+  let repair_attempts =
+    event_messages(events, "execution_payload_repair_started")
+  let repair_successes =
+    event_messages(events, "execution_payload_repair_succeeded")
+  let repair_failures =
+    event_messages(events, "execution_payload_repair_failed")
+  case warnings, repair_attempts, repair_successes, repair_failures {
+    [], [], [], [] -> ""
+    _, _, _, _ ->
       "\n## Execution Recovery\n"
       <> "- Accepted recovered execution payloads: "
       <> int.to_string(list.length(warnings))
+      <> "\n- Payload repair attempts: "
+      <> int.to_string(list.length(repair_attempts))
+      <> "\n- Payload repair successes: "
+      <> int.to_string(list.length(repair_successes))
+      <> "\n- Payload repair failures: "
+      <> int.to_string(list.length(repair_failures))
+      <> render_event_group("Payload Repair Attempts", repair_attempts)
+      <> render_event_group("Payload Repair Successes", repair_successes)
+      <> render_event_group("Payload Repair Failures", repair_failures)
       <> render_event_group("Recovery Warnings", warnings)
   }
 }

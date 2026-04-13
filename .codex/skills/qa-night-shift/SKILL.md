@@ -122,6 +122,11 @@ In review-driven runs, pay attention to repo-state evidence:
 - whether noisy-but-valid execution payloads are accepted with
   `execution_payload_warning` evidence instead of being routed to manual
   attention
+- whether malformed execution payloads with candidate worktree changes trigger
+  exactly one JSON-only payload-repair retry before Night Shift falls back to
+  manual attention
+- whether `status` and `report` show payload-repair attempts, successes, and
+  failures with usable artifact paths
 
 Use small tasks that validate the requested behavior instead of inviting large
 feature work.

@@ -76,6 +76,8 @@ vanishing into the terminal scrollback.
 - worktree retention and pruning notes
 - execution recovery warnings when Night Shift accepted a sanitized or
   recovered provider payload
+- payload-repair attempt, success, and failure notes when Night Shift retried a
+  malformed execution result in place
 - task summaries
 - planning validation failures
 - event timeline
@@ -106,6 +108,12 @@ When execution payload decoding is noisy, Night Shift preserves the raw payload
 and any sanitized recovery artifact under `logs/`. If the recovered payload is
 still schema-valid and semantically safe, Night Shift accepts it and records an
 `execution_payload_warning` event instead of forcing manual attention.
+
+When execution payload decoding fails outright but the task worktree has
+candidate changes, Night Shift also records a JSON-only payload-repair retry
+under distinct `.payload-repair.*` log and prompt artifacts. If that retry
+still fails, manual-attention summaries include both the original malformed
+payload path and the repair artifacts.
 
 ## Active Lock
 

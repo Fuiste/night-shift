@@ -60,6 +60,19 @@ pub type AwaitedExecution {
   )
 }
 
+pub type PayloadRepairArtifacts {
+  PayloadRepairArtifacts(
+    prompt_path: String,
+    log_path: String,
+    raw_payload_path: Option(String),
+    sanitized_payload_path: Option(String),
+  )
+}
+
+pub type PayloadRepairFailure {
+  PayloadRepairFailure(message: String, artifacts: PayloadRepairArtifacts)
+}
+
 pub fn execution_trust_warning(
   awaited: AwaitedExecution,
   task_id: String,
@@ -513,6 +526,98 @@ pub fn repair_task(
   }
 }
 
+pub fn repair_execution_payload(
+  agent: types.ResolvedAgentConfig,
+  repo_root: String,
+  worktree_path: String,
+  env_vars: List(#(String, String)),
+  run_path: String,
+  task: types.Task,
+  decode_failure: String,
+) -> Result(AwaitedExecution, PayloadRepairFailure) {
+  let prompt_path =
+    filepath.join(run_path, "logs/" <> task.id <> ".payload-repair.prompt.md")
+  let log_path =
+    filepath.join(run_path, "logs/" <> task.id <> ".payload-repair.log")
+  let base_artifacts =
+    PayloadRepairArtifacts(
+      prompt_path: prompt_path,
+      log_path: log_path,
+      raw_payload_path: None,
+      sanitized_payload_path: None,
+    )
+  use _ <- result.try(
+    write_file(
+      prompt_path,
+      provider_prompt.payload_repair_prompt(task, decode_failure),
+    )
+    |> result.map_error(fn(message) {
+      PayloadRepairFailure(message, base_artifacts)
+    }),
+  )
+  use command <- result.try(
+    provider_command.executor_command(
+      agent,
+      repo_root,
+      worktree_path,
+      prompt_path,
+    )
+    |> result.map_error(fn(message) {
+      PayloadRepairFailure(message, base_artifacts)
+    }),
+  )
+  let command_result =
+    provider_command.run_provider_command(
+      shell.with_env(command, env_vars),
+      worktree_path,
+      log_path,
+      shell.stream_metadata(
+        label: task.id <> " payload repair",
+        prompt_path: prompt_path,
+        harness: types.provider_to_string(agent.provider),
+        phase: "payload_repair",
+      ),
+    )
+
+  case shell.succeeded(command_result) {
+    True -> {
+      use _ <- result.try(
+        log_cleanup.clean_operator_log(log_path)
+        |> result.map_error(fn(message) {
+          PayloadRepairFailure(message, base_artifacts)
+        }),
+      )
+      case
+        provider_payload.decode_execution_result_detailed(
+          command_result.output,
+          log_path,
+          "Unable to decode payload repair output for task " <> task.id <> ".",
+        )
+      {
+        Ok(decoded) ->
+          case normalize_awaited_execution(decoded, worktree_path) {
+            Ok(awaited) -> Ok(awaited)
+            Error(error) ->
+              Error(payload_repair_failure_from_await_error(
+                base_artifacts,
+                error,
+              ))
+          }
+        Error(error) ->
+          Error(payload_repair_failure_from_decode_error(base_artifacts, error))
+      }
+    }
+    False ->
+      Error(PayloadRepairFailure(
+        "Payload-repair provider failed for task "
+          <> task.id
+          <> ". See "
+          <> log_path,
+        base_artifacts,
+      ))
+  }
+}
+
 /// Extract the sentinel-delimited provider payload from raw command output.
 pub fn extract_payload(output: String) -> Result(String, String) {
   provider_payload.extract_payload(output)
@@ -526,6 +631,48 @@ pub fn extract_json_payload(output: String) -> Result(String, String) {
 /// Clean a JSON payload before decoding it into Night Shift types.
 pub fn sanitize_json_payload(payload: String) -> Result(String, String) {
   provider_payload.sanitize_json_payload(payload)
+}
+
+fn payload_repair_failure_from_decode_error(
+  base_artifacts: PayloadRepairArtifacts,
+  error: provider_payload.ExecutionDecodeError,
+) -> PayloadRepairFailure {
+  case error {
+    provider_payload.PayloadExtractionFailure(message) ->
+      PayloadRepairFailure(message, base_artifacts)
+    provider_payload.JsonDecodeFailure(message, artifacts) ->
+      PayloadRepairFailure(
+        message,
+        PayloadRepairArtifacts(
+          prompt_path: base_artifacts.prompt_path,
+          log_path: base_artifacts.log_path,
+          raw_payload_path: Some(artifacts.raw_payload_path),
+          sanitized_payload_path: artifacts.sanitized_payload_path,
+        ),
+      )
+  }
+}
+
+fn payload_repair_failure_from_await_error(
+  base_artifacts: PayloadRepairArtifacts,
+  error: AwaitTaskError,
+) -> PayloadRepairFailure {
+  case error {
+    ProviderCommandFailed(message) ->
+      PayloadRepairFailure(message, base_artifacts)
+    PayloadExtractionFailed(message) ->
+      PayloadRepairFailure(message, base_artifacts)
+    PayloadDecodeFailed(message, artifacts) ->
+      PayloadRepairFailure(
+        message,
+        PayloadRepairArtifacts(
+          prompt_path: base_artifacts.prompt_path,
+          log_path: base_artifacts.log_path,
+          raw_payload_path: Some(artifacts.raw_payload_path),
+          sanitized_payload_path: artifacts.sanitized_payload_path,
+        ),
+      )
+  }
 }
 
 fn planning_artifact_path(repo_root: String) -> String {

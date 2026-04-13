@@ -122,6 +122,12 @@ successful runs whose PRs were fully superseded by the replacement run. Dirty,
 blocked, failed, or manual-attention worktrees are retained. `reset` remains
 the full cleanup path.
 
+When a task returns malformed execution JSON but the task worktree has
+candidate changes, Night Shift now performs one JSON-only payload-repair retry
+in that same worktree. If the repaired payload decodes and passes semantic
+checks, execution continues normally; otherwise the task still lands in manual
+attention with both the original and repair artifacts recorded.
+
 ## Dashboard
 
 The dashboard is monitor-only in the current cut:

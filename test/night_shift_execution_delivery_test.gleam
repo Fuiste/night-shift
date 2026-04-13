@@ -778,6 +778,287 @@ pub fn provider_await_task_rejects_absolute_paths_outside_worktree_test() {
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
 
+pub fn provider_payload_repair_accepts_valid_repair_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    support.absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-provider-payload-repair-" <> unique,
+    ))
+  let run_path = filepath.join(base_dir, "run")
+  let worktree_path = filepath.join(base_dir, "worktree")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let fake_provider = filepath.join(bin_dir, "fake-provider")
+  let old_path = system.get_env("PATH")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let assert Ok(_) =
+    simplifile.create_directory_all(filepath.join(run_path, "logs"))
+  let assert Ok(_) = simplifile.create_directory_all(worktree_path)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) =
+    support.write_payload_repair_success_fake_provider(fake_provider)
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_provider),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+
+  let task =
+    types.Task(
+      id: "demo-task",
+      title: "Payload repair payload",
+      description: "Return malformed JSON, then repair it without changing files again.",
+      dependencies: [],
+      acceptance: ["Create REPAIRED.md."],
+      demo_plan: ["Show REPAIRED.md."],
+      decision_requests: [],
+      kind: types.ImplementationTask,
+      execution_mode: types.Serial,
+      state: types.Ready,
+      worktree_path: worktree_path,
+      branch_name: "night-shift/demo",
+      pr_number: "",
+      superseded_pr_numbers: [],
+      summary: "",
+    )
+
+  let assert Ok(task_run) =
+    provider.start_task(
+      types.resolved_agent_from_provider(types.Codex),
+      base_dir,
+      run_path,
+      task,
+      worktree_path,
+      [],
+      "seed-head",
+      "night-shift/demo",
+      "main",
+      provider.CreatedWorktree,
+    )
+  let assert Error(provider.PayloadDecodeFailed(message, _)) =
+    provider.await_task_detailed(task_run)
+  let assert Ok(repaired) =
+    provider.repair_execution_payload(
+      types.resolved_agent_from_provider(types.Codex),
+      base_dir,
+      worktree_path,
+      [],
+      run_path,
+      task,
+      message,
+    )
+
+  system.set_env("PATH", old_path)
+  support.restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
+
+  let assert Ok(raw_payload) =
+    simplifile.read(filepath.join(
+      run_path,
+      "logs/demo-task.payload-repair.result.raw.jsonish",
+    ))
+
+  assert repaired.execution_result.status == types.Completed
+  assert repaired.execution_result.files_touched == ["REPAIRED.md"]
+  assert provider.execution_trust_warning(repaired, task.id) == None
+  assert string.contains(
+    does: raw_payload,
+    contain: "\"summary\":\"Payload repaired successfully\"",
+  )
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn provider_payload_repair_accepts_recoverable_repair_with_warning_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    support.absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-provider-payload-repair-warning-" <> unique,
+    ))
+  let run_path = filepath.join(base_dir, "run")
+  let worktree_path = filepath.join(base_dir, "worktree")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let fake_provider = filepath.join(bin_dir, "fake-provider")
+  let old_path = system.get_env("PATH")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let assert Ok(_) =
+    simplifile.create_directory_all(filepath.join(run_path, "logs"))
+  let assert Ok(_) = simplifile.create_directory_all(worktree_path)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) =
+    support.write_payload_repair_warning_fake_provider(fake_provider)
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_provider),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+
+  let task =
+    types.Task(
+      id: "demo-task",
+      title: "Payload repair warning payload",
+      description: "Return trailing junk during payload repair.",
+      dependencies: [],
+      acceptance: ["Create REPAIRED.md."],
+      demo_plan: ["Show REPAIRED.md."],
+      decision_requests: [],
+      kind: types.ImplementationTask,
+      execution_mode: types.Serial,
+      state: types.Ready,
+      worktree_path: worktree_path,
+      branch_name: "night-shift/demo",
+      pr_number: "",
+      superseded_pr_numbers: [],
+      summary: "",
+    )
+
+  let assert Ok(task_run) =
+    provider.start_task(
+      types.resolved_agent_from_provider(types.Codex),
+      base_dir,
+      run_path,
+      task,
+      worktree_path,
+      [],
+      "seed-head",
+      "night-shift/demo",
+      "main",
+      provider.CreatedWorktree,
+    )
+  let assert Error(provider.PayloadDecodeFailed(message, _)) =
+    provider.await_task_detailed(task_run)
+  let assert Ok(repaired) =
+    provider.repair_execution_payload(
+      types.resolved_agent_from_provider(types.Codex),
+      base_dir,
+      worktree_path,
+      [],
+      run_path,
+      task,
+      message,
+    )
+
+  system.set_env("PATH", old_path)
+  support.restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
+
+  let assert Some(warning) = provider.execution_trust_warning(repaired, task.id)
+  let assert Ok(sanitized_payload) =
+    simplifile.read(filepath.join(
+      run_path,
+      "logs/demo-task.payload-repair.result.sanitized.json",
+    ))
+
+  assert repaired.execution_result.status == types.Completed
+  assert string.contains(does: warning, contain: "recovered")
+  assert string.contains(
+    does: sanitized_payload,
+    contain: "\"summary\":\"Payload repaired with trailing junk\"",
+  )
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn provider_payload_repair_rejects_unsafe_paths_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    support.absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-provider-payload-repair-unsafe-" <> unique,
+    ))
+  let run_path = filepath.join(base_dir, "run")
+  let worktree_path = filepath.join(base_dir, "worktree")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let fake_provider = filepath.join(bin_dir, "fake-provider")
+  let old_path = system.get_env("PATH")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let assert Ok(_) =
+    simplifile.create_directory_all(filepath.join(run_path, "logs"))
+  let assert Ok(_) = simplifile.create_directory_all(worktree_path)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) =
+    support.write_payload_repair_unsafe_fake_provider(fake_provider)
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_provider),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+
+  let task =
+    types.Task(
+      id: "demo-task",
+      title: "Unsafe payload repair payload",
+      description: "Return an unsafe files_touched entry during payload repair.",
+      dependencies: [],
+      acceptance: ["Reject unsafe repaired paths."],
+      demo_plan: ["Reject /tmp/outside.txt."],
+      decision_requests: [],
+      kind: types.ImplementationTask,
+      execution_mode: types.Serial,
+      state: types.Ready,
+      worktree_path: worktree_path,
+      branch_name: "night-shift/demo",
+      pr_number: "",
+      superseded_pr_numbers: [],
+      summary: "",
+    )
+
+  let assert Ok(task_run) =
+    provider.start_task(
+      types.resolved_agent_from_provider(types.Codex),
+      base_dir,
+      run_path,
+      task,
+      worktree_path,
+      [],
+      "seed-head",
+      "night-shift/demo",
+      "main",
+      provider.CreatedWorktree,
+    )
+  let assert Error(provider.PayloadDecodeFailed(message, _)) =
+    provider.await_task_detailed(task_run)
+  let assert Error(provider.PayloadRepairFailure(failure, artifacts)) =
+    provider.repair_execution_payload(
+      types.resolved_agent_from_provider(types.Codex),
+      base_dir,
+      worktree_path,
+      [],
+      run_path,
+      task,
+      message,
+    )
+
+  system.set_env("PATH", old_path)
+  support.restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
+
+  assert string.contains(does: failure, contain: "outside the task worktree")
+  assert artifacts.raw_payload_path
+    == Some(filepath.join(
+      run_path,
+      "logs/demo-task.payload-repair.result.raw.jsonish",
+    ))
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
 pub fn orchestrator_start_accepts_recovered_execution_payload_with_warning_test() {
   let unique = system.unique_id()
   let base_dir =
@@ -1739,6 +2020,7 @@ pub fn orchestrator_start_routes_dirty_decode_failures_to_manual_attention_test(
       summary: "",
     ))
   let assert Ok(report) = simplifile.read(blocked_run.report_path)
+  let assert Ok(events) = simplifile.read(blocked_run.events_path)
   let assert Ok(raw_payload) =
     simplifile.read(filepath.join(
       blocked_run.run_path,
@@ -1754,9 +2036,145 @@ pub fn orchestrator_start_routes_dirty_decode_failures_to_manual_attention_test(
     contain: "candidate worktree changes",
   )
   assert string.contains(does: blocked_task.summary, contain: "Raw payload:")
+  assert string.contains(
+    does: blocked_task.summary,
+    contain: "Payload repair prompt:",
+  )
   assert string.contains(does: report, contain: "Raw payload:")
+  assert string.contains(does: report, contain: "Payload repair failures: 1")
+  assert string.contains(
+    does: events,
+    contain: "\"kind\":\"execution_payload_repair_started\"",
+  )
+  assert string.contains(
+    does: events,
+    contain: "\"kind\":\"execution_payload_repair_failed\"",
+  )
   assert string.contains(does: raw_payload, contain: "\"follow_up_tasks\":[}")
   assert string.contains(does: created_file, contain: "decode fallback")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn orchestrator_start_recovers_dirty_decode_failures_with_payload_repair_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    support.absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-payload-repair-success-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let remote_root = filepath.join(base_dir, "remote.git")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let brief_path = filepath.join(base_dir, "brief.md")
+  let fake_provider = filepath.join(bin_dir, "fake-provider")
+  let fake_gh = filepath.join(bin_dir, "gh")
+  let state_home = filepath.join(base_dir, "state")
+  let old_path = system.get_env("PATH")
+  let old_gh_bin = system.get_env("NIGHT_SHIFT_GH_BIN")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
+  let old_state_home = system.get_env("XDG_STATE_HOME")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
+  let assert Ok(_) =
+    support.write_payload_repair_success_fake_provider(fake_provider)
+  let assert Ok(_) = support.write_fake_gh(fake_gh)
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_provider) <> " " <> shell.quote(fake_gh),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+  let _ =
+    shell.run(
+      "git init --bare " <> shell.quote(remote_root),
+      base_dir,
+      filepath.join(base_dir, "remote.log"),
+    )
+  support.seed_git_repo(repo_root, base_dir)
+  let _ =
+    shell.run(
+      "git remote add origin " <> shell.quote(remote_root),
+      repo_root,
+      filepath.join(base_dir, "remote-add.log"),
+    )
+  let _ =
+    shell.run(
+      "git push -u origin main",
+      repo_root,
+      filepath.join(base_dir, "push-main.log"),
+    )
+
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("NIGHT_SHIFT_GH_BIN", fake_gh)
+  system.set_env("XDG_STATE_HOME", state_home)
+
+  let config =
+    types.Config(
+      ..types.default_config(),
+      verification_commands: [],
+      max_workers: 1,
+    )
+
+  let assert Ok(run) =
+    support.planned_run(repo_root, brief_path, types.Codex, 1)
+  let assert Ok(completed_run) = orchestrator.start(run, config)
+
+  system.set_env("PATH", old_path)
+  support.restore_env("NIGHT_SHIFT_GH_BIN", old_gh_bin)
+  support.restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
+  support.restore_env("XDG_STATE_HOME", old_state_home)
+
+  let completed_task =
+    completed_run.tasks
+    |> list.find(fn(task) { task.id == "demo-task" })
+    |> result.unwrap(or: types.Task(
+      id: "",
+      title: "",
+      description: "",
+      dependencies: [],
+      acceptance: [],
+      demo_plan: [],
+      decision_requests: [],
+      kind: types.ImplementationTask,
+      execution_mode: types.Serial,
+      state: types.Queued,
+      worktree_path: "",
+      branch_name: "",
+      pr_number: "",
+      superseded_pr_numbers: [],
+      summary: "",
+    ))
+  let assert Ok(events) = simplifile.read(completed_run.events_path)
+  let assert Ok(report) = simplifile.read(completed_run.report_path)
+  let assert Ok(created_file) =
+    simplifile.read(filepath.join(completed_task.worktree_path, "REPAIRED.md"))
+
+  assert completed_run.status == types.RunCompleted
+  assert completed_task.state == types.Completed
+  assert completed_task.pr_number == "1"
+  assert string.contains(does: completed_task.summary, contain: "REPAIRED.md")
+  assert string.contains(
+    does: events,
+    contain: "\"kind\":\"execution_payload_repair_started\"",
+  )
+  assert string.contains(
+    does: events,
+    contain: "\"kind\":\"execution_payload_repair_succeeded\"",
+  )
+  assert !string.contains(
+    does: events,
+    contain: "\"kind\":\"task_manual_attention\"",
+  )
+  assert string.contains(does: report, contain: "Payload repair attempts: 1")
+  assert string.contains(does: report, contain: "Payload repair successes: 1")
+  assert string.contains(does: created_file, contain: "payload repair success")
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }

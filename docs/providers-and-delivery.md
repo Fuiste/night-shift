@@ -77,6 +77,9 @@ Night Shift's current delivery model is:
 - when an execution payload is schema-valid after sanitization or recovery,
   Night Shift accepts it, normalizes safe path differences, and records a
   warning event instead of forcing manual attention
+- when an execution payload is malformed but the task worktree has candidate
+  changes, Night Shift performs one JSON-only payload-repair retry in the same
+  worktree before falling back to manual attention
 
 Delivery behavior is shaped by `base_branch`, `branch_prefix`,
 `pr_title_prefix`, and `[verification].commands` in `config.toml`.
