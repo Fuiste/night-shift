@@ -1,6 +1,6 @@
 # Night Shift
 
-Night Shift is a repo-local CLI for planning, executing, and reviewing
+Night Shift is a repo-local CLI for planning, executing, and delivering
 autonomous coding work against a single Git repository. It turns a running
 brief into a task graph, executes tasks inside isolated git worktrees through
 external agent providers, delivers completed work as pull requests, and leaves
@@ -37,7 +37,8 @@ Supporting commands round out the lifecycle:
 
 - `resolve` records answers for blocked planning decisions and replans the run
 - `resume` recovers an interrupted run from saved state
-- `review` reopens open Night Shift PRs as stabilization tasks
+- `plan --from-reviews` turns open Night Shift PR feedback into a fresh
+  successor stack
 - `reset` removes repo-local Night Shift state and tracked worktrees
 - `--demo` runs a fixture-backed proof flow
 
@@ -148,4 +149,3 @@ asdf install
 - [Worktree Environments](docs/worktree-environments.md)
 - [State and Artifacts](docs/state-and-artifacts.md)
 - [Providers and Delivery](docs/providers-and-delivery.md)
-

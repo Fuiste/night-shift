@@ -121,7 +121,7 @@ prefers port `8787`, and serves a monitor-only UI for:
 - event timeline
 - report content
 
-There are no browser-side mutation controls in the current cut.
+There are no browser-side mutation controls.
 
 ## Demo Mode
 

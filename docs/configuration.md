@@ -80,9 +80,9 @@ Phase selectors decide which profile each command uses by default:
 - `execution_profile` for `night-shift start`
 - `default_profile` as the fallback when a phase selector is unset
 
-`review_profile` is deprecated. Night Shift still accepts it during the current
-pre-1.0 transition, but review-driven planning now uses `planning_profile` and
-emits a warning when `review_profile` is set.
+Night Shift accepts `review_profile` as a compatibility alias for older repo
+configs, but review-driven planning resolves through `planning_profile`.
+Setting `review_profile` emits a warning so the config can be simplified.
 
 ## Override Precedence
 

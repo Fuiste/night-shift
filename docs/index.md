@@ -1,12 +1,12 @@
 ---
 title: Home
-description: Night Shift is a repo-local CLI for planning, executing, and reviewing autonomous coding work.
+description: Night Shift is a repo-local CLI for planning, executing, and delivering autonomous coding work.
 permalink: /
 ---
 
 # Night Shift
 
-Night Shift is a repo-local CLI for planning, executing, and reviewing
+Night Shift is a repo-local CLI for planning, executing, and delivering
 autonomous coding work against a single Git repository.
 
 It keeps the brief, run journal, task graph, and execution artifacts local to
@@ -33,8 +33,9 @@ night-shift report
 ```
 
 Use `resolve` when planning needs human decisions, `resume` when a run was
-interrupted, `review` when open Night Shift PRs need stabilization, and
-`reset` when you need to eject the repo-local control plane and start over.
+interrupted, `plan --from-reviews` when open Night Shift PRs need a fresh
+successor stack, and `reset` when you need to eject the repo-local control
+plane and start over.
 
 ## Repository
 
