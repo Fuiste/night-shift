@@ -21,7 +21,6 @@ Runtime artifacts stay alongside them under the same repo-local home.
 default_profile = "default"
 planning_profile = "planner"
 execution_profile = "builder"
-review_profile = "reviewer"
 
 base_branch = "main"
 max_workers = 4
@@ -70,9 +69,13 @@ Profiles are the main operator abstraction. Each profile can define:
 Phase selectors decide which profile each command uses by default:
 
 - `planning_profile` for `night-shift plan`
+- `planning_profile` also governs `night-shift plan --from-reviews`
 - `execution_profile` for `night-shift start`
-- `review_profile` for `night-shift review`
 - `default_profile` as the fallback when a phase selector is unset
+
+`review_profile` is deprecated. Night Shift still accepts it during the current
+pre-1.0 transition, but review-driven planning now uses `planning_profile` and
+emits a warning when `review_profile` is set.
 
 ## Override Precedence
 

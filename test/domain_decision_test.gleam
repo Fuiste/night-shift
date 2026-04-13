@@ -82,6 +82,7 @@ fn manual_attention_task() -> types.Task {
         allow_freeform: True,
       ),
     ],
+    superseded_pr_numbers: [],
     kind: types.ManualAttentionTask,
     execution_mode: types.Exclusive,
     state: types.Ready,

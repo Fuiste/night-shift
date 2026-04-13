@@ -1,7 +1,6 @@
 default_profile = "default"
 planning_profile = "default"
 execution_profile = "default"
-review_profile = "default"
 
 base_branch = "main"
 max_workers = 4

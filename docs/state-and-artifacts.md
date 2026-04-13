@@ -36,11 +36,18 @@ Each run directory contains durable state for one run:
 - `logs/`
 - `worktrees/`
 
+Night Shift only treats a run directory as real once `state.json`,
+`events.jsonl`, and `report.md` all exist. Failed planning attempts may leave
+planning artifacts behind, but they are ignored by `status` and `report`.
+
 The run record itself stores:
 
 - resolved planning and execution agent configs
 - the selected environment name
 - notes source metadata
+- planning provenance such as `notes only` or `reviews + notes`
+- an open-PR repo-state snapshot for review-driven plans
+- mechanically derived supersession lineage on replacement tasks
 - recorded decisions
 - `planning_dirty`
 - task list and task states
@@ -62,12 +69,43 @@ vanishing into the terminal scrollback.
 - run status
 - planning and execution agent summaries
 - environment label
+- captured review snapshot details for review-driven runs
+- actionable and impacted PR lists from the stored review snapshot
+- replacement lineage such as `task -> superseded PR`
+- supersession outcomes and warnings
+- worktree retention and pruning notes
+- execution recovery warnings when Night Shift accepted a sanitized or
+  recovered provider payload
 - task summaries
 - planning validation failures
 - event timeline
 
+The persisted `report.md` under a run directory is the stable artifact written
+with the run state. The `night-shift report` command is slightly richer for
+review-driven runs: it refreshes repo-state drift against the current open PR
+tree when a stored snapshot exists, so its live output is authoritative for
+current drift while `report.md` remains durable and offline-readable.
+
 Task-level provider logs and prompt files live under each run's `logs/`
 directory.
+
+Task worktrees are intentionally sticky. Night Shift keeps them mounted after
+completion so operators can inspect delivery state or resume later without
+reconstructing the world from scratch. The one automatic cleanup path is
+review-driven supersession: after a successful replacement run comments on and
+closes the old PRs, Night Shift prunes clean worktrees from older successful
+runs whose PRs were fully superseded. Dirty or unresolved worktrees are
+retained and called out in events and reports.
+
+For review-driven runs, task lineage in `state.json` is Night Shift-owned
+metadata. Providers return `superseded_pr_numbers = []`, then Night Shift
+derives the replacement mapping from the impacted PR subtree plus the validated
+task graph before it persists the run.
+
+When execution payload decoding is noisy, Night Shift preserves the raw payload
+and any sanitized recovery artifact under `logs/`. If the recovered payload is
+still schema-valid and semantically safe, Night Shift accepts it and records an
+`execution_payload_warning` event instead of forcing manual attention.
 
 ## Active Lock
 
@@ -82,6 +120,9 @@ plane rather than the task worktrees themselves.
 - remove `./.night-shift/`
 - remove recorded Night Shift task worktrees
 - prune git worktree metadata
+
+`reset` does not delete local Night Shift branches and it does not close or
+modify remote pull requests.
 
 It is deliberately destructive. If an active run still exists, use
 `night-shift reset --force`. If you are not in an interactive terminal, pass

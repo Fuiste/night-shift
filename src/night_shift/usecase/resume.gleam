@@ -7,6 +7,7 @@ import night_shift/domain/task_graph
 import night_shift/git
 import night_shift/journal
 import night_shift/orchestrator
+import night_shift/repo_state_runtime
 import night_shift/system
 import night_shift/types
 import night_shift/usecase/result as workflow
@@ -24,10 +25,16 @@ pub fn execute(
     saved_run.environment_name,
   ))
   use resumed_run <- result.try(prepare_resumed_run(saved_run))
-  use continued_run <- result.try(orchestrator.continue_run(resumed_run, config))
+  let inspection = repo_state_runtime.inspect(resumed_run, config.branch_prefix)
+  use inspected_run <- result.try(append_events(resumed_run, inspection.events))
+  use continued_run <- result.try(orchestrator.continue_run(
+    inspected_run,
+    config,
+  ))
   Ok(workflow.ResumeResult(
     run: continued_run,
-    warnings: [],
+    warnings: inspection.warnings,
+    repo_state_view: inspection.view,
     next_action: runs.next_action_for_run(continued_run),
   ))
 }
@@ -61,4 +68,17 @@ fn recover_task(task: types.Task) -> types.Task {
   }
 
   run_state.recover_task(task, has_worktree_changes)
+}
+
+fn append_events(
+  run: types.RunRecord,
+  events: List(types.RunEvent),
+) -> Result(types.RunRecord, String) {
+  case events {
+    [] -> Ok(run)
+    [event, ..rest] -> {
+      use updated_run <- result.try(journal.append_event(run, event))
+      append_events(updated_run, rest)
+    }
+  }
 }

@@ -76,6 +76,7 @@ pub fn merge_follow_up_tasks(
           acceptance: follow_up.acceptance,
           demo_plan: follow_up.demo_plan,
           decision_requests: follow_up.decision_requests,
+          superseded_pr_numbers: follow_up.superseded_pr_numbers,
           kind: follow_up.kind,
           execution_mode: follow_up.execution_mode,
           state: types.Queued,

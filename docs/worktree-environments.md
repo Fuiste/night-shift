@@ -57,11 +57,10 @@ Commands are grouped by platform key: `default`, `macos`, `linux`, and
 
 Environment selection is intentionally conservative:
 
-- `plan` resolves the default environment and stores that environment name in
-  the pending run
+- `plan`, including `plan --from-reviews`, resolves the default environment
+  and stores that environment name in the pending run
 - `start` uses the environment already stored in the selected pending run
 - `resume` reuses the environment stored in the run journal
-- `review --environment <name>` can choose an environment explicitly
 - if no environment is selected explicitly, Night Shift uses
   `default_environment`
 

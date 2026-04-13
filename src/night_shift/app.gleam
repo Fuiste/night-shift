@@ -21,6 +21,8 @@ import night_shift/infra/reset_guard
 import night_shift/infra/terminal_ui
 import night_shift/journal
 import night_shift/project
+import night_shift/repo_state_runtime
+import night_shift/report
 import night_shift/system
 import night_shift/types
 import night_shift/usecase/init as init_usecase
@@ -29,7 +31,6 @@ import night_shift/usecase/render as usecase_render
 import night_shift/usecase/reset as reset_usecase
 import night_shift/usecase/resolve as resolve_usecase
 import night_shift/usecase/resume as resume_usecase
-import night_shift/usecase/review as review_usecase
 import night_shift/usecase/start as start_usecase
 import night_shift/usecase/status as status_usecase
 import simplifile
@@ -113,21 +114,26 @@ fn run_initialized_command(
   command: types.Command,
 ) -> Nil {
   case command {
-    types.Plan(notes_value, doc_path, agent_overrides) ->
+    types.Plan(notes_value, doc_path, from_reviews, agent_overrides) ->
       io.println(case agent_config.resolve_plan_agent(config, agent_overrides) {
         Ok(planning_agent) ->
-          plan(repo_root, notes_value, doc_path, planning_agent, config)
+          plan(
+            repo_root,
+            notes_value,
+            from_reviews,
+            doc_path,
+            planning_agent,
+            config,
+          )
         Error(message) -> message
       })
     types.Start(run, False) -> io.println(start(repo_root, run, config))
     types.Start(run, True) -> start_with_ui(repo_root, run, config)
-    types.Status(run) -> io.println(status(repo_root, run))
-    types.Report(run) -> io.println(report(repo_root, run))
+    types.Status(run) -> io.println(status(repo_root, run, config))
+    types.Report(run) -> io.println(report(repo_root, run, config))
     types.Resolve(run) -> io.println(resolve(repo_root, run, config))
     types.Resume(run, False) -> io.println(resume(repo_root, run, config))
     types.Resume(run, True) -> resume_with_ui(repo_root, run, config)
-    types.Review(agent_overrides, environment_name) ->
-      io.println(review(repo_root, agent_overrides, environment_name, config))
     _ -> io.println("Unsupported command.")
   }
 }
@@ -158,7 +164,8 @@ fn init(
 
 fn plan(
   repo_root: String,
-  notes_value: String,
+  notes_value: Option(String),
+  from_reviews: Bool,
   doc_path: Option(String),
   planning_agent: types.ResolvedAgentConfig,
   config: types.Config,
@@ -167,6 +174,7 @@ fn plan(
     plan_usecase.execute(
       repo_root,
       notes_value,
+      from_reviews,
       doc_path,
       planning_agent,
       config,
@@ -198,9 +206,6 @@ fn crate_summary(config: types.Config) -> String {
   <> "Execution profile: "
   <> agent_config.effective_phase_profile_name(config.execution_profile, config)
   <> "\n"
-  <> "Review profile: "
-  <> agent_config.effective_phase_profile_name(config.review_profile, config)
-  <> "\n"
   <> "Max workers: "
   <> int.to_string(config.max_workers)
   <> "\n"
@@ -209,10 +214,15 @@ fn crate_summary(config: types.Config) -> String {
   <> "\n"
   <> "Default brief: "
   <> project.default_brief_path(system.cwd())
+  <> review_profile_deprecation_fragment(config.review_profile)
 }
 
-fn status(repo_root: String, run: types.RunSelector) -> String {
-  case status_usecase.execute(repo_root, run) {
+fn status(
+  repo_root: String,
+  run: types.RunSelector,
+  config: types.Config,
+) -> String {
+  case status_usecase.execute(repo_root, run, config) {
     Ok(view) -> usecase_render.render_status(view)
     Error(message) -> message
   }
@@ -240,9 +250,17 @@ fn resolve(
   }
 }
 
-fn report(repo_root: String, run: types.RunSelector) -> String {
-  case journal.read_report(repo_root, run) {
-    Ok(contents) -> contents
+fn report(
+  repo_root: String,
+  run: types.RunSelector,
+  config: types.Config,
+) -> String {
+  case journal.load(repo_root, run) {
+    Ok(#(loaded_run, events)) -> {
+      let inspection =
+        repo_state_runtime.inspect(loaded_run, config.branch_prefix)
+      report.render_live(loaded_run, events, inspection.view)
+    }
     Error(message) -> message
   }
 }
@@ -254,20 +272,6 @@ fn resume(
 ) -> String {
   case resume_usecase.execute(repo_root, run, config) {
     Ok(view) -> usecase_render.render_resume(view)
-    Error(message) -> message
-  }
-}
-
-fn review(
-  repo_root: String,
-  agent_overrides: types.AgentOverrides,
-  environment_name: Option(String),
-  config: types.Config,
-) -> String {
-  case
-    review_usecase.execute(repo_root, agent_overrides, environment_name, config)
-  {
-    Ok(view) -> usecase_render.render_review(view)
     Error(message) -> message
   }
 }
@@ -314,5 +318,13 @@ fn resume_with_ui(
   case dashboard_session.resume(repo_root, run, config) {
     Ok(Nil) -> Nil
     Error(message) -> io.println(message)
+  }
+}
+
+fn review_profile_deprecation_fragment(review_profile: String) -> String {
+  case review_profile {
+    "" -> ""
+    _ ->
+      "\nConfig warning: `review_profile` is deprecated; `planning_profile` now governs review-driven planning."
   }
 }

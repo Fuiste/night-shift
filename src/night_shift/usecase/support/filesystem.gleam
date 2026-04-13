@@ -30,6 +30,16 @@ pub fn resolve_notes_source(
   }
 }
 
+pub fn resolve_optional_notes_source(
+  repo_root: String,
+  notes_value: Option(String),
+) -> Result(Option(types.NotesSource), String) {
+  case notes_value {
+    Some(value) -> resolve_notes_source(repo_root, value) |> result.map(Some)
+    None -> Ok(None)
+  }
+}
+
 pub fn create_directory(path: String) -> Result(Nil, String) {
   case simplifile.create_directory_all(path) {
     Ok(Nil) -> Ok(Nil)

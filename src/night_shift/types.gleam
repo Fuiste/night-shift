@@ -4,7 +4,7 @@
 //// persistence, and provider integration layers.
 
 import gleam/list
-import gleam/option.{type Option, None}
+import gleam/option.{type Option, None, Some}
 
 /// Default filename used for the repo-local execution brief.
 pub const default_brief_filename = "execution-brief.md"
@@ -265,6 +265,63 @@ pub fn notes_source_label(source: NotesSource) -> String {
   }
 }
 
+/// Provenance for the planning inputs that produced a run's brief and DAG.
+pub type PlanningProvenance {
+  NotesOnly(notes_source: NotesSource)
+  ReviewsOnly
+  ReviewsAndNotes(notes_source: NotesSource)
+}
+
+pub fn planning_provenance_label(provenance: PlanningProvenance) -> String {
+  case provenance {
+    NotesOnly(_) -> "notes only"
+    ReviewsOnly -> "reviews only"
+    ReviewsAndNotes(_) -> "reviews + notes"
+  }
+}
+
+pub fn planning_provenance_notes_source(
+  provenance: PlanningProvenance,
+) -> Option(NotesSource) {
+  case provenance {
+    NotesOnly(notes_source) -> Some(notes_source)
+    ReviewsOnly -> None
+    ReviewsAndNotes(notes_source) -> Some(notes_source)
+  }
+}
+
+pub fn planning_provenance_uses_reviews(provenance: PlanningProvenance) -> Bool {
+  case provenance {
+    NotesOnly(_) -> False
+    ReviewsOnly | ReviewsAndNotes(_) -> True
+  }
+}
+
+/// Snapshot of one open Night Shift pull request at planning time.
+pub type RepoPullRequestSnapshot {
+  RepoPullRequestSnapshot(
+    number: Int,
+    title: String,
+    url: String,
+    head_ref_name: String,
+    base_ref_name: String,
+    review_decision: String,
+    failing_checks: List(String),
+    review_comments: List(String),
+    actionable: Bool,
+    impacted: Bool,
+  )
+}
+
+/// Captured repo-local view of open Night Shift pull requests.
+pub type RepoStateSnapshot {
+  RepoStateSnapshot(
+    captured_at: String,
+    digest: String,
+    open_pull_requests: List(RepoPullRequestSnapshot),
+  )
+}
+
 /// A planner-emitted task that should be merged into a running graph later.
 pub type FollowUpTask {
   FollowUpTask(
@@ -275,6 +332,7 @@ pub type FollowUpTask {
     acceptance: List(String),
     demo_plan: List(String),
     decision_requests: List(DecisionRequest),
+    superseded_pr_numbers: List(Int),
     kind: TaskKind,
     execution_mode: ExecutionMode,
   )
@@ -290,6 +348,7 @@ pub type Task {
     acceptance: List(String),
     demo_plan: List(String),
     decision_requests: List(DecisionRequest),
+    superseded_pr_numbers: List(Int),
     kind: TaskKind,
     execution_mode: ExecutionMode,
     state: TaskState,
@@ -413,6 +472,8 @@ pub type RunRecord {
     environment_name: String,
     max_workers: Int,
     notes_source: Option(NotesSource),
+    planning_provenance: Option(PlanningProvenance),
+    repo_state_snapshot: Option(RepoStateSnapshot),
     decisions: List(RecordedDecision),
     planning_dirty: Bool,
     status: RunStatus,
@@ -468,15 +529,15 @@ pub type Command {
   Init(agent_overrides: AgentOverrides, generate_setup: Bool, assume_yes: Bool)
   Reset(assume_yes: Bool, force: Bool)
   Plan(
-    notes_value: String,
+    notes_value: Option(String),
     doc_path: Option(String),
+    from_reviews: Bool,
     agent_overrides: AgentOverrides,
   )
   Status(run: RunSelector)
   Report(run: RunSelector)
   Resolve(run: RunSelector)
   Resume(run: RunSelector, ui_enabled: Bool)
-  Review(agent_overrides: AgentOverrides, environment_name: Option(String))
   Demo(ui_enabled: Bool)
   Help
 }

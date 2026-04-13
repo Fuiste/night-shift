@@ -13,6 +13,7 @@ pub fn render_body(
   <> execution_result.pr.summary
   <> "\n\n## Demo\n"
   <> bullet_list(execution_result.pr.demo)
+  <> superseded_fragment(task.superseded_pr_numbers)
   <> "\n\n## Verification\n```\n"
   <> verification_output
   <> "\n```\n\n## Known Risks\n"
@@ -57,6 +58,7 @@ pub fn review_task(
     ],
     demo_plan: ["Summarize the fixes and checks in the PR body."],
     decision_requests: [],
+    superseded_pr_numbers: [],
     kind: types.ImplementationTask,
     execution_mode: types.Exclusive,
     state: types.Ready,
@@ -74,5 +76,18 @@ fn bullet_list(items: List(String)) -> String {
       items
       |> list.map(fn(item) { "- " <> item })
       |> string.join(with: "\n")
+  }
+}
+
+fn superseded_fragment(pr_numbers: List(Int)) -> String {
+  case pr_numbers {
+    [] -> ""
+    _ ->
+      "\n\n## Supersedes\n"
+      <> {
+        pr_numbers
+        |> list.map(fn(number) { "- #" <> int.to_string(number) })
+        |> string.join(with: "\n")
+      }
   }
 }

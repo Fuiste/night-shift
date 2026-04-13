@@ -19,13 +19,15 @@ pub fn start_run(
   environment_name: String,
   max_workers: Int,
 ) -> Result(types.RunRecord, String) {
-  use run <- result.try(create_pending_run(
+  use run <- result.try(create_pending_run_with_context(
     repo_root,
     brief_path,
     planning_agent,
     execution_agent,
     environment_name,
     max_workers,
+    None,
+    None,
     None,
   ))
   activate_run(run)
@@ -39,6 +41,30 @@ pub fn create_pending_run(
   environment_name: String,
   max_workers: Int,
   notes_source: Option(types.NotesSource),
+) -> Result(types.RunRecord, String) {
+  create_pending_run_with_context(
+    repo_root,
+    brief_path,
+    planning_agent,
+    execution_agent,
+    environment_name,
+    max_workers,
+    notes_source,
+    None,
+    None,
+  )
+}
+
+pub fn create_pending_run_with_context(
+  repo_root: String,
+  brief_path: String,
+  planning_agent: types.ResolvedAgentConfig,
+  execution_agent: types.ResolvedAgentConfig,
+  environment_name: String,
+  max_workers: Int,
+  notes_source: Option(types.NotesSource),
+  planning_provenance: Option(types.PlanningProvenance),
+  repo_state_snapshot: Option(types.RepoStateSnapshot),
 ) -> Result(types.RunRecord, String) {
   let run_id = make_run_id()
   let project_home = repo_state_path(repo_root)
@@ -70,6 +96,8 @@ pub fn create_pending_run(
       environment_name: environment_name,
       max_workers: max_workers,
       notes_source: notes_source,
+      planning_provenance: planning_provenance,
+      repo_state_snapshot: repo_state_snapshot,
       decisions: [],
       planning_dirty: False,
       status: types.RunPending,
@@ -78,8 +106,13 @@ pub fn create_pending_run(
       tasks: [],
     )
 
-  use _ <- result.try(save(run, []))
-  Ok(run)
+  case save(run, []) {
+    Ok(_) -> Ok(run)
+    Error(message) -> {
+      let _ = simplifile.delete(file_or_dir_at: run_path)
+      Error(message)
+    }
+  }
 }
 
 pub fn activate_run(run: types.RunRecord) -> Result(types.RunRecord, String) {
@@ -141,7 +174,7 @@ pub fn load(
 
 pub fn list_runs(repo_root: String) -> Result(List(types.RunRecord), String) {
   let repo_path = runs_root(repo_root)
-  use run_ids <- result.try(list_run_ids(repo_path))
+  use run_ids <- result.try(list_complete_run_ids(repo_path))
   Ok(
     run_ids
     |> list.filter_map(fn(run_id) {
@@ -164,7 +197,7 @@ pub fn save(
     journal_codec.encode_run(run),
   ))
   use _ <- result.try(write_events(run.events_path, events))
-  write_string(run.report_path, report.render(run, events))
+  write_string(run.report_path, report.render_persisted(run, events))
 }
 
 pub fn append_event(
@@ -336,7 +369,7 @@ fn read_events(path: String) -> Result(List(types.RunEvent), String) {
 }
 
 fn latest_run_id(repo_path: String) -> Result(String, String) {
-  use run_ids <- result.try(list_run_ids(repo_path))
+  use run_ids <- result.try(list_complete_run_ids(repo_path))
   case run_ids {
     [latest, ..] -> Ok(latest)
     [] -> Error("No Night Shift runs were found for this repository.")
@@ -355,6 +388,27 @@ fn list_run_ids(repo_path: String) -> Result(List(String), String) {
         |> list.reverse,
       )
     Error(_) -> Error("No Night Shift runs were found for this repository.")
+  }
+}
+
+fn list_complete_run_ids(repo_path: String) -> Result(List(String), String) {
+  use run_ids <- result.try(list_run_ids(repo_path))
+  Ok(
+    run_ids |> list.filter(fn(run_id) { run_id_is_complete(repo_path, run_id) }),
+  )
+}
+
+fn run_id_is_complete(repo_path: String, run_id: String) -> Bool {
+  let run_path = filepath.join(repo_path, run_id)
+  has_run_artifact(filepath.join(run_path, "state.json"))
+  && has_run_artifact(filepath.join(run_path, "events.jsonl"))
+  && has_run_artifact(filepath.join(run_path, "report.md"))
+}
+
+fn has_run_artifact(path: String) -> Bool {
+  case simplifile.read(path) {
+    Ok(_) -> True
+    Error(_) -> False
   }
 }
 

@@ -1,4 +1,5 @@
 import gleam/option.{type Option}
+import night_shift/repo_state_runtime
 import night_shift/types
 
 pub type InitResult {
@@ -15,7 +16,7 @@ pub type PlanResult {
     run: types.RunRecord,
     brief_path: String,
     artifact_path: String,
-    notes_source: types.NotesSource,
+    planning_provenance: types.PlanningProvenance,
     warnings: List(String),
     next_action: String,
   )
@@ -25,6 +26,7 @@ pub type StatusResult {
   StatusResult(
     run: types.RunRecord,
     events: List(types.RunEvent),
+    repo_state_view: Option(repo_state_runtime.RepoStateView),
     summary: String,
     next_action: String,
   )
@@ -40,21 +42,19 @@ pub type ResolveResult {
 }
 
 pub type StartResult {
-  StartResult(run: types.RunRecord, warnings: List(String), next_action: String)
+  StartResult(
+    run: types.RunRecord,
+    warnings: List(String),
+    repo_state_view: Option(repo_state_runtime.RepoStateView),
+    next_action: String,
+  )
 }
 
 pub type ResumeResult {
   ResumeResult(
     run: types.RunRecord,
     warnings: List(String),
-    next_action: String,
-  )
-}
-
-pub type ReviewResult {
-  ReviewResult(
-    run: types.RunRecord,
-    warnings: List(String),
+    repo_state_view: Option(repo_state_runtime.RepoStateView),
     next_action: String,
   )
 }

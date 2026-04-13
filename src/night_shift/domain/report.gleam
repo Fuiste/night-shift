@@ -3,9 +3,15 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
 import night_shift/agent_config
+import night_shift/domain/repo_state
+import night_shift/repo_state_runtime
 import night_shift/types
 
-pub fn render(run: types.RunRecord, events: List(types.RunEvent)) -> String {
+pub fn render(
+  run: types.RunRecord,
+  events: List(types.RunEvent),
+  repo_state_view: Option(repo_state_runtime.RepoStateView),
+) -> String {
   [
     "# Night Shift Report",
     "",
@@ -21,11 +27,15 @@ pub fn render(run: types.RunRecord, events: List(types.RunEvent)) -> String {
     "- Created at: " <> run.created_at,
     "- Updated at: " <> run.updated_at,
     "- Brief: " <> run.brief_path,
+    render_repo_state_section(run, repo_state_view),
     "",
     "## Summary",
     render_summary(run.decisions, run.planning_dirty, run.tasks, events),
     render_planning_validation_summary(events),
     render_failure_summary(run, events),
+    render_review_replacement_section(run, events),
+    render_worktree_hygiene_section(run, events),
+    render_execution_recovery_section(events),
     "",
     "## Tasks",
     render_tasks(run.decisions, run.planning_dirty, run.tasks),
@@ -34,6 +44,100 @@ pub fn render(run: types.RunRecord, events: List(types.RunEvent)) -> String {
     render_events(events),
   ]
   |> string.join(with: "\n")
+}
+
+fn render_repo_state_section(
+  run: types.RunRecord,
+  repo_state_view: Option(repo_state_runtime.RepoStateView),
+) -> String {
+  case run.repo_state_snapshot, repo_state_view {
+    None, None -> ""
+    snapshot, view ->
+      "\n## Repo State\n"
+      <> render_captured_repo_state(snapshot)
+      <> render_live_repo_state(view)
+      <> render_repo_snapshot_group(
+        "Actionable PRs",
+        repo_snapshot_entries(snapshot, fn(pr) { pr.actionable }),
+      )
+      <> render_repo_snapshot_group(
+        "Impacted PRs",
+        repo_snapshot_entries(snapshot, fn(pr) { pr.impacted }),
+      )
+  }
+}
+
+fn render_captured_repo_state(
+  snapshot: Option(types.RepoStateSnapshot),
+) -> String {
+  case snapshot {
+    Some(snapshot) ->
+      "- Captured open PRs: "
+      <> int.to_string(repo_state.open_pr_count(snapshot))
+      <> "\n- Captured actionable PRs: "
+      <> int.to_string(repo_state.actionable_pr_count(snapshot))
+      <> "\n- Snapshot captured: "
+      <> snapshot.captured_at
+    None -> "- Captured open PRs: unavailable"
+  }
+}
+
+fn render_live_repo_state(
+  repo_state_view: Option(repo_state_runtime.RepoStateView),
+) -> String {
+  case repo_state_view {
+    Some(view) ->
+      "\n- Current open PRs: "
+      <> int.to_string(view.open_pr_count)
+      <> "\n- Current actionable PRs: "
+      <> int.to_string(view.actionable_pr_count)
+      <> "\n- Drift: "
+      <> repo_state_runtime.drift_label(view.drift)
+      <> repo_state_details(view.drift)
+    None -> ""
+  }
+}
+
+fn repo_state_details(drift: repo_state_runtime.RepoStateDrift) -> String {
+  case drift {
+    repo_state_runtime.RepoStateDriftUnknown(message) ->
+      "\n- Drift details: " <> message
+    _ -> ""
+  }
+}
+
+fn repo_snapshot_entries(
+  snapshot: Option(types.RepoStateSnapshot),
+  include: fn(types.RepoPullRequestSnapshot) -> Bool,
+) -> List(String) {
+  case snapshot {
+    None -> []
+    Some(snapshot) ->
+      snapshot.open_pull_requests
+      |> list.filter(include)
+      |> list.map(render_repo_pull_request_snapshot)
+  }
+}
+
+fn render_repo_pull_request_snapshot(
+  pr: types.RepoPullRequestSnapshot,
+) -> String {
+  "- #"
+  <> int.to_string(pr.number)
+  <> " "
+  <> pr.title
+  <> " (base: "
+  <> pr.base_ref_name
+  <> ", head: "
+  <> pr.head_ref_name
+  <> ")"
+}
+
+fn render_repo_snapshot_group(title: String, entries: List(String)) -> String {
+  case entries {
+    [] -> "\n### " <> title <> "\n- none"
+    _ -> "\n### " <> title <> "\n" <> string.join(entries, with: "\n")
+  }
 }
 
 fn render_summary(
@@ -92,6 +196,10 @@ fn render_summary(
       list.length(types.unresolved_decision_requests(decisions, task))
     })
     |> list.fold(0, fn(total, count) { total + count })
+  let retained_worktrees =
+    tasks
+    |> list.filter(fn(task) { task.worktree_path != "" })
+    |> list.length
 
   [
     "- Completed tasks: " <> int.to_string(completed_count),
@@ -102,8 +210,106 @@ fn render_summary(
     "- Run-level failures: " <> int.to_string(run_level_failure_count),
     "- Failed tasks: " <> int.to_string(failed_count),
     "- Queued tasks: " <> int.to_string(queued_count),
+    "- Retained worktrees: " <> int.to_string(retained_worktrees),
+    "- Pruned superseded worktrees: "
+      <> int.to_string(event_count(events, "worktree_pruned")),
+    "- Execution recovery warnings: "
+      <> int.to_string(event_count(events, "execution_payload_warning")),
   ]
   |> string.join(with: "\n")
+}
+
+fn render_review_replacement_section(
+  run: types.RunRecord,
+  events: List(types.RunEvent),
+) -> String {
+  let lineage_lines = review_lineage_lines(run.tasks)
+  let supersession_events = event_messages(events, "pr_superseded")
+  let supersession_warnings =
+    event_messages(events, "review_supersession_warning")
+
+  case lineage_lines, supersession_events, supersession_warnings {
+    [], [], [] -> ""
+    _, _, _ ->
+      "\n## Review-Driven Replacement\n"
+      <> render_review_lineage(lineage_lines)
+      <> render_event_group("Supersession Outcome", supersession_events)
+      <> render_event_group("Supersession Warnings", supersession_warnings)
+  }
+}
+
+fn review_lineage_lines(tasks: List(types.Task)) -> List(String) {
+  tasks
+  |> list.filter_map(fn(task) {
+    case task.superseded_pr_numbers {
+      [] -> Error(Nil)
+      superseded_pr_numbers -> {
+        let replacement_fragment = case task.pr_number {
+          "" -> "replacement PR pending"
+          pr_number -> "replacement PR #" <> pr_number
+        }
+        Ok(
+          "- "
+          <> task.id
+          <> " -> supersedes "
+          <> render_pr_numbers(superseded_pr_numbers)
+          <> " ("
+          <> replacement_fragment
+          <> ")",
+        )
+      }
+    }
+  })
+}
+
+fn render_review_lineage(lines: List(String)) -> String {
+  case lines {
+    [] -> "\n### Replacement Mapping\n- none"
+    _ -> "\n### Replacement Mapping\n" <> string.join(lines, with: "\n")
+  }
+}
+
+fn render_worktree_hygiene_section(
+  run: types.RunRecord,
+  events: List(types.RunEvent),
+) -> String {
+  let prune_messages = event_messages(events, "worktree_pruned")
+  let prune_warnings = event_messages(events, "worktree_prune_warning")
+  let retained_count =
+    run.tasks
+    |> list.filter(fn(task) { task.worktree_path != "" })
+    |> list.length
+
+  case retained_count, prune_messages, prune_warnings {
+    0, [], [] -> ""
+    _, _, _ ->
+      "\n## Worktree Hygiene\n"
+      <> "- Retained current-run worktrees: "
+      <> int.to_string(retained_count)
+      <> "\n- Pruned superseded worktrees: "
+      <> int.to_string(list.length(prune_messages))
+      <> render_event_group("Pruned Worktrees", prune_messages)
+      <> render_event_group("Prune Warnings", prune_warnings)
+  }
+}
+
+fn render_execution_recovery_section(events: List(types.RunEvent)) -> String {
+  let warnings = event_messages(events, "execution_payload_warning")
+  case warnings {
+    [] -> ""
+    _ ->
+      "\n## Execution Recovery\n"
+      <> "- Accepted recovered execution payloads: "
+      <> int.to_string(list.length(warnings))
+      <> render_event_group("Recovery Warnings", warnings)
+  }
+}
+
+fn render_event_group(title: String, messages: List(String)) -> String {
+  case messages {
+    [] -> ""
+    _ -> "\n### " <> title <> "\n" <> render_bullet_lines(messages)
+  }
 }
 
 fn render_tasks(
@@ -204,7 +410,16 @@ fn render_task_details(
     summary -> "\n  " <> string.replace(in: summary, each: "\n", with: "\n  ")
   }
 
-  pr_fragment <> decision_fragment <> planning_fragment <> summary_fragment
+  let lineage_fragment = case task.superseded_pr_numbers {
+    [] -> ""
+    pr_numbers -> "\n  Supersedes: " <> render_pr_numbers(pr_numbers)
+  }
+
+  pr_fragment
+  <> lineage_fragment
+  <> decision_fragment
+  <> planning_fragment
+  <> summary_fragment
 }
 
 fn render_task_state(
@@ -329,6 +544,31 @@ fn latest_event_message_loop(
         False -> latest_event_message_loop(rest, kind)
       }
   }
+}
+
+fn event_messages(events: List(types.RunEvent), kind: String) -> List(String) {
+  events
+  |> list.filter(fn(event) { event.kind == kind })
+  |> list.map(fn(event) { event.message })
+}
+
+fn event_count(events: List(types.RunEvent), kind: String) -> Int {
+  event_messages(events, kind)
+  |> list.length
+}
+
+fn render_bullet_lines(messages: List(String)) -> String {
+  messages
+  |> list.map(fn(message) {
+    "- " <> string.replace(in: message, each: "\n", with: "\n  ")
+  })
+  |> string.join(with: "\n")
+}
+
+fn render_pr_numbers(pr_numbers: List(Int)) -> String {
+  pr_numbers
+  |> list.map(fn(pr_number) { "#" <> int.to_string(pr_number) })
+  |> string.join(with: ", ")
 }
 
 fn run_failure_type(tasks: List(types.Task)) -> String {
