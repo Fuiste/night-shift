@@ -3,6 +3,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
 import night_shift/agent_config
+import night_shift/domain/confidence
 import night_shift/domain/decisions as decision_domain
 import night_shift/domain/review_run_projection
 import night_shift/repo_state_runtime
@@ -60,11 +61,18 @@ pub fn render_status(view: result.StatusResult) -> String {
   <> render_notes_source(view.run.notes_source)
   <> render_repo_state_fragment(view.run, view.repo_state_view)
   <> "\n"
+  <> "Confidence: "
+  <> types.confidence_posture_to_string(view.confidence.posture)
+  <> "\nConfidence reasons: "
+  <> confidence.reasons_summary(view.confidence)
+  <> "\n"
   <> view.summary
   <> "\nEvents: "
   <> int.to_string(list.length(view.events))
   <> "\nReport: "
   <> view.run.report_path
+  <> "\nProvenance: "
+  <> view.provenance_path
 }
 
 pub fn render_resolve(view: result.ResolveResult) -> String {

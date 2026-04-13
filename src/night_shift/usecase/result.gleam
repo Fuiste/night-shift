@@ -27,6 +27,8 @@ pub type StatusResult {
     run: types.RunRecord,
     events: List(types.RunEvent),
     repo_state_view: Option(repo_state_runtime.RepoStateView),
+    confidence: types.ConfidenceAssessment,
+    provenance_path: String,
     summary: String,
     next_action: String,
   )

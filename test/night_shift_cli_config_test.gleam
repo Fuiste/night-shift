@@ -85,8 +85,27 @@ pub fn parse_resolve_defaults_to_latest_test() {
 }
 
 pub fn parse_resume_command_with_ui_test() {
-  let assert Ok(types.Resume(types.RunId("run-123"), True)) =
+  let assert Ok(types.Resume(types.RunId("run-123"), True, False)) =
     cli.parse(["resume", "--run", "run-123", "--ui"])
+}
+
+pub fn parse_resume_explain_command_test() {
+  let assert Ok(types.Resume(types.LatestRun, False, True)) =
+    cli.parse(["resume", "--explain"])
+}
+
+pub fn parse_doctor_command_test() {
+  let assert Ok(types.Doctor(types.RunId("run-123"))) =
+    cli.parse(["doctor", "--run", "run-123"])
+}
+
+pub fn parse_provenance_command_test() {
+  let assert Ok(types.Provenance(
+    types.LatestRun,
+    Some("task-1"),
+    types.ProvenanceJson,
+  )) =
+    cli.parse(["provenance", "--task", "task-1", "--format", "json"])
 }
 
 pub fn parse_resume_rejects_environment_flag_test() {

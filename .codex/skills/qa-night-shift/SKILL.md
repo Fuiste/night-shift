@@ -1,6 +1,6 @@
 ---
 name: qa-night-shift
-description: Use when the user wants to QA test Night Shift against a user-specified scratch repo path, install the current worktree CLI, and run an approval-gated real-provider pass to validate init/plan/start/status/report/resolve/resume behavior.
+description: Use when the user wants to QA test Night Shift against a user-specified scratch repo path, install the current worktree CLI, and run an approval-gated real-provider pass to validate init/plan/start/status/report/provenance/doctor/resolve/resume behavior.
 ---
 
 # QA Night Shift
@@ -59,7 +59,10 @@ real inference spend.
 - If it does look like an intentional testing target, proceed.
 - Even for an obvious scratch repo, do not run `night-shift plan`,
   `night-shift start`, `night-shift resume`, or other inference-consuming QA
-  steps until the user approves the presented plan.
+  steps until the user approves the presented plan. Read-only checks such as
+  `night-shift status`, `night-shift report`, `night-shift provenance`,
+  `night-shift doctor`, or `night-shift resume --explain` are acceptable once
+  the user-approved QA pass reaches the relevant state.
 
 Do not quietly assume a normal product repo is safe to use for QA.
 
@@ -123,7 +126,10 @@ Typical flow:
 5. inspect `night-shift status`
 6. run `night-shift start`
 7. inspect `night-shift report`
-8. use `night-shift resolve` or `night-shift resume` only if the run actually
+8. inspect `night-shift provenance`
+9. use `night-shift doctor` or `night-shift resume --explain` before any real
+   resume attempt when the run was interrupted
+10. use `night-shift resolve` or `night-shift resume` only if the run actually
    requires it
 
 For review-driven investigations, replace steps 3-4 with:
@@ -167,6 +173,13 @@ In review-driven runs, pay attention to repo-state evidence:
   manual attention
 - whether `status` and `report` show payload-repair attempts, successes, and
   failures with usable artifact paths
+- whether `status`, `report`, and the dashboard agree on the confidence posture
+  and its reasons
+- whether `provenance` records the expected prompt paths, payload artifacts,
+  verification evidence, worktree paths, and PR linkage
+- whether `doctor` classifies interrupted tasks as `safe_to_resume`,
+  `resume_with_warning`, `manual_attention`, or `irrecoverable` for the actual
+  saved repo state
 
 Use small tasks that validate the requested behavior instead of inviting large
 feature work.
@@ -180,6 +193,7 @@ Collect evidence from:
 - relevant CLI output
 - the current report path printed by Night Shift
 - run journal paths under `.night-shift/runs/`
+- the `provenance.json` path and any task-specific artifact paths it surfaces
 - relevant logs for the failing or surprising step
 - PR or delivery results when they happen
 - any verification output tied to the run

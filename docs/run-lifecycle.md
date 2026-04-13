@@ -58,6 +58,8 @@ and the next action becomes `night-shift start`.
 `resume` is the recovery path for an interrupted run:
 
 ```sh
+night-shift doctor
+night-shift resume --explain
 night-shift resume
 night-shift resume --run run-123 --ui
 ```
@@ -65,6 +67,11 @@ night-shift resume --run run-123 --ui
 Night Shift reloads the saved run, validates the saved environment, recovers
 in-flight tasks, and continues orchestration. It does not re-resolve provider
 or environment settings; it reuses what the run journal already saved.
+
+`doctor` and `resume --explain` are the read-only recovery surfaces. They
+inspect the saved run, active lock, worktrees, logs, review drift, and
+interrupted task states, then classify each task as `safe_to_resume`,
+`resume_with_warning`, `manual_attention`, or `irrecoverable`.
 
 ## Review-Driven Replanning
 
@@ -98,6 +105,21 @@ drifted since planning. `night-shift report` is the live operator view here:
 it recomputes drift against the current PR tree when the run has a stored
 review snapshot, while the on-disk `report.md` remains the stable persisted
 artifact for the run.
+
+## Provenance
+
+`provenance` is the operator-facing evidence ledger for a run:
+
+```sh
+night-shift provenance
+night-shift provenance --run run-123 --format json
+night-shift provenance --task task-1
+```
+
+Night Shift persists `./.night-shift/runs/<run-id>/provenance.json` alongside
+`report.md`. The command normalizes the run journal, prompt artifacts, logs,
+payload-repair traces, verification artifacts, worktree paths, and confidence
+posture into one inspectable view.
 
 ## Reset
 
@@ -141,6 +163,7 @@ Night Shift binds to `127.0.0.1`, prefers port `8787`, and serves:
 - run history for the current repository
 - run summary metadata
 - repo-state summary for review-driven runs, including open PR counts and drift
+- confidence posture and provenance path
 - task status
 - event timeline
 - report content

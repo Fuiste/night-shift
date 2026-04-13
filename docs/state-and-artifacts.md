@@ -33,6 +33,7 @@ Each run directory contains durable state for one run:
 - `state.json`
 - `events.jsonl`
 - `report.md`
+- `provenance.json`
 - `logs/`
 - `worktrees/`
 
@@ -52,6 +53,11 @@ The run record itself stores:
 - `planning_dirty`
 - task list and task states
 - timestamps and current run status
+
+`provenance.json` is the normalized evidence ledger for the run. It reuses the
+saved run state plus artifact paths under `logs/` to record planning
+provenance, prompt and payload traces, verification evidence, touched files,
+worktree paths, PR linkage, and confidence posture.
 
 ## Planning Artifacts
 
@@ -87,6 +93,10 @@ with the run state. The `night-shift report` command is slightly richer for
 review-driven runs: it refreshes repo-state drift against the current open PR
 tree when a stored snapshot exists, so its live output is authoritative for
 current drift while `report.md` remains durable and offline-readable.
+
+Likewise, the persisted `provenance.json` is the stable audit artifact for the
+run, while `night-shift provenance` can render the same evidence in markdown or
+refresh live review drift in JSON output.
 
 Task-level provider logs and prompt files live under each run's `logs/`
 directory.

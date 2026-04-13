@@ -465,6 +465,47 @@ pub type RunSelector {
   RunId(String)
 }
 
+pub type ConfidencePosture {
+  ConfidenceHigh
+  ConfidenceGuarded
+  ConfidenceLow
+}
+
+pub fn confidence_posture_to_string(posture: ConfidencePosture) -> String {
+  case posture {
+    ConfidenceHigh -> "high"
+    ConfidenceGuarded -> "guarded"
+    ConfidenceLow -> "low"
+  }
+}
+
+pub type ConfidenceAssessment {
+  ConfidenceAssessment(posture: ConfidencePosture, reasons: List(String))
+}
+
+pub type RecoveryClassification {
+  SafeToResume
+  ResumeWithWarning
+  RecoveryManualAttention
+  RecoveryIrrecoverable
+}
+
+pub fn recovery_classification_to_string(
+  classification: RecoveryClassification,
+) -> String {
+  case classification {
+    SafeToResume -> "safe_to_resume"
+    ResumeWithWarning -> "resume_with_warning"
+    RecoveryManualAttention -> "manual_attention"
+    RecoveryIrrecoverable -> "irrecoverable"
+  }
+}
+
+pub type ProvenanceFormat {
+  ProvenanceJson
+  ProvenanceMarkdown
+}
+
 /// Repo-local operator configuration for Night Shift.
 pub type Config {
   Config(
@@ -512,8 +553,14 @@ pub type Command {
   )
   Status(run: RunSelector)
   Report(run: RunSelector)
+  Provenance(
+    run: RunSelector,
+    task_id: Option(String),
+    format: ProvenanceFormat,
+  )
+  Doctor(run: RunSelector)
   Resolve(run: RunSelector)
-  Resume(run: RunSelector, ui_enabled: Bool)
+  Resume(run: RunSelector, ui_enabled: Bool, explain_only: Bool)
   Demo(ui_enabled: Bool)
   Help
 }
