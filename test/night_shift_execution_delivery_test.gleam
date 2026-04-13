@@ -203,6 +203,63 @@ pub fn github_upsert_handoff_comment_updates_existing_comment_test() {
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
 
+pub fn github_upsert_handoff_comment_finds_existing_marker_across_pages_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    support.absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-gh-handoff-comment-pages-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let fake_gh = filepath.join(bin_dir, "gh")
+  let old_path = system.get_env("PATH")
+  let old_gh_bin = system.get_env("NIGHT_SHIFT_GH_BIN")
+  let comment_file = fake_gh <> ".comment.txt"
+  let pages_file = fake_gh <> ".comment-pages.json"
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = support.write_handoff_fake_gh(fake_gh)
+  let assert Ok(_) =
+    simplifile.write(
+      "{\"1\":["
+        <> support.repeat_text("{\"id\":1,\"body\":\"noise\"},", 99)
+        <> "{\"id\":100,\"body\":\"noise\"}],"
+        <> "\"2\":[{\"id\":101,\"body\":\"Old body\\n\\n"
+        <> pr_handoff.comment_marker("task-1")
+        <> "\"}]}",
+      to: pages_file,
+    )
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_gh),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("NIGHT_SHIFT_GH_BIN", fake_gh)
+
+  let assert Ok(github.CommentUpdated) =
+    github.upsert_handoff_comment(
+      repo_root,
+      1,
+      "task-1",
+      "Updated body\n\n" <> pr_handoff.comment_marker("task-1"),
+      filepath.join(base_dir, "gh-update.log"),
+    )
+
+  system.set_env("PATH", old_path)
+  support.restore_env("NIGHT_SHIFT_GH_BIN", old_gh_bin)
+
+  let assert Ok(comment_body) = simplifile.read(comment_file)
+  assert string.contains(comment_body, "Updated body")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
 pub fn orchestrator_start_runs_fake_provider_test() {
   let unique = system.unique_id()
   let base_dir =

@@ -386,16 +386,39 @@ fn issue_comments(
   pr_number: Int,
   log_path: String,
 ) -> Result(List(IssueComment), String) {
+  issue_comments_page(cwd, pr_number, 1, log_path, [])
+}
+
+fn issue_comments_page(
+  cwd: String,
+  pr_number: Int,
+  page: Int,
+  log_path: String,
+  acc: List(IssueComment),
+) -> Result(List(IssueComment), String) {
   let command =
     gh_api_command(
-      "repos/:owner/:repo/issues/" <> int.to_string(pr_number) <> "/comments",
+      "repos/:owner/:repo/issues/"
+      <> int.to_string(pr_number)
+      <> "/comments?page="
+      <> int.to_string(page)
+      <> "&per_page=100",
     )
 
   let result = shell.run(command, cwd, log_path)
   case shell.succeeded(result) {
-    True ->
-      json.parse(result.output, decode.list(issue_comment_decoder()))
-      |> result.map_error(fn(_) { "Unable to decode issue comments." })
+    True -> {
+      use comments <- result.try(
+        json.parse(result.output, decode.list(issue_comment_decoder()))
+        |> result.map_error(fn(_) { "Unable to decode issue comments." }),
+      )
+
+      let next_acc = list.append(acc, comments)
+      case list.length(comments) < 100 {
+        True -> Ok(next_acc)
+        False -> issue_comments_page(cwd, pr_number, page + 1, log_path, next_acc)
+      }
+    }
     False -> Error("Unable to inspect issue comments.")
   }
 }

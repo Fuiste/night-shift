@@ -127,11 +127,13 @@ fn render_scope(
   }
   let scope_lines = case handoff.include_stack_context {
     True ->
-      list.append(scope_lines, [
-        "Branch: " <> fallback_scalar(task.branch_name),
-        "PR: " <> fallback_scalar(task.pr_number),
-        "Supersedes: " <> render_pr_numbers(task.superseded_pr_numbers),
-      ])
+      list.append(
+        list.append(scope_lines, [
+          "Branch: " <> fallback_scalar(task.branch_name),
+          "Supersedes: " <> render_pr_numbers(task.superseded_pr_numbers),
+        ]),
+        optional_scope_line("PR", task.pr_number),
+      )
     False -> scope_lines
   }
 
@@ -347,6 +349,13 @@ fn fallback_scalar(value: String) -> String {
   case string.trim(value) {
     "" -> "(none)"
     trimmed -> trimmed
+  }
+}
+
+fn optional_scope_line(label: String, value: String) -> List(String) {
+  case string.trim(value) {
+    "" -> []
+    trimmed -> [label <> ": " <> trimmed]
   }
 }
 

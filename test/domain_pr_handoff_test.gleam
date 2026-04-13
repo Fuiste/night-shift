@@ -75,6 +75,21 @@ pub fn render_managed_comment_reports_delta_and_review_context_test() {
   assert string.contains(comment, pr_handoff.comment_marker("task-1"))
 }
 
+pub fn render_body_region_omits_unknown_pr_number_from_scope_test() {
+  let body =
+    pr_handoff.render_body_region(
+      types.default_handoff_config(),
+      sample_run(),
+      types.Task(..sample_task(), pr_number: ""),
+      sample_execution_result(),
+      "$ gleam test",
+      pr_handoff.empty_snippets(),
+    )
+
+  assert !string.contains(does: body, contain: "PR: (none)")
+  assert !string.contains(does: body, contain: "\n- PR:")
+}
+
 fn sample_run() -> types.RunRecord {
   types.RunRecord(
     run_id: "run-123",
