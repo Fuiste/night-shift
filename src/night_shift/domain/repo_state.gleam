@@ -67,6 +67,10 @@ pub fn drifted(stored: RepoStateSnapshot, live: RepoStateSnapshot) -> Bool {
   stored.digest != live.digest
 }
 
+pub fn text_digest(value: String) -> String {
+  sha256_hex(value)
+}
+
 fn actionable_head_refs(
   open_pull_requests: List(RepoPullRequestSnapshot),
 ) -> List(String) {

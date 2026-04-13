@@ -413,6 +413,7 @@ fn finalize_success(
     Ok(verified) ->
       case
         task_delivery.deliver_completed_task(
+          config,
           run,
           task_run,
           verified.execution_result,
@@ -427,7 +428,13 @@ fn finalize_success(
             "Primary blocker: provider reported completion but the task worktree produced no committed or uncommitted changes.\n\nEnvironment notes: verification completed, but there was nothing new to deliver.",
             "task_manual_attention",
           )
-        Ok(task_delivery.Delivered(pr_number, pr_url, delivered_files)) -> {
+        Ok(task_delivery.Delivered(
+          pr_number,
+          pr_url,
+          delivered_files,
+          handoff_state,
+          handoff_events,
+        )) -> {
           let completed_task =
             types.Task(
               ..task_run.task,
@@ -447,7 +454,15 @@ fn finalize_success(
               run.decisions,
             )
             |> task_graph.refresh_ready_states
-          let updated_run = types.RunRecord(..run, tasks: merged_tasks)
+          let updated_run =
+            types.RunRecord(
+              ..run,
+              tasks: merged_tasks,
+              handoff_states: types.replace_task_handoff_state(
+                run.handoff_states,
+                handoff_state,
+              ),
+            )
           let verified_event =
             types.RunEvent(
               kind: "task_verified",
@@ -459,7 +474,7 @@ fn finalize_success(
             updated_run,
             verified_event,
           ))
-          journal.append_event(
+          use delivered_run <- result.try(journal.append_event(
             types.RunRecord(
               ..verified_run,
               tasks: task_graph.replace_task(
@@ -478,7 +493,8 @@ fn finalize_success(
               message: pr_url,
               task_id: Some(task_run.task.id),
             ),
-          )
+          ))
+          append_events(delivered_run, handoff_events)
         }
         Error(message) -> Error(message)
       }
@@ -491,6 +507,19 @@ fn finalize_success(
           <> output,
         "task_failed",
       )
+    }
+  }
+}
+
+fn append_events(
+  run: types.RunRecord,
+  events: List(types.RunEvent),
+) -> Result(types.RunRecord, String) {
+  case events {
+    [] -> Ok(run)
+    [event, ..rest] -> {
+      use updated_run <- result.try(journal.append_event(run, event))
+      append_events(updated_run, rest)
     }
   }
 }

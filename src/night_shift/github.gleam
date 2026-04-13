@@ -5,16 +5,28 @@ import gleam/dynamic/decode
 import gleam/int
 import gleam/json
 import gleam/list
+import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
+import night_shift/domain/pr_handoff
 import night_shift/domain/repo_state
 import night_shift/shell
 import night_shift/system
+import night_shift/types
 import simplifile
 
 /// Minimal pull request identity returned after delivery.
 pub type PullRequest {
   PullRequest(number: Int, url: String, head_ref_name: String, title: String)
+}
+
+pub type CommentUpsert {
+  CommentCreated
+  CommentUpdated
+}
+
+type IssueComment {
+  IssueComment(id: Int, body: String)
 }
 
 /// Review details ingested when Night Shift turns open PR feedback into work.
@@ -38,7 +50,9 @@ pub fn open_or_update_pr(
   branch_name: String,
   base_ref: String,
   title: String,
-  body: String,
+  legacy_body: String,
+  handoff_region: Option(String),
+  handoff: types.HandoffConfig,
   run_path: String,
   log_path: String,
 ) -> Result(PullRequest, String) {
@@ -48,10 +62,19 @@ pub fn open_or_update_pr(
     |> string.replace(each: ":", with: "-")
   let body_path =
     filepath.join(run_path, "logs/" <> safe_branch_name <> ".pr.md")
-  use _ <- result.try(write_file(body_path, body))
 
   case find_pull_request(cwd, branch_name, log_path) {
     Ok(pull_request) -> {
+      let final_body =
+        existing_pr_body(cwd, pull_request.number, log_path)
+        |> result.map(fn(existing_body) {
+          compose_pr_body(existing_body, legacy_body, handoff_region, handoff)
+        })
+      let final_body = case final_body {
+        Ok(body) -> body
+        Error(_) -> compose_pr_body("", legacy_body, handoff_region, handoff)
+      }
+      use _ <- result.try(write_file(body_path, final_body))
       use _ <- result.try(edit_pull_request(
         cwd,
         pull_request.number,
@@ -62,6 +85,8 @@ pub fn open_or_update_pr(
       Ok(PullRequest(..pull_request, title: title))
     }
     Error(_) -> {
+      let final_body = compose_pr_body("", legacy_body, handoff_region, handoff)
+      use _ <- result.try(write_file(body_path, final_body))
       use create_output <- result.try(create_pull_request(
         cwd,
         branch_name,
@@ -75,6 +100,32 @@ pub fn open_or_update_pr(
         Error(_) ->
           find_pull_request_after_create(cwd, branch_name, title, log_path, 5)
       }
+    }
+  }
+}
+
+pub fn upsert_handoff_comment(
+  cwd: String,
+  pr_number: Int,
+  task_id: String,
+  body: String,
+  log_path: String,
+) -> Result(CommentUpsert, String) {
+  use comments <- result.try(issue_comments(cwd, pr_number, log_path))
+  let marker = pr_handoff.comment_marker(task_id)
+
+  case
+    list.find(comments, fn(comment) {
+      string.contains(does: comment.body, contain: marker)
+    })
+  {
+    Ok(comment) -> {
+      use _ <- result.try(update_issue_comment(cwd, comment.id, body, log_path))
+      Ok(CommentUpdated)
+    }
+    Error(_) -> {
+      use _ <- result.try(create_issue_comment(cwd, pr_number, body, log_path))
+      Ok(CommentCreated)
     }
   }
 }
@@ -188,6 +239,72 @@ fn find_pull_request(
   })
 }
 
+fn existing_pr_body(
+  cwd: String,
+  pr_number: Int,
+  log_path: String,
+) -> Result(String, String) {
+  let command =
+    gh_pr_command("view ") <> int.to_string(pr_number) <> " --json body"
+
+  let result = shell.run(command, cwd, log_path)
+  case shell.succeeded(result) {
+    True ->
+      json.parse(result.output, pull_request_body_decoder())
+      |> result.map_error(fn(_) { "Unable to decode pull request body." })
+    False -> Error("Unable to inspect pull request body.")
+  }
+}
+
+fn compose_pr_body(
+  existing_body: String,
+  legacy_body: String,
+  handoff_region: Option(String),
+  handoff: types.HandoffConfig,
+) -> String {
+  case handoff.enabled, handoff.pr_body_mode, handoff_region {
+    False, _, _ -> legacy_body
+    _, types.HandoffBodyOff, _ -> legacy_body
+    _, _, None -> legacy_body
+    _, mode, Some(region) ->
+      case replace_handoff_region(existing_body, region) {
+        Some(updated) -> updated
+        None -> {
+          let base = first_non_empty(existing_body, legacy_body)
+          case string.trim(base) {
+            "" -> region
+            _ ->
+              case mode {
+                types.HandoffBodyPrepend -> region <> "\n\n" <> base
+                _ -> base <> "\n\n" <> region
+              }
+          }
+        }
+      }
+  }
+}
+
+fn replace_handoff_region(
+  existing_body: String,
+  next_region: String,
+) -> Option(String) {
+  case string.split_once(existing_body, pr_handoff.body_start_marker) {
+    Ok(#(before, remainder)) ->
+      case string.split_once(remainder, pr_handoff.body_end_marker) {
+        Ok(#(_, after)) -> Some(before <> next_region <> after)
+        Error(_) -> None
+      }
+    Error(_) -> None
+  }
+}
+
+fn first_non_empty(left: String, right: String) -> String {
+  case string.trim(left) {
+    "" -> right
+    _ -> left
+  }
+}
+
 fn create_pull_request(
   cwd: String,
   branch_name: String,
@@ -228,6 +345,81 @@ fn comment_pull_request(
   run_gh(command, cwd, log_path)
 }
 
+fn create_issue_comment(
+  cwd: String,
+  pr_number: Int,
+  body: String,
+  log_path: String,
+) -> Result(Nil, String) {
+  let command =
+    gh_api_command(
+      "repos/:owner/:repo/issues/" <> int.to_string(pr_number) <> "/comments",
+    )
+    <> " --method POST --raw-field body="
+    <> shell.quote(body)
+
+  run_gh(command, cwd, log_path)
+}
+
+fn update_issue_comment(
+  cwd: String,
+  comment_id: Int,
+  body: String,
+  log_path: String,
+) -> Result(Nil, String) {
+  let command =
+    gh_api_command(
+      "repos/:owner/:repo/issues/comments/" <> int.to_string(comment_id),
+    )
+    <> " --method PATCH --raw-field body="
+    <> shell.quote(body)
+
+  run_gh(command, cwd, log_path)
+}
+
+fn issue_comments(
+  cwd: String,
+  pr_number: Int,
+  log_path: String,
+) -> Result(List(IssueComment), String) {
+  issue_comments_page(cwd, pr_number, 1, log_path, [])
+}
+
+fn issue_comments_page(
+  cwd: String,
+  pr_number: Int,
+  page: Int,
+  log_path: String,
+  acc: List(IssueComment),
+) -> Result(List(IssueComment), String) {
+  let command =
+    gh_api_command(
+      "repos/:owner/:repo/issues/"
+      <> int.to_string(pr_number)
+      <> "/comments?page="
+      <> int.to_string(page)
+      <> "&per_page=100",
+    )
+
+  let result = shell.run(command, cwd, log_path)
+  case shell.succeeded(result) {
+    True -> {
+      use comments <- result.try(
+        json.parse(result.output, decode.list(issue_comment_decoder()))
+        |> result.map_error(fn(_) { "Unable to decode issue comments." }),
+      )
+
+      let next_acc = list.append(acc, comments)
+      case list.length(comments) < 100 {
+        True -> Ok(next_acc)
+        False ->
+          issue_comments_page(cwd, pr_number, page + 1, log_path, next_acc)
+      }
+    }
+    False -> Error("Unable to inspect issue comments.")
+  }
+}
+
 fn close_pull_request(
   cwd: String,
   pr_number: Int,
@@ -265,6 +457,10 @@ fn run_gh(command: String, cwd: String, log_path: String) -> Result(Nil, String)
 
 fn gh_pr_command(args: String) -> String {
   gh_executable() <> " pr " <> args
+}
+
+fn gh_api_command(path: String) -> String {
+  gh_executable() <> " api " <> shell.quote(path)
 }
 
 fn gh_executable() -> String {
@@ -417,6 +613,17 @@ fn review_decoder() -> decode.Decoder(String) {
 fn comment_decoder() -> decode.Decoder(String) {
   use body <- decode.field("body", decode.string)
   decode.success("Comment: " <> body)
+}
+
+fn pull_request_body_decoder() -> decode.Decoder(String) {
+  use body <- decode.field("body", decode.string)
+  decode.success(body)
+}
+
+fn issue_comment_decoder() -> decode.Decoder(IssueComment) {
+  use id <- decode.field("id", decode.int)
+  use body <- decode.field("body", decode.string)
+  decode.success(IssueComment(id: id, body: body))
 }
 
 fn review_work_item_snapshot(

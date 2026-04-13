@@ -125,6 +125,7 @@ fn sample_run() -> types.RunRecord {
     created_at: "",
     updated_at: "",
     tasks: [],
+    handoff_states: [],
   )
 }
 

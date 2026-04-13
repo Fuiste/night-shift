@@ -106,6 +106,7 @@ pub fn create_pending_run_with_context(
       created_at: timestamp,
       updated_at: timestamp,
       tasks: [],
+      handoff_states: [],
     )
 
   case save(run, []) {

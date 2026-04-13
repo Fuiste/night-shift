@@ -114,6 +114,7 @@ fn review_run() -> types.RunRecord {
         "/tmp/repo/.night-shift/runs/review-run/worktrees/refresh-links",
       ),
     ],
+    handoff_states: [],
   )
 }
 

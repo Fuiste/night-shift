@@ -381,6 +381,7 @@ pub fn plan_command_non_tty_streaming_stays_plain_test() {
   let old_path = system.get_env("PATH")
   let old_state_home = system.get_env("XDG_STATE_HOME")
   let old_stream_ui = system.get_env("NIGHT_SHIFT_STREAM_UI")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
   let _ =
@@ -401,6 +402,7 @@ pub fn plan_command_non_tty_streaming_stays_plain_test() {
   system.set_env("PATH", bin_dir <> ":" <> old_path)
   system.set_env("XDG_STATE_HOME", state_home)
   system.set_env("NIGHT_SHIFT_STREAM_UI", "auto")
+  system.unset_env("NIGHT_SHIFT_FAKE_PROVIDER")
 
   let result =
     support.run_local_cli_command(
@@ -412,6 +414,7 @@ pub fn plan_command_non_tty_streaming_stays_plain_test() {
   system.set_env("PATH", old_path)
   support.restore_env("XDG_STATE_HOME", old_state_home)
   support.restore_env("NIGHT_SHIFT_STREAM_UI", old_stream_ui)
+  support.restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
 
   let assert Ok(output) = result
   assert !string.contains(does: output, contain: "\u{001b}")
@@ -440,6 +443,7 @@ pub fn plan_command_streaming_handles_utf8_tool_output_truncation_test() {
   let old_path = system.get_env("PATH")
   let old_state_home = system.get_env("XDG_STATE_HOME")
   let old_stream_ui = system.get_env("NIGHT_SHIFT_STREAM_UI")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
   let _ =
@@ -460,6 +464,7 @@ pub fn plan_command_streaming_handles_utf8_tool_output_truncation_test() {
   system.set_env("PATH", bin_dir <> ":" <> old_path)
   system.set_env("XDG_STATE_HOME", state_home)
   system.set_env("NIGHT_SHIFT_STREAM_UI", "auto")
+  system.unset_env("NIGHT_SHIFT_FAKE_PROVIDER")
 
   let result =
     support.run_local_cli_command(
@@ -471,6 +476,7 @@ pub fn plan_command_streaming_handles_utf8_tool_output_truncation_test() {
   system.set_env("PATH", old_path)
   support.restore_env("XDG_STATE_HOME", old_state_home)
   support.restore_env("NIGHT_SHIFT_STREAM_UI", old_stream_ui)
+  support.restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
 
   let assert Ok(output) = result
   assert string.contains(does: output, contain: "Planned run ")
@@ -491,6 +497,7 @@ pub fn plan_command_tty_streaming_restores_alt_screen_test() {
   let notes_path = filepath.join(base_dir, "notes.md")
   let fake_codex = filepath.join(bin_dir, "codex")
   let state_home = filepath.join(base_dir, "state")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
   let _ =
@@ -516,6 +523,8 @@ pub fn plan_command_tty_streaming_restores_alt_screen_test() {
     <> shell.quote(bin_dir <> ":" <> system.get_env("PATH"))
     <> " XDG_STATE_HOME="
     <> shell.quote(state_home)
+    <> " NIGHT_SHIFT_FAKE_PROVIDER="
+    <> shell.quote("")
     <> " NIGHT_SHIFT_REPO_ROOT="
     <> shell.quote(repo_root)
     <> " NIGHT_SHIFT_STREAM_UI=tui "
@@ -533,6 +542,8 @@ pub fn plan_command_tty_streaming_restores_alt_screen_test() {
   let assert True = shell.succeeded(output)
   assert string.contains(does: output.output, contain: "\u{001b}[?1049h")
   assert string.contains(does: output.output, contain: "\u{001b}[?1049l")
+
+  support.restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
