@@ -2,6 +2,7 @@
 ////
 //// The format is intentionally small and line-oriented so operators can edit
 //// it by hand and Night Shift can round-trip it predictably.
+
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}

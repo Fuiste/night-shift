@@ -1,4 +1,5 @@
 //// Public journal facade over Night Shift persistence.
+
 import gleam/option.{type Option}
 import night_shift/infra/run_store
 import night_shift/types

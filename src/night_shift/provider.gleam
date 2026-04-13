@@ -2,6 +2,7 @@
 ////
 //// This module turns typed Night Shift state into provider prompts, command
 //// invocations, and decoded payloads.
+
 import filepath
 import gleam/int
 import gleam/option.{type Option, None, Some}

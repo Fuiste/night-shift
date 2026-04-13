@@ -1,4 +1,5 @@
 //// Minimal local dashboard surface for inspecting Night Shift runs.
+
 import gleam/json
 import gleam/list
 import gleam/option.{None, Some}
@@ -11,15 +12,15 @@ pub type Session {
   Session(url: String, handle: String)
 }
 
-@external(erlang, "night_shift_dashboard_server", "start_view_session")
 /// Start a read-only dashboard session for an existing run.
+@external(erlang, "night_shift_dashboard_server", "start_view_session")
 pub fn start_view_session(
   repo_root: String,
   initial_run_id: String,
 ) -> Result(Session, String)
 
-@external(erlang, "night_shift_dashboard_server", "start_start_session")
 /// Start a dashboard session that owns a live `start` invocation.
+@external(erlang, "night_shift_dashboard_server", "start_start_session")
 pub fn start_start_session(
   repo_root: String,
   initial_run_id: String,
@@ -27,8 +28,8 @@ pub fn start_start_session(
   config: types.Config,
 ) -> Result(Session, String)
 
-@external(erlang, "night_shift_dashboard_server", "start_resume_session")
 /// Start a dashboard session that owns a live `resume` invocation.
+@external(erlang, "night_shift_dashboard_server", "start_resume_session")
 pub fn start_resume_session(
   repo_root: String,
   initial_run_id: String,
@@ -36,12 +37,12 @@ pub fn start_resume_session(
   config: types.Config,
 ) -> Result(Session, String)
 
-@external(erlang, "night_shift_dashboard_server", "stop_session")
 /// Stop a running dashboard session.
+@external(erlang, "night_shift_dashboard_server", "stop_session")
 pub fn stop_session(session: Session) -> Nil
 
-@external(erlang, "night_shift_dashboard_server", "http_get")
 /// Fetch a dashboard URL from the local server.
+@external(erlang, "night_shift_dashboard_server", "http_get")
 pub fn http_get(url: String) -> Result(String, String)
 
 /// Render the self-contained dashboard HTML shell.

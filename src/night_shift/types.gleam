@@ -2,6 +2,7 @@
 ////
 //// This module is the common language spoken across parsing, orchestration,
 //// persistence, and provider integration layers.
+
 import gleam/list
 import gleam/option.{type Option, None}
 

@@ -1,4 +1,5 @@
 //// Thin git command wrappers used by Night Shift orchestration.
+
 import filepath
 import gleam/list
 import gleam/option.{type Option, None, Some}

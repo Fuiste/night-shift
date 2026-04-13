@@ -1,4 +1,5 @@
 //// CLI parsing and operator-facing help text for Night Shift.
+
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import night_shift/types

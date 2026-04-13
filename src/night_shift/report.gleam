@@ -1,4 +1,5 @@
 //// Public report rendering facade.
+
 import night_shift/domain/report as domain_report
 import night_shift/types
 

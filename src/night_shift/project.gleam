@@ -1,4 +1,5 @@
 //// Canonical repo-local filesystem layout for Night Shift state.
+
 import filepath
 import simplifile
 

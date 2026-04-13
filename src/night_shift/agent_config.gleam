@@ -1,4 +1,5 @@
 //// Agent profile resolution for planning, execution, and review phases.
+
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result

@@ -1,4 +1,5 @@
 //// Public facade for repo-local worktree environment configuration.
+
 import gleam/option.{type Option}
 import night_shift/codec/worktree_setup as codec
 import night_shift/worktree_setup_model as model
