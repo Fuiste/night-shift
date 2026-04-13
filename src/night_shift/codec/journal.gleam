@@ -44,6 +44,7 @@ pub fn encode_run(run: types.RunRecord) -> String {
     #("created_at", json.string(run.created_at)),
     #("updated_at", json.string(run.updated_at)),
     #("tasks", json.array(run.tasks, encode_task)),
+    #("handoff_states", json.array(run.handoff_states, encode_task_handoff_state)),
   ])
   |> json.to_string
 }
@@ -193,6 +194,23 @@ fn encode_task(task: types.Task) -> json.Json {
   ])
 }
 
+fn encode_task_handoff_state(state: types.TaskHandoffState) -> json.Json {
+  json.object([
+    #("task_id", json.string(state.task_id)),
+    #("delivered_pr_number", json.string(state.delivered_pr_number)),
+    #(
+      "last_delivered_commit_sha",
+      json.string(state.last_delivered_commit_sha),
+    ),
+    #("last_handoff_files", json.array(state.last_handoff_files, json.string)),
+    #("last_verification_digest", json.string(state.last_verification_digest)),
+    #("last_risks", json.array(state.last_risks, json.string)),
+    #("last_handoff_updated_at", json.string(state.last_handoff_updated_at)),
+    #("body_region_present", json.bool(state.body_region_present)),
+    #("managed_comment_present", json.bool(state.managed_comment_present)),
+  ])
+}
+
 fn encode_decision_request(request: types.DecisionRequest) -> json.Json {
   json.object([
     #("key", json.string(request.key)),
@@ -262,6 +280,11 @@ fn run_decoder() -> decode.Decoder(types.RunRecord) {
   use created_at <- decode.field("created_at", decode.string)
   use updated_at <- decode.field("updated_at", decode.string)
   use tasks <- decode.field("tasks", decode.list(task_decoder()))
+  use handoff_states <- decode.optional_field(
+    "handoff_states",
+    None,
+    decode.optional(decode.list(task_handoff_state_decoder())),
+  )
   decode.success(types.RunRecord(
     run_id: run_id,
     repo_root: repo_root,
@@ -300,6 +323,10 @@ fn run_decoder() -> decode.Decoder(types.RunRecord) {
     created_at: created_at,
     updated_at: updated_at,
     tasks: tasks,
+    handoff_states: case handoff_states {
+      Some(entries) -> entries
+      None -> []
+    },
   ))
 }
 
@@ -341,6 +368,7 @@ fn legacy_run_decoder() -> decode.Decoder(types.RunRecord) {
     created_at: created_at,
     updated_at: updated_at,
     tasks: tasks,
+    handoff_states: [],
   ))
 }
 
@@ -429,6 +457,44 @@ fn task_decoder() -> decode.Decoder(types.Task) {
     branch_name: branch_name,
     pr_number: pr_number,
     summary: summary,
+  ))
+}
+
+fn task_handoff_state_decoder() -> decode.Decoder(types.TaskHandoffState) {
+  use task_id <- decode.field("task_id", decode.string)
+  use delivered_pr_number <- decode.field("delivered_pr_number", decode.string)
+  use last_delivered_commit_sha <- decode.field(
+    "last_delivered_commit_sha",
+    decode.string,
+  )
+  use last_handoff_files <- decode.field(
+    "last_handoff_files",
+    decode.list(decode.string),
+  )
+  use last_verification_digest <- decode.field(
+    "last_verification_digest",
+    decode.string,
+  )
+  use last_risks <- decode.field("last_risks", decode.list(decode.string))
+  use last_handoff_updated_at <- decode.field(
+    "last_handoff_updated_at",
+    decode.string,
+  )
+  use body_region_present <- decode.field("body_region_present", decode.bool)
+  use managed_comment_present <- decode.field(
+    "managed_comment_present",
+    decode.bool,
+  )
+  decode.success(types.TaskHandoffState(
+    task_id: task_id,
+    delivered_pr_number: delivered_pr_number,
+    last_delivered_commit_sha: last_delivered_commit_sha,
+    last_handoff_files: last_handoff_files,
+    last_verification_digest: last_verification_digest,
+    last_risks: last_risks,
+    last_handoff_updated_at: last_handoff_updated_at,
+    body_region_present: body_region_present,
+    managed_comment_present: managed_comment_present,
   ))
 }
 

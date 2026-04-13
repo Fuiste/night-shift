@@ -1,6 +1,6 @@
 ---
 title: Configuration
-description: Configure profiles, phase defaults, verification commands, and provider overrides.
+description: Configure profiles, phase defaults, verification commands, handoff behavior, and provider overrides.
 permalink: /configuration/
 ---
 
@@ -50,6 +50,13 @@ mode = "ask"
 
 [verification]
 commands = ["gleam test"]
+
+[handoff]
+enabled = true
+pr_body_mode = "append"
+managed_comment = false
+provenance = "structured"
+pr_body_prefix_path = ".night-shift/pr-handoff-prefix.md"
 ```
 
 If `config.toml` is empty, Night Shift still works. The built-in default
@@ -116,6 +123,38 @@ These top-level settings shape how Night Shift delivers completed work:
 - `pr_title_prefix`: prefix for pull request titles
 - `notifiers`: currently `console` and `report_file`
 - `[verification].commands`: commands to run locally before PR delivery
+
+## Handoff Settings
+
+`[handoff]` controls the optional reviewer-facing metadata that Night Shift can
+overlay onto delivered pull requests.
+
+Supported fields:
+
+- `enabled`: master switch for Night Shift handoff output
+- `pr_body_mode`: `off`, `append`, or `prepend`
+- `managed_comment`: whether Night Shift owns and updates one incremental PR
+  comment with "Since Last Review" deltas
+- `provenance`: `minimal`, `light`, or `structured`
+- `include_files_touched`
+- `include_acceptance`
+- `include_stack_context`
+- `include_verification_summary`
+- `pr_body_prefix_path`, `pr_body_suffix_path`
+- `comment_prefix_path`, `comment_suffix_path`
+
+When `[handoff]` is absent, Night Shift uses the conservative default:
+
+- handoff enabled
+- PR body overlay appended
+- managed comment disabled
+- structured provenance
+- files touched, stack context, and verification summary included
+
+Snippet paths are repo-relative markdown fragments. Night Shift splices them
+around its generated handoff sections; they augment the structured layout and
+do not replace it. If a configured snippet path cannot be read, Night Shift
+falls back to generated content and records a warning event.
 
 Example configs live in:
 

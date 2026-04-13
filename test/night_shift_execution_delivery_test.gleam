@@ -12,6 +12,7 @@ import night_shift/shell
 import night_shift/system
 import night_shift/types
 import night_shift/worktree_setup
+import night_shift/domain/pr_handoff
 import night_shift_test_support as support
 import simplifile
 
@@ -58,6 +59,8 @@ pub fn github_open_or_update_pr_uses_create_output_when_listing_lags_test() {
       "main",
       "Demo PR",
       "Body",
+      None,
+      types.default_handoff_config(),
       run_path,
       filepath.join(run_path, "logs/gh.log"),
     )
@@ -70,6 +73,132 @@ pub fn github_open_or_update_pr_uses_create_output_when_listing_lags_test() {
   assert pr.url == "https://example.test/pr/42"
   assert pr.head_ref_name == "night-shift/demo-branch"
   assert pr.title == "Demo PR"
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn github_open_or_update_pr_preserves_manual_body_outside_handoff_region_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    support.absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-gh-handoff-body-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let run_path = filepath.join(base_dir, "run")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let fake_gh = filepath.join(bin_dir, "gh")
+  let old_path = system.get_env("PATH")
+  let old_gh_bin = system.get_env("NIGHT_SHIFT_GH_BIN")
+  let body_file = fake_gh <> ".body.txt"
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) =
+    simplifile.create_directory_all(filepath.join(run_path, "logs"))
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  support.seed_git_repo(repo_root, base_dir)
+  let _ =
+    shell.run(
+      "git checkout -b night-shift/demo-branch",
+      repo_root,
+      filepath.join(base_dir, "branch.log"),
+    )
+  let assert Ok(_) = support.write_handoff_fake_gh(fake_gh)
+  let assert Ok(_) =
+    simplifile.write(
+      "Manual intro\n\n"
+        <> "<!-- night-shift:handoff-body:start -->\nold body\n<!-- night-shift:handoff-body:end -->\n\n"
+        <> "Manual footer\n",
+      to: body_file,
+    )
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_gh),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("NIGHT_SHIFT_GH_BIN", fake_gh)
+
+  let result =
+    github.open_or_update_pr(
+      repo_root,
+      "night-shift/demo-branch",
+      "main",
+      "Demo PR",
+      "Legacy body",
+      Some("<!-- night-shift:handoff-body:start -->\nnew body\n<!-- night-shift:handoff-body:end -->"),
+      types.default_handoff_config(),
+      run_path,
+      filepath.join(run_path, "logs/gh.log"),
+    )
+
+  system.set_env("PATH", old_path)
+  support.restore_env("NIGHT_SHIFT_GH_BIN", old_gh_bin)
+
+  let assert Ok(_) = result
+  let assert Ok(updated_body) = simplifile.read(body_file)
+
+  assert string.contains(updated_body, "Manual intro")
+  assert string.contains(updated_body, "new body")
+  assert string.contains(updated_body, "Manual footer")
+  assert !string.contains(does: updated_body, contain: "old body")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn github_upsert_handoff_comment_updates_existing_comment_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    support.absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-gh-handoff-comment-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let fake_gh = filepath.join(bin_dir, "gh")
+  let old_path = system.get_env("PATH")
+  let old_gh_bin = system.get_env("NIGHT_SHIFT_GH_BIN")
+  let comment_file = fake_gh <> ".comment.txt"
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = support.write_handoff_fake_gh(fake_gh)
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_gh),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("NIGHT_SHIFT_GH_BIN", fake_gh)
+
+  let assert Ok(github.CommentCreated) =
+    github.upsert_handoff_comment(
+      repo_root,
+      1,
+      "task-1",
+      "First body\n\n" <> pr_handoff.comment_marker("task-1"),
+      filepath.join(base_dir, "gh-create.log"),
+    )
+  let assert Ok(github.CommentUpdated) =
+    github.upsert_handoff_comment(
+      repo_root,
+      1,
+      "task-1",
+      "Second body\n\n" <> pr_handoff.comment_marker("task-1"),
+      filepath.join(base_dir, "gh-update.log"),
+    )
+
+  system.set_env("PATH", old_path)
+  support.restore_env("NIGHT_SHIFT_GH_BIN", old_gh_bin)
+
+  let assert Ok(comment_body) = simplifile.read(comment_file)
+  assert string.contains(comment_body, "Second body")
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }

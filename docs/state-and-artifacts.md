@@ -48,6 +48,9 @@ The run record itself stores:
 - planning provenance such as `notes only` or `reviews + notes`
 - an open-PR repo-state snapshot for review-driven plans
 - mechanically derived supersession lineage on replacement tasks
+- persisted PR handoff state per delivered task, including the last delivered
+  commit SHA, verification digest, files list, and whether Night Shift had
+  emitted a body overlay or managed comment
 - recorded decisions
 - `planning_dirty`
 - task list and task states
@@ -76,6 +79,8 @@ vanishing into the terminal scrollback.
 - worktree retention and pruning notes
 - execution recovery warnings when Night Shift accepted a sanitized or
   recovered provider payload
+- PR handoff warnings such as unreadable snippet paths or managed-comment
+  update failures
 - payload-repair attempt, success, and failure notes when Night Shift retried a
   malformed execution result in place
 - task summaries
@@ -89,7 +94,8 @@ tree when a stored snapshot exists, so its live output is authoritative for
 current drift while `report.md` remains durable and offline-readable.
 
 Task-level provider logs and prompt files live under each run's `logs/`
-directory.
+directory. PR delivery also keeps the rendered pull request body under `logs/`
+so operators can inspect the exact handoff Night Shift attempted to publish.
 
 Task worktrees are intentionally sticky. Night Shift keeps them mounted after
 completion so operators can inspect delivery state or resume later without
@@ -114,6 +120,12 @@ candidate changes, Night Shift also records a JSON-only payload-repair retry
 under distinct `.payload-repair.*` log and prompt artifacts. If that retry
 still fails, manual-attention summaries include both the original malformed
 payload path and the repair artifacts.
+
+When `[handoff]` points at snippet files such as `pr_body_prefix_path` or
+`comment_suffix_path`, Night Shift reads those repo-relative markdown files at
+delivery time. Missing or unreadable snippets do not block PR delivery; Night
+Shift records a `pr_handoff_warning` event and falls back to generated handoff
+content.
 
 ## Active Lock
 

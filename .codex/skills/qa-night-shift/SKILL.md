@@ -168,6 +168,24 @@ In review-driven runs, pay attention to repo-state evidence:
 - whether `status` and `report` show payload-repair attempts, successes, and
   failures with usable artifact paths
 
+In delivery-focused investigations, also validate reviewer handoff behavior
+when the repo config uses `[handoff]`:
+
+- whether the delivered PR body includes or omits the Night Shift-owned
+  handoff overlay according to `pr_body_mode`
+- whether Night Shift preserves manual PR text outside its marked body region
+  across later updates
+- whether configured snippet files are spliced into the PR body or managed
+  comment in the expected order
+- whether unreadable snippet paths degrade to `pr_handoff_warning` evidence
+  instead of blocking PR delivery
+- whether managed comments stay disabled by default and only appear when
+  `[handoff].managed_comment = true`
+- whether the managed comment is updated in place instead of adding new comment
+  noise on each delivery
+- whether handoff provenance labels clearly separate deterministic Night
+  Shift-owned evidence from provider-authored summary text
+
 Use small tasks that validate the requested behavior instead of inviting large
 feature work.
 
