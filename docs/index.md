@@ -1,12 +1,12 @@
 ---
 title: Home
-description: Night Shift is a repo-local CLI for planning, executing, and reviewing autonomous coding work.
+description: Night Shift is a repo-local CLI for planning, executing, and delivering autonomous coding work.
 permalink: /
 ---
 
 # Night Shift
 
-Night Shift is a repo-local CLI for planning, executing, and reviewing
+Night Shift is a repo-local CLI for planning, executing, and delivering
 autonomous coding work against a single Git repository.
 
 It keeps the brief, run journal, task graph, and execution artifacts local to
