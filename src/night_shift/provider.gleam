@@ -428,12 +428,7 @@ fn normalize_absolute_touched_path(
         "Execution payload referenced the task worktree root instead of a repo-relative file path.",
       )
     False ->
-      case
-        string.starts_with(
-          normalized_path,
-          normalized_worktree <> "/",
-        )
-      {
+      case string.starts_with(normalized_path, normalized_worktree <> "/") {
         True ->
           Ok(string.drop_start(
             normalized_path,

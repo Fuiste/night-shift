@@ -11,7 +11,10 @@ pub fn snapshot(
   open_pull_requests: List(types.RepoPullRequestSnapshot),
 ) -> types.RepoStateSnapshot {
   let impacted_heads =
-    impacted_head_refs(open_pull_requests, actionable_head_refs(open_pull_requests))
+    impacted_head_refs(
+      open_pull_requests,
+      actionable_head_refs(open_pull_requests),
+    )
   let annotated =
     open_pull_requests
     |> list.map(fn(pr) {
@@ -94,12 +97,12 @@ fn canonical_pr_line(pr: types.RepoPullRequestSnapshot) -> String {
       "review_decision=" <> pr.review_decision,
       "failing_checks="
         <> pr.failing_checks
-        |> list.sort(fn(left, right) { string.compare(left, right) })
-        |> string.join(with: "|"),
+      |> list.sort(fn(left, right) { string.compare(left, right) })
+      |> string.join(with: "|"),
       "review_comments="
         <> pr.review_comments
-        |> list.sort(fn(left, right) { string.compare(left, right) })
-        |> string.join(with: "|"),
+      |> list.sort(fn(left, right) { string.compare(left, right) })
+      |> string.join(with: "|"),
       "actionable=" <> bool_label(pr.actionable),
       "impacted=" <> bool_label(pr.impacted),
     ],

@@ -162,20 +162,17 @@ fn load_planned_tasks(
                         retry_events(attempt, retry_feedback),
                       ))
                     Error(issues) -> {
-                      let message = domain_summary.planning_validation_summary(
-                        issues,
-                      )
+                      let message =
+                        domain_summary.planning_validation_summary(issues)
                       case attempt < 2 && retryable_planning_issue(message) {
                         True ->
                           load_planned_tasks(
                             run,
                             attempt + 1,
-                            Some(
-                              corrective_retry_feedback(
-                                message,
-                                retry_feedback,
-                              ),
-                            ),
+                            Some(corrective_retry_feedback(
+                              message,
+                              retry_feedback,
+                            )),
                           )
                         False -> {
                           use _ <- result.try(reject_invalid_plan(run, issues))
@@ -997,7 +994,10 @@ fn derive_review_lineage_if_needed(
         True ->
           case run.repo_state_snapshot {
             Some(snapshot) ->
-              review_lineage.derive_superseded_pr_numbers(snapshot, planned_tasks)
+              review_lineage.derive_superseded_pr_numbers(
+                snapshot,
+                planned_tasks,
+              )
               |> result.map_error(fn(message) {
                 [task_validation.ReviewSupersessionMappingMismatch(message)]
               })
@@ -1238,9 +1238,10 @@ fn prune_superseded_successful_worktrees(
             |> list.filter(fn(candidate) {
               run_is_prune_candidate(run, candidate, superseded_pr_numbers)
             })
-          use #(pruned_run, pruned_any) <- result.try(
-            prune_candidate_runs(run, candidates),
-          )
+          use #(pruned_run, pruned_any) <- result.try(prune_candidate_runs(
+            run,
+            candidates,
+          ))
           case pruned_any {
             True ->
               finalize_worktree_prune_metadata(
@@ -1289,9 +1290,10 @@ fn run_pr_numbers_fully_superseded(
 
   case candidate_pr_numbers {
     [] -> False
-    _ -> list.all(candidate_pr_numbers, fn(pr_number) {
-      list.contains(superseded_pr_numbers, pr_number)
-    })
+    _ ->
+      list.all(candidate_pr_numbers, fn(pr_number) {
+        list.contains(superseded_pr_numbers, pr_number)
+      })
   }
 }
 
@@ -1302,12 +1304,14 @@ fn prune_candidate_runs(
   case candidates {
     [] -> Ok(#(run, False))
     [candidate, ..rest] -> {
-      use #(updated_run, candidate_pruned) <- result.try(
-        prune_run_worktrees(run, candidate),
-      )
-      use #(final_run, rest_pruned) <- result.try(
-        prune_candidate_runs(updated_run, rest),
-      )
+      use #(updated_run, candidate_pruned) <- result.try(prune_run_worktrees(
+        run,
+        candidate,
+      ))
+      use #(final_run, rest_pruned) <- result.try(prune_candidate_runs(
+        updated_run,
+        rest,
+      ))
       Ok(#(final_run, candidate_pruned || rest_pruned))
     }
   }
@@ -1329,9 +1333,11 @@ fn prune_run_worktrees_loop(
   case tasks {
     [] -> Ok(#(run, pruned_any))
     [task, ..rest] -> {
-      use #(updated_run, task_pruned) <- result.try(
-        prune_worktree_if_safe(run, candidate, task),
-      )
+      use #(updated_run, task_pruned) <- result.try(prune_worktree_if_safe(
+        run,
+        candidate,
+        task,
+      ))
       prune_run_worktrees_loop(
         updated_run,
         candidate,

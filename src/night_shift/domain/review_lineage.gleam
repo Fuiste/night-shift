@@ -27,9 +27,9 @@ pub fn derive_superseded_pr_numbers(
           )
         _ -> {
           use impacted_layers <- result.try(impacted_pr_layers(impacted_prs))
-          use implementation_layers <- result.try(
-            implementation_task_layers(implementation_tasks),
-          )
+          use implementation_layers <- result.try(implementation_task_layers(
+            implementation_tasks,
+          ))
           use mappings <- result.try(match_layers(
             impacted_layers,
             implementation_layers,
@@ -44,19 +44,25 @@ pub fn derive_superseded_pr_numbers(
 fn impacted_pr_layers(
   prs: List(types.RepoPullRequestSnapshot),
 ) -> Result(List(List(types.RepoPullRequestSnapshot)), String) {
-  use depth_pairs <- result.try(prs |> list.try_map(fn(pr) {
-    impacted_pr_depth(pr, prs, []) |> result.map(fn(depth) { #(depth, pr) })
-  }))
+  use depth_pairs <- result.try(
+    prs
+    |> list.try_map(fn(pr) {
+      impacted_pr_depth(pr, prs, []) |> result.map(fn(depth) { #(depth, pr) })
+    }),
+  )
   Ok(group_pr_layers(depth_pairs))
 }
 
 fn implementation_task_layers(
   tasks: List(types.Task),
 ) -> Result(List(List(types.Task)), String) {
-  use depth_pairs <- result.try(tasks |> list.try_map(fn(task) {
-    implementation_task_depth(task, tasks, [])
-    |> result.map(fn(depth) { #(depth, task) })
-  }))
+  use depth_pairs <- result.try(
+    tasks
+    |> list.try_map(fn(task) {
+      implementation_task_depth(task, tasks, [])
+      |> result.map(fn(depth) { #(depth, task) })
+    }),
+  )
   Ok(group_task_layers(depth_pairs))
 }
 
@@ -146,12 +152,14 @@ fn match_layer_pairs(
           <> ".",
         )
       True -> {
-        let ordered_prs = prs |> list.sort(fn(left, right) {
-          int.compare(left.number, right.number)
-        })
-        let ordered_tasks = tasks |> list.sort(fn(left, right) {
-          string.compare(left.id, right.id)
-        })
+        let ordered_prs =
+          prs
+          |> list.sort(fn(left, right) {
+            int.compare(left.number, right.number)
+          })
+        let ordered_tasks =
+          tasks
+          |> list.sort(fn(left, right) { string.compare(left.id, right.id) })
         let layer_mappings =
           ordered_tasks
           |> list.zip(ordered_prs)
@@ -175,9 +183,7 @@ fn group_pr_layers(
       other -> other
     }
   })
-  |> list.fold([], fn(acc, pair) {
-    append_pr_to_layer(acc, pair.0, pair.1)
-  })
+  |> list.fold([], fn(acc, pair) { append_pr_to_layer(acc, pair.0, pair.1) })
   |> list.reverse
   |> list.map(fn(layer) { list.reverse(layer.1) })
 }
@@ -192,9 +198,7 @@ fn group_task_layers(
       other -> other
     }
   })
-  |> list.fold([], fn(acc, pair) {
-    append_task_to_layer(acc, pair.0, pair.1)
-  })
+  |> list.fold([], fn(acc, pair) { append_task_to_layer(acc, pair.0, pair.1) })
   |> list.reverse
   |> list.map(fn(layer) { list.reverse(layer.1) })
 }
@@ -224,8 +228,10 @@ fn append_task_to_layer(
     [#(existing_depth, tasks), ..rest] ->
       case existing_depth == depth {
         True -> [#(existing_depth, [task, ..tasks]), ..rest]
-        False ->
-          [#(existing_depth, tasks), ..append_task_to_layer(rest, depth, task)]
+        False -> [
+          #(existing_depth, tasks),
+          ..append_task_to_layer(rest, depth, task)
+        ]
       }
   }
 }
@@ -274,8 +280,7 @@ fn apply_mappings(
   tasks
   |> list.map(fn(task) {
     case mapped_pr_number(mappings, task.id) {
-      Ok(pr_number) ->
-        types.Task(..task, superseded_pr_numbers: [pr_number])
+      Ok(pr_number) -> types.Task(..task, superseded_pr_numbers: [pr_number])
       Error(_) ->
         case task.kind == types.ImplementationTask {
           True -> types.Task(..task, superseded_pr_numbers: [])

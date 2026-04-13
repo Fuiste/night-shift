@@ -17,10 +17,7 @@ pub fn execute(
   use warnings <- result.try(repo_guard.ensure_clean_repo_for_start(repo_root))
   use active_run <- result.try(journal.activate_run(run))
   let inspection = repo_state_runtime.inspect(active_run, config.branch_prefix)
-  use inspected_run <- result.try(append_events(
-    active_run,
-    inspection.events,
-  ))
+  use inspected_run <- result.try(append_events(active_run, inspection.events))
   let all_warnings = list.append(warnings, inspection.warnings)
   case orchestrator.start(inspected_run, config) {
     Ok(updated_run) ->

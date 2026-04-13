@@ -6,14 +6,11 @@ import night_shift/types
 
 pub fn derive_superseded_pr_numbers_maps_impacted_chain_to_replacement_chain_test() {
   let snapshot =
-    repo_state.snapshot(
-      "2026-04-13T16:30:00Z",
-      [
-        pr_snapshot(11, "night-shift/root", "main", True, True),
-        pr_snapshot(12, "night-shift/child", "night-shift/root", False, True),
-        pr_snapshot(13, "night-shift/leaf", "night-shift/child", False, True),
-      ],
-    )
+    repo_state.snapshot("2026-04-13T16:30:00Z", [
+      pr_snapshot(11, "night-shift/root", "main", True, True),
+      pr_snapshot(12, "night-shift/child", "night-shift/root", False, True),
+      pr_snapshot(13, "night-shift/leaf", "night-shift/child", False, True),
+    ])
   let tasks = [
     task("rewrite-root", []),
     task("update-nav", ["rewrite-root"]),
@@ -26,10 +23,9 @@ pub fn derive_superseded_pr_numbers_maps_impacted_chain_to_replacement_chain_tes
   assert derived_tasks
     == [
       types.Task(..task("rewrite-root", []), superseded_pr_numbers: [11]),
-      types.Task(
-        ..task("update-nav", ["rewrite-root"]),
-        superseded_pr_numbers: [12],
-      ),
+      types.Task(..task("update-nav", ["rewrite-root"]), superseded_pr_numbers: [
+        12,
+      ]),
       types.Task(
         ..task("refresh-links", ["update-nav"]),
         superseded_pr_numbers: [13],
@@ -39,14 +35,11 @@ pub fn derive_superseded_pr_numbers_maps_impacted_chain_to_replacement_chain_tes
 
 pub fn derive_superseded_pr_numbers_rejects_shape_mismatch_test() {
   let snapshot =
-    repo_state.snapshot(
-      "2026-04-13T16:30:00Z",
-      [
-        pr_snapshot(11, "night-shift/root", "main", True, True),
-        pr_snapshot(12, "night-shift/child", "night-shift/root", False, True),
-        pr_snapshot(13, "night-shift/leaf", "night-shift/child", False, True),
-      ],
-    )
+    repo_state.snapshot("2026-04-13T16:30:00Z", [
+      pr_snapshot(11, "night-shift/root", "main", True, True),
+      pr_snapshot(12, "night-shift/child", "night-shift/root", False, True),
+      pr_snapshot(13, "night-shift/leaf", "night-shift/child", False, True),
+    ])
   let tasks = [
     task("rewrite-root", []),
     task("update-nav", ["rewrite-root"]),
@@ -56,10 +49,7 @@ pub fn derive_superseded_pr_numbers_rejects_shape_mismatch_test() {
   let assert Error(message) =
     review_lineage.derive_superseded_pr_numbers(snapshot, tasks)
 
-  assert string.contains(
-    does: message,
-    contain: "impacted PR subtree shape",
-  )
+  assert string.contains(does: message, contain: "impacted PR subtree shape")
 }
 
 fn pr_snapshot(

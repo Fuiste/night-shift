@@ -63,7 +63,9 @@ pub fn inspect(run: types.RunRecord, branch_prefix: String) -> Inspection {
             RepoStateView(
               snapshot_captured_at: stored_snapshot.captured_at,
               open_pr_count: repo_state.open_pr_count(stored_snapshot),
-              actionable_pr_count: repo_state.actionable_pr_count(stored_snapshot),
+              actionable_pr_count: repo_state.actionable_pr_count(
+                stored_snapshot,
+              ),
               drift: RepoStateDriftUnknown(message),
             )
           Inspection(
@@ -99,49 +101,45 @@ pub fn drift_label(drift: RepoStateDrift) -> String {
 fn drift_warnings(view: RepoStateView) -> List(String) {
   case view.drift {
     RepoStateStable -> []
-    RepoStateDrifted ->
-      [
-        "Repo state drift detected: open Night Shift PRs changed since planning. Consider `night-shift plan --from-reviews` before continuing execution.",
-      ]
-    RepoStateDriftUnknown(message) ->
-      [
-        "Repo state warning: unable to refresh open Night Shift PRs; using the snapshot captured at "
-        <> view.snapshot_captured_at
-        <> ". "
-        <> message,
-      ]
+    RepoStateDrifted -> [
+      "Repo state drift detected: open Night Shift PRs changed since planning. Consider `night-shift plan --from-reviews` before continuing execution.",
+    ]
+    RepoStateDriftUnknown(message) -> [
+      "Repo state warning: unable to refresh open Night Shift PRs; using the snapshot captured at "
+      <> view.snapshot_captured_at
+      <> ". "
+      <> message,
+    ]
   }
 }
 
 fn drift_events(view: RepoStateView) -> List(types.RunEvent) {
   case view.drift {
     RepoStateStable -> []
-    RepoStateDrifted ->
-      [
-        types.RunEvent(
-          kind: "repo_state_drift",
-          at: system.timestamp(),
-          message: "Open Night Shift PRs drifted since planning. Snapshot captured at "
-            <> view.snapshot_captured_at
-            <> " now differs from the live PR tree (open: "
-            <> int.to_string(view.open_pr_count)
-            <> ", actionable: "
-            <> int.to_string(view.actionable_pr_count)
-            <> "). Consider `night-shift plan --from-reviews` before continuing.",
-          task_id: None,
-        ),
-      ]
-    RepoStateDriftUnknown(message) ->
-      [
-        types.RunEvent(
-          kind: "repo_state_warning",
-          at: system.timestamp(),
-          message: "Unable to refresh open Night Shift PR snapshot captured at "
-            <> view.snapshot_captured_at
-            <> ": "
-            <> message,
-          task_id: None,
-        ),
-      ]
+    RepoStateDrifted -> [
+      types.RunEvent(
+        kind: "repo_state_drift",
+        at: system.timestamp(),
+        message: "Open Night Shift PRs drifted since planning. Snapshot captured at "
+          <> view.snapshot_captured_at
+          <> " now differs from the live PR tree (open: "
+          <> int.to_string(view.open_pr_count)
+          <> ", actionable: "
+          <> int.to_string(view.actionable_pr_count)
+          <> "). Consider `night-shift plan --from-reviews` before continuing.",
+        task_id: None,
+      ),
+    ]
+    RepoStateDriftUnknown(message) -> [
+      types.RunEvent(
+        kind: "repo_state_warning",
+        at: system.timestamp(),
+        message: "Unable to refresh open Night Shift PR snapshot captured at "
+          <> view.snapshot_captured_at
+          <> ": "
+          <> message,
+        task_id: None,
+      ),
+    ]
   }
 }

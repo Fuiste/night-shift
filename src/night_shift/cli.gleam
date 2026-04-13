@@ -89,13 +89,25 @@ fn parse_plan_flags(
       }
 
     ["--notes", path, ..rest] ->
-      parse_plan_flags(rest, Some(path), doc_path, from_reviews, agent_overrides)
+      parse_plan_flags(
+        rest,
+        Some(path),
+        doc_path,
+        from_reviews,
+        agent_overrides,
+      )
 
     ["--from-reviews", ..rest] ->
       parse_plan_flags(rest, notes_path, doc_path, True, agent_overrides)
 
     ["--doc", path, ..rest] ->
-      parse_plan_flags(rest, notes_path, Some(path), from_reviews, agent_overrides)
+      parse_plan_flags(
+        rest,
+        notes_path,
+        Some(path),
+        from_reviews,
+        agent_overrides,
+      )
 
     ["--profile", profile_name, ..rest] ->
       parse_plan_flags(

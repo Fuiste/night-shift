@@ -202,10 +202,7 @@ fn render_issue(issue: ValidationIssue) -> String {
       <> dependency
       <> "`"
     UnreadablePlanningBrief(path, reason) ->
-      "unable to read planning brief `"
-      <> path
-      <> "`: "
-      <> reason
+      "unable to read planning brief `" <> path <> "`: " <> reason
     ExpectedImplementationTaskCount(expected, actual) ->
       "planner must return exactly "
       <> int_to_string(expected)
@@ -218,18 +215,22 @@ fn render_issue(issue: ValidationIssue) -> String {
   }
 }
 
-fn validate_strict_serial_chain(tasks: List(types.Task)) -> List(ValidationIssue) {
+fn validate_strict_serial_chain(
+  tasks: List(types.Task),
+) -> List(ValidationIssue) {
   case tasks {
     [] -> [ExpectedStrictSerialImplementationChain]
     [_] -> []
     _ -> {
       let task_ids = tasks |> list.map(fn(task) { task.id })
-      let roots = tasks |> list.filter(fn(task) {
-        implementation_parent_count(task, task_ids) == 0
-      })
-      let leaves = tasks |> list.filter(fn(task) {
-        implementation_child_count(task, tasks) == 0
-      })
+      let roots =
+        tasks
+        |> list.filter(fn(task) {
+          implementation_parent_count(task, task_ids) == 0
+        })
+      let leaves =
+        tasks
+        |> list.filter(fn(task) { implementation_child_count(task, tasks) == 0 })
       let every_task_has_chain_degree =
         list.all(tasks, fn(task) {
           implementation_parent_count(task, task_ids) <= 1
@@ -261,7 +262,9 @@ fn implementation_parent_count(task: types.Task, task_ids: List(String)) -> Int 
 
 fn implementation_child_count(task: types.Task, tasks: List(types.Task)) -> Int {
   tasks
-  |> list.filter(fn(candidate) { list.contains(candidate.dependencies, task.id) })
+  |> list.filter(fn(candidate) {
+    list.contains(candidate.dependencies, task.id)
+  })
   |> list.length
 }
 

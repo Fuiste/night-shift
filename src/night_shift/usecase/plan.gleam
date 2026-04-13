@@ -43,15 +43,13 @@ pub fn execute(
     repo_root,
     None,
   ))
-  use #(document, artifact_path) <- result.try(
-    provider.plan_document(
-      planning_agent,
-      repo_root,
-      notes_source,
-      target_doc_path,
-      repo_state_snapshot,
-    ),
-  )
+  use #(document, artifact_path) <- result.try(provider.plan_document(
+    planning_agent,
+    repo_root,
+    notes_source,
+    target_doc_path,
+    repo_state_snapshot,
+  ))
   use _ <- result.try(filesystem.write_string(target_doc_path, document))
   use #(seeded_run, replanning) <- result.try(planning.prepare_planning_run(
     repo_root,
@@ -113,9 +111,8 @@ fn load_repo_state_snapshot(
 fn config_warnings(config: types.Config) -> List(String) {
   case config.review_profile {
     "" -> []
-    _ ->
-      [
-        "Config warning: `review_profile` is deprecated; `planning_profile` now governs review-driven planning.",
-      ]
+    _ -> [
+      "Config warning: `review_profile` is deprecated; `planning_profile` now governs review-driven planning.",
+    ]
   }
 }

@@ -26,11 +26,11 @@ pub fn execute(
   ))
   use resumed_run <- result.try(prepare_resumed_run(saved_run))
   let inspection = repo_state_runtime.inspect(resumed_run, config.branch_prefix)
-  use inspected_run <- result.try(append_events(
-    resumed_run,
-    inspection.events,
+  use inspected_run <- result.try(append_events(resumed_run, inspection.events))
+  use continued_run <- result.try(orchestrator.continue_run(
+    inspected_run,
+    config,
   ))
-  use continued_run <- result.try(orchestrator.continue_run(inspected_run, config))
   Ok(workflow.ResumeResult(
     run: continued_run,
     warnings: inspection.warnings,

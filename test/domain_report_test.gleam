@@ -1,7 +1,7 @@
 import gleam/option.{None, Some}
 import gleam/string
-import night_shift/report
 import night_shift/repo_state_runtime
+import night_shift/report
 import night_shift/types
 
 pub fn render_live_review_report_includes_repo_state_and_supersession_test() {
@@ -47,7 +47,10 @@ pub fn render_live_review_report_includes_repo_state_and_supersession_test() {
     contain: "rewrite-root -> supersedes #12 (replacement PR #15)",
   )
   assert string.contains(does: rendered, contain: "## Worktree Hygiene")
-  assert string.contains(does: rendered, contain: "Pruned superseded worktrees: 1")
+  assert string.contains(
+    does: rendered,
+    contain: "Pruned superseded worktrees: 1",
+  )
   assert string.contains(does: rendered, contain: "## Execution Recovery")
 }
 

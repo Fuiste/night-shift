@@ -102,8 +102,7 @@ fn encode_planning_provenance(provenance: types.PlanningProvenance) -> json.Json
         #("kind", json.string("notes_only")),
         #("notes_source", encode_notes_source(notes_source)),
       ])
-    types.ReviewsOnly ->
-      json.object([#("kind", json.string("reviews_only"))])
+    types.ReviewsOnly -> json.object([#("kind", json.string("reviews_only"))])
     types.ReviewsAndNotes(notes_source) ->
       json.object([
         #("kind", json.string("reviews_and_notes")),
@@ -177,10 +176,7 @@ fn encode_task(task: types.Task) -> json.Json {
       "decision_requests",
       json.array(task.decision_requests, encode_decision_request),
     ),
-    #(
-      "superseded_pr_numbers",
-      json.array(task.superseded_pr_numbers, json.int),
-    ),
+    #("superseded_pr_numbers", json.array(task.superseded_pr_numbers, json.int)),
     #("task_kind", json.string(types.task_kind_to_string(task.kind))),
     #(
       "execution_mode",
@@ -404,7 +400,9 @@ fn task_decoder() -> decode.Decoder(types.Task) {
   use acceptance <- decode.field("acceptance", decode.list(decode.string))
   use demo_plan <- decode.field("demo_plan", decode.list(decode.string))
   use decision_requests <- decode.then(optional_decision_requests_decoder())
-  use superseded_pr_numbers <- decode.then(optional_superseded_pr_numbers_decoder())
+  use superseded_pr_numbers <- decode.then(
+    optional_superseded_pr_numbers_decoder(),
+  )
   use kind <- decode.then(task_kind_decoder())
   use execution_mode <- decode.then(task_execution_mode_decoder())
   use state <- decode.field("state", task_state_decoder())
@@ -507,15 +505,19 @@ fn repo_state_snapshot_decoder() -> decode.Decoder(types.RepoStateSnapshot) {
   ))
 }
 
-fn repo_pull_request_snapshot_decoder(
-) -> decode.Decoder(types.RepoPullRequestSnapshot) {
+fn repo_pull_request_snapshot_decoder() -> decode.Decoder(
+  types.RepoPullRequestSnapshot,
+) {
   use number <- decode.field("number", decode.int)
   use title <- decode.field("title", decode.string)
   use url <- decode.field("url", decode.string)
   use head_ref_name <- decode.field("head_ref_name", decode.string)
   use base_ref_name <- decode.field("base_ref_name", decode.string)
   use review_decision <- decode.field("review_decision", decode.string)
-  use failing_checks <- decode.field("failing_checks", decode.list(decode.string))
+  use failing_checks <- decode.field(
+    "failing_checks",
+    decode.list(decode.string),
+  )
   use review_comments <- decode.field(
     "review_comments",
     decode.list(decode.string),

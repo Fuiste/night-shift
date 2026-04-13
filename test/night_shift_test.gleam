@@ -120,9 +120,12 @@ pub fn parse_plan_command_test() {
 }
 
 pub fn parse_plan_command_with_doc_and_provider_test() {
-  let assert Ok(
-    types.Plan(Some("notes.md"), Some("custom.md"), False, agent_overrides),
-  ) =
+  let assert Ok(types.Plan(
+    Some("notes.md"),
+    Some("custom.md"),
+    False,
+    agent_overrides,
+  )) =
     cli.parse([
       "plan",
       "--notes",
@@ -363,7 +366,8 @@ pub fn review_driven_run_round_trip_with_repo_state_snapshot_test() {
       Some(planning_provenance),
       Some(repo_state_snapshot),
     )
-  let assert Ok(#(saved_run, _events)) = journal.load(repo_root, types.LatestRun)
+  let assert Ok(#(saved_run, _events)) =
+    journal.load(repo_root, types.LatestRun)
 
   assert saved_run.run_id == run.run_id
   assert saved_run.planning_provenance == Some(planning_provenance)
@@ -400,7 +404,8 @@ pub fn reviews_only_run_round_trip_with_null_notes_source_test() {
       Some(types.ReviewsOnly),
       Some(repo_state_snapshot),
     )
-  let assert Ok(#(saved_run, _events)) = journal.load(repo_root, types.LatestRun)
+  let assert Ok(#(saved_run, _events)) =
+    journal.load(repo_root, types.LatestRun)
 
   assert saved_run.run_id == run.run_id
   assert saved_run.notes_source == None
@@ -429,9 +434,13 @@ pub fn latest_run_ignores_incomplete_newer_directory_test() {
   let assert Ok(_) =
     simplifile.create_directory_all(filepath.join(incomplete_run_path, "logs"))
   let assert Ok(_) =
-    simplifile.write("# Partial brief", to: filepath.join(incomplete_run_path, "brief.md"))
+    simplifile.write(
+      "# Partial brief",
+      to: filepath.join(incomplete_run_path, "brief.md"),
+    )
 
-  let assert Ok(#(saved_run, _events)) = journal.load(repo_root, types.LatestRun)
+  let assert Ok(#(saved_run, _events)) =
+    journal.load(repo_root, types.LatestRun)
   let assert Ok(runs) = journal.list_runs(repo_root)
 
   assert saved_run.run_id == run.run_id
@@ -1216,7 +1225,8 @@ pub fn review_command_guides_to_plan_from_reviews_test() {
   restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
 
   let assert Ok(output) = result
-  let assert Error(report_error) = journal.read_report(repo_root, types.LatestRun)
+  let assert Error(report_error) =
+    journal.read_report(repo_root, types.LatestRun)
 
   assert string.contains(
     does: output,
@@ -2938,10 +2948,7 @@ pub fn provider_await_task_rejects_absolute_paths_outside_worktree_test() {
   system.set_env("PATH", old_path)
   restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
 
-  assert string.contains(
-    does: message,
-    contain: "outside the task worktree",
-  )
+  assert string.contains(does: message, contain: "outside the task worktree")
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
@@ -2971,8 +2978,7 @@ pub fn orchestrator_start_accepts_recovered_execution_payload_with_warning_test(
   let assert Ok(_) = simplifile.create_directory_all(base_dir)
   let assert Ok(_) = simplifile.create_directory_all(bin_dir)
   let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
-  let assert Ok(_) =
-    write_recoverable_delivery_fake_provider(fake_provider)
+  let assert Ok(_) = write_recoverable_delivery_fake_provider(fake_provider)
   let assert Ok(_) = write_fake_gh(fake_gh)
   let _ =
     shell.run(
@@ -3027,7 +3033,10 @@ pub fn orchestrator_start_accepts_recovered_execution_payload_with_warning_test(
     does: events_contents,
     contain: "\"kind\":\"execution_payload_warning\"",
   )
-  assert string.contains(does: report_contents, contain: "## Execution Recovery")
+  assert string.contains(
+    does: report_contents,
+    contain: "## Execution Recovery",
+  )
   assert string.contains(
     does: report_contents,
     contain: "Accepted recovered execution payloads: 1",
@@ -3112,11 +3121,9 @@ pub fn orchestrator_start_prunes_clean_superseded_worktrees_test() {
     )
   let assert Ok(_) =
     journal.rewrite_run(
-      types.RunRecord(
-        ..prior_run,
-        status: types.RunCompleted,
-        tasks: [prior_completed_task],
-      ),
+      types.RunRecord(..prior_run, status: types.RunCompleted, tasks: [
+        prior_completed_task,
+      ]),
     )
 
   let assert Ok(current_run) =
@@ -3150,11 +3157,9 @@ pub fn orchestrator_start_prunes_clean_superseded_worktrees_test() {
       summary: "Replacement completed task",
     )
   let replacement_run =
-    types.RunRecord(
-      ..current_run,
-      status: types.RunActive,
-      tasks: [replacement_task],
-    )
+    types.RunRecord(..current_run, status: types.RunActive, tasks: [
+      replacement_task,
+    ])
 
   let config =
     types.Config(
@@ -3173,8 +3178,14 @@ pub fn orchestrator_start_prunes_clean_superseded_worktrees_test() {
 
   assert final_run.status == types.RunCompleted
   let assert Error(_) = simplifile.read_directory(at: prior_worktree)
-  assert string.contains(does: events_contents, contain: "\"kind\":\"pr_superseded\"")
-  assert string.contains(does: events_contents, contain: "\"kind\":\"worktree_pruned\"")
+  assert string.contains(
+    does: events_contents,
+    contain: "\"kind\":\"pr_superseded\"",
+  )
+  assert string.contains(
+    does: events_contents,
+    contain: "\"kind\":\"worktree_pruned\"",
+  )
   assert string.contains(does: report_contents, contain: "## Worktree Hygiene")
   assert string.contains(
     does: report_contents,
@@ -4388,50 +4399,47 @@ fn agent_for(provider_name: types.Provider) -> types.ResolvedAgentConfig {
 }
 
 fn sample_repo_state_snapshot() -> types.RepoStateSnapshot {
-  repo_state.snapshot(
-    "2026-04-13T16:30:00Z",
-    [
-      types.RepoPullRequestSnapshot(
-        number: 11,
-        title: "Rewrite the root document",
-        url: "https://example.com/pr/11",
-        head_ref_name: "night-shift/root",
-        base_ref_name: "main",
-        review_decision: "",
-        failing_checks: [],
-        review_comments: [
-          "Review COMMENTED: Please make QA_NOTES.md the canonical doc.",
-          "Comment: This invalidates the current stack.",
-        ],
-        actionable: True,
-        impacted: True,
-      ),
-      types.RepoPullRequestSnapshot(
-        number: 12,
-        title: "Update docs navigation",
-        url: "https://example.com/pr/12",
-        head_ref_name: "night-shift/child",
-        base_ref_name: "night-shift/root",
-        review_decision: "",
-        failing_checks: [],
-        review_comments: [],
-        actionable: False,
-        impacted: True,
-      ),
-      types.RepoPullRequestSnapshot(
-        number: 13,
-        title: "Add references page",
-        url: "https://example.com/pr/13",
-        head_ref_name: "night-shift/leaf",
-        base_ref_name: "night-shift/child",
-        review_decision: "",
-        failing_checks: [],
-        review_comments: [],
-        actionable: False,
-        impacted: True,
-      ),
-    ],
-  )
+  repo_state.snapshot("2026-04-13T16:30:00Z", [
+    types.RepoPullRequestSnapshot(
+      number: 11,
+      title: "Rewrite the root document",
+      url: "https://example.com/pr/11",
+      head_ref_name: "night-shift/root",
+      base_ref_name: "main",
+      review_decision: "",
+      failing_checks: [],
+      review_comments: [
+        "Review COMMENTED: Please make QA_NOTES.md the canonical doc.",
+        "Comment: This invalidates the current stack.",
+      ],
+      actionable: True,
+      impacted: True,
+    ),
+    types.RepoPullRequestSnapshot(
+      number: 12,
+      title: "Update docs navigation",
+      url: "https://example.com/pr/12",
+      head_ref_name: "night-shift/child",
+      base_ref_name: "night-shift/root",
+      review_decision: "",
+      failing_checks: [],
+      review_comments: [],
+      actionable: False,
+      impacted: True,
+    ),
+    types.RepoPullRequestSnapshot(
+      number: 13,
+      title: "Add references page",
+      url: "https://example.com/pr/13",
+      head_ref_name: "night-shift/leaf",
+      base_ref_name: "night-shift/child",
+      review_decision: "",
+      failing_checks: [],
+      review_comments: [],
+      actionable: False,
+      impacted: True,
+    ),
+  ])
 }
 
 fn start_run(

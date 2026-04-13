@@ -32,9 +32,9 @@ pub fn render_plan(view: result.PlanResult) -> String {
       <> "\nPlanning input: "
       <> types.planning_provenance_label(view.planning_provenance)
       <> "\nNotes: "
-      <> render_notes_source(
-        types.planning_provenance_notes_source(view.planning_provenance),
-      )
+      <> render_notes_source(types.planning_provenance_notes_source(
+      view.planning_provenance,
+    ))
       <> "\nPlanning: "
       <> agent_config.summary(view.run.planning_agent)
       <> "\nArtifacts: "

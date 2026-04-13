@@ -393,7 +393,9 @@ fn list_run_ids(repo_path: String) -> Result(List(String), String) {
 
 fn list_complete_run_ids(repo_path: String) -> Result(List(String), String) {
   use run_ids <- result.try(list_run_ids(repo_path))
-  Ok(run_ids |> list.filter(fn(run_id) { run_id_is_complete(repo_path, run_id) }))
+  Ok(
+    run_ids |> list.filter(fn(run_id) { run_id_is_complete(repo_path, run_id) }),
+  )
 }
 
 fn run_id_is_complete(repo_path: String, run_id: String) -> Bool {

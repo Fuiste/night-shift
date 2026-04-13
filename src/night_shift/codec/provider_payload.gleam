@@ -209,7 +209,10 @@ fn execution_decode_failure(
 
 fn decode_execution_payload(
   payload: String,
-) -> Result(#(types.ExecutionResult, ExecutionPayloadTrust, Option(String)), Option(String)) {
+) -> Result(
+  #(types.ExecutionResult, ExecutionPayloadTrust, Option(String)),
+  Option(String),
+) {
   let trimmed_payload = string.trim(payload)
 
   case json.parse(trimmed_payload, execution_decoder()) {
@@ -249,9 +252,15 @@ fn decode_execution_candidate(
   candidate: String,
   original_payload: String,
   trust: ExecutionPayloadTrust,
-) -> Result(#(types.ExecutionResult, ExecutionPayloadTrust, Option(String)), Option(String)) {
+) -> Result(
+  #(types.ExecutionResult, ExecutionPayloadTrust, Option(String)),
+  Option(String),
+) {
   let trimmed_candidate = string.trim(candidate)
-  case trimmed_candidate == "" || trimmed_candidate == string.trim(original_payload) {
+  case
+    trimmed_candidate == ""
+    || trimmed_candidate == string.trim(original_payload)
+  {
     True -> Error(None)
     False ->
       case json.parse(trimmed_candidate, execution_decoder()) {
@@ -373,7 +382,9 @@ fn planned_task_decoder() -> decode.Decoder(types.Task) {
   use acceptance <- decode.field("acceptance", decode.list(decode.string))
   use demo_plan <- decode.field("demo_plan", decode.list(decode.string))
   use decision_requests <- decode.then(optional_decision_requests_decoder())
-  use superseded_pr_numbers <- decode.then(optional_superseded_pr_numbers_decoder())
+  use superseded_pr_numbers <- decode.then(
+    optional_superseded_pr_numbers_decoder(),
+  )
   use kind <- decode.then(task_kind_decoder())
   use execution_mode <- decode.then(execution_mode_decoder())
   decode.success(types.Task(
@@ -436,7 +447,9 @@ fn follow_up_task_decoder() -> decode.Decoder(types.FollowUpTask) {
   use acceptance <- decode.field("acceptance", decode.list(decode.string))
   use demo_plan <- decode.field("demo_plan", decode.list(decode.string))
   use decision_requests <- decode.then(optional_decision_requests_decoder())
-  use superseded_pr_numbers <- decode.then(optional_superseded_pr_numbers_decoder())
+  use superseded_pr_numbers <- decode.then(
+    optional_superseded_pr_numbers_decoder(),
+  )
   use kind <- decode.then(task_kind_decoder())
   use execution_mode <- decode.then(execution_mode_decoder())
   decode.success(types.FollowUpTask(

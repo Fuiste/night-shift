@@ -121,15 +121,14 @@ pub fn repo_state_snapshot(
   log_path: String,
 ) -> Result(types.RepoStateSnapshot, String) {
   use prs <- result.try(list_night_shift_prs(cwd, branch_prefix, log_path))
-  use review_items <- result.try(prs |> list.try_map(fn(pr) {
-    review_item(cwd, pr.number, log_path)
-  }))
-  Ok(
-    repo_state.snapshot(
-      system.timestamp(),
-      review_items |> list.map(review_work_item_snapshot),
-    ),
+  use review_items <- result.try(
+    prs
+    |> list.try_map(fn(pr) { review_item(cwd, pr.number, log_path) }),
   )
+  Ok(repo_state.snapshot(
+    system.timestamp(),
+    review_items |> list.map(review_work_item_snapshot),
+  ))
 }
 
 pub fn mark_pull_request_superseded(
@@ -143,7 +142,9 @@ pub fn mark_pull_request_superseded(
     |> list.map(fn(number) { "#" <> int.to_string(number) })
     |> string.join(with: ", ")
   let message =
-    "Night Shift superseded this pull request with " <> replacement_labels <> "."
+    "Night Shift superseded this pull request with "
+    <> replacement_labels
+    <> "."
 
   use _ <- result.try(comment_pull_request(cwd, pr_number, message, log_path))
   close_pull_request(cwd, pr_number, log_path)
