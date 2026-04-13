@@ -33,8 +33,10 @@ night-shift report
 ```
 
 Use `resolve` when planning needs human decisions, `resume` when a run was
-interrupted, `review` when open Night Shift PRs need stabilization, and
-`reset` when you need to eject the repo-local control plane and start over.
+interrupted, `doctor` or `resume --explain` when you want a dry recovery read,
+`plan --from-reviews` when open Night Shift PRs need a fresh successor stack,
+and `reset` when you need to eject the repo-local control plane and start
+over.
 
 ## Repository
 

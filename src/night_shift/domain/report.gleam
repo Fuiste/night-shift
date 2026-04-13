@@ -3,6 +3,8 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
 import night_shift/agent_config
+import night_shift/domain/confidence
+import night_shift/domain/provenance
 import night_shift/domain/repo_state
 import night_shift/domain/review_run_projection
 import night_shift/repo_state_runtime
@@ -13,6 +15,7 @@ pub fn render(
   events: List(types.RunEvent),
   repo_state_view: Option(repo_state_runtime.RepoStateView),
 ) -> String {
+  let confidence_assessment = confidence.assess(run, events, repo_state_view)
   [
     "# Night Shift Report",
     "",
@@ -28,9 +31,14 @@ pub fn render(
     "- Created at: " <> run.created_at,
     "- Updated at: " <> run.updated_at,
     "- Brief: " <> run.brief_path,
+    "- Provenance: " <> provenance.artifact_path(run),
     render_repo_state_section(run, repo_state_view),
     "",
     "## Summary",
+    "- Confidence posture: "
+      <> types.confidence_posture_to_string(confidence_assessment.posture),
+    "- Confidence reasons: "
+      <> confidence.reasons_summary(confidence_assessment),
     render_summary(run.decisions, run.planning_dirty, run.tasks, events),
     render_planning_validation_summary(events),
     render_failure_summary(run, events),

@@ -5,6 +5,7 @@ import gleam/result
 import gleam/string
 import night_shift/codec/artifact_path
 import night_shift/codec/journal as journal_codec
+import night_shift/domain/provenance
 import night_shift/domain/repo_state
 import night_shift/project
 import night_shift/report
@@ -198,7 +199,8 @@ pub fn save(
     journal_codec.encode_run(run),
   ))
   use _ <- result.try(write_events(run.events_path, events))
-  write_string(run.report_path, report.render_persisted(run, events))
+  use _ <- result.try(write_string(run.report_path, report.render_persisted(run, events)))
+  provenance.write_persisted(run, events)
 }
 
 pub fn append_event(

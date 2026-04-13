@@ -31,13 +31,16 @@ night-shift plan --notes notes/today.md
 night-shift start
 night-shift status
 night-shift report
+night-shift provenance
 ```
 
 Supporting commands round out the lifecycle:
 
 - `resolve` records answers for blocked planning decisions and replans the run
+- `doctor` explains whether a saved run is safe to resume and why
+- `provenance` renders a per-run evidence ledger from saved artifacts
 - `resume` recovers an interrupted run from saved state
-- `review` reopens open Night Shift PRs as stabilization tasks
+- `plan --from-reviews` folds open Night Shift PR feedback back into planning
 - `reset` removes repo-local Night Shift state and tracked worktrees
 - `--demo` runs a fixture-backed proof flow
 
@@ -104,6 +107,7 @@ Inspect progress and outputs:
 ```sh
 night-shift status
 night-shift report
+night-shift provenance
 ```
 
 If planning blocked on manual decisions:
@@ -116,6 +120,8 @@ night-shift start
 If Night Shift was interrupted mid-run:
 
 ```sh
+night-shift doctor
+night-shift resume --explain
 night-shift resume
 ```
 
@@ -148,4 +154,3 @@ asdf install
 - [Worktree Environments](docs/worktree-environments.md)
 - [State and Artifacts](docs/state-and-artifacts.md)
 - [Providers and Delivery](docs/providers-and-delivery.md)
-

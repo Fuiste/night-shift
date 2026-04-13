@@ -121,11 +121,12 @@ Use these commands while a run is active or after it finishes:
 ```sh
 night-shift status
 night-shift report
+night-shift provenance
 ```
 
-`status` prints the current run state, planning and execution agent summaries,
-notes source, event count, and report location. `report` prints the current
-markdown report directly.
+`status` prints the current run state, confidence posture, provenance path,
+and report location. `report` prints the current markdown report directly, and
+`provenance` prints the run's evidence ledger from the saved artifact graph.
 
 ## Supporting Flows
 
@@ -140,9 +141,15 @@ night-shift start
 If a run was interrupted, resume from the saved journal:
 
 ```sh
+night-shift doctor
+night-shift resume --explain
 night-shift resume
 night-shift resume --ui
 ```
+
+`doctor` is the dry recovery pass. It classifies each task as
+`safe_to_resume`, `resume_with_warning`, `manual_attention`, or
+`irrecoverable` before you mutate any run state.
 
 If open Night Shift pull requests received feedback and you want a fresh
 replacement stack instead of in-place edits:

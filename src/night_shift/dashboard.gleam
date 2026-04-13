@@ -5,6 +5,8 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import night_shift/config
+import night_shift/domain/confidence
+import night_shift/domain/provenance
 import night_shift/domain/review_run_projection
 import night_shift/journal
 import night_shift/project
@@ -132,7 +134,7 @@ pub fn index_html(initial_run_id: String) -> String {
   <> "        ['Run ID', run.run_id], ['Status', run.status], ['Planning profile', run.planning_agent.profile_name], ['Planning provider', run.planning_agent.provider],\n"
   <> "        ['Planning model', run.planning_agent.model || 'default'], ['Planning reasoning', run.planning_agent.reasoning || 'default'], ['Execution profile', run.execution_agent.profile_name], ['Execution provider', run.execution_agent.provider],\n"
   <> "        ['Execution model', run.execution_agent.model || 'default'], ['Execution reasoning', run.execution_agent.reasoning || 'default'], ['Repo', run.repo_root], ['Created', run.created_at],\n"
-  <> "        ['Updated', run.updated_at], ['Brief', run.brief_path], ['Max workers', String(run.max_workers)]\n"
+  <> "        ['Updated', run.updated_at], ['Brief', run.brief_path], ['Provenance', run.provenance_path], ['Confidence', run.confidence_posture], ['Confidence reasons', (run.confidence_reasons || []).join(' | ') || '—'], ['Max workers', String(run.max_workers)]\n"
   <> "      ];\n"
   <> "      if (run.repo_state) {\n"
   <> "        fields.push(['Open PRs', String(run.repo_state.open_pr_count)]);\n"
@@ -228,10 +230,11 @@ pub fn run_json(repo_root: String, run_id: String) -> Result(String, String) {
   let repo_state_view = load_repo_state_view(run)
   let review_projection =
     review_run_projection.build(run, events, repo_state_view)
+  let confidence_assessment = confidence.assess(run, events, repo_state_view)
   let rendered_report = report.render_live(run, events, repo_state_view)
   Ok(
     json.object([
-      #("run", run_detail_json(run, review_projection)),
+      #("run", run_detail_json(run, review_projection, confidence_assessment)),
       #("events", json.array(events, event_json)),
       #("report", json.string(rendered_report)),
     ])
@@ -254,6 +257,7 @@ fn run_summary_json(run: types.RunRecord) -> json.Json {
 fn run_detail_json(
   run: types.RunRecord,
   review_projection: Option(review_run_projection.ReviewRunProjection),
+  confidence_assessment: types.ConfidenceAssessment,
 ) -> json.Json {
   json.object([
     #("run_id", json.string(run.run_id)),
@@ -261,8 +265,19 @@ fn run_detail_json(
     #("run_path", json.string(run.run_path)),
     #("brief_path", json.string(run.brief_path)),
     #("report_path", json.string(run.report_path)),
+    #("provenance_path", json.string(provenance.artifact_path(run))),
     #("planning_agent", agent_json(run.planning_agent)),
     #("execution_agent", agent_json(run.execution_agent)),
+    #(
+      "confidence_posture",
+      json.string(types.confidence_posture_to_string(
+        confidence_assessment.posture,
+      )),
+    ),
+    #(
+      "confidence_reasons",
+      json.array(confidence_assessment.reasons, json.string),
+    ),
     #("max_workers", json.int(run.max_workers)),
     #("status", json.string(types.run_status_to_string(run.status))),
     #("created_at", json.string(run.created_at)),

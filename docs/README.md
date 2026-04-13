@@ -14,7 +14,8 @@ If you are new to the project, start here:
 - [Getting Started](getting-started.md) for install, prerequisites, and the
   first runnable flow
 - [Run Lifecycle](run-lifecycle.md) for how `plan`, `start`, `resolve`,
-  `resume`, `plan --from-reviews`, and `reset` fit together
+  `resume`, `doctor`, `provenance`, `plan --from-reviews`, and `reset` fit
+  together
 - [Configuration](configuration.md) for `config.toml` profiles and override
   precedence
 - [Worktree Environments](worktree-environments.md) for
@@ -40,11 +41,14 @@ night-shift plan --notes notes/today.md
 night-shift start
 night-shift status
 night-shift report
+night-shift provenance
 ```
 
 Supporting flows handle the messier parts of reality:
 
 - `resolve` records answers for manual-attention tasks and replans in place
+- `doctor` explains whether an interrupted run looks safe to resume
+- `provenance` prints the run's evidence ledger
 - `resume` reattaches to an interrupted run
 - `plan --from-reviews` turns open Night Shift PR feedback into a fresh successor stack
 - `reset` removes Night Shift state and tracked task worktrees, but does not touch local branches or remote PRs

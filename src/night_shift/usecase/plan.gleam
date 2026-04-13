@@ -4,6 +4,7 @@ import gleam/result
 import night_shift/agent_config
 import night_shift/domain/repo_state
 import night_shift/github
+import night_shift/journal
 import night_shift/orchestrator
 import night_shift/project
 import night_shift/provider
@@ -67,13 +68,22 @@ pub fn execute(
     True -> orchestrator.replan(seeded_run)
     False -> orchestrator.plan(seeded_run)
   })
+  use recorded_run <- result.try(journal.append_event(
+    planned_run,
+    types.RunEvent(
+      kind: "planning_artifacts_recorded",
+      at: system.timestamp(),
+      message: "Planning artifacts: " <> artifact_path,
+      task_id: None,
+    ),
+  ))
   Ok(workflow.PlanResult(
-    run: planned_run,
+    run: recorded_run,
     brief_path: target_doc_path,
     artifact_path: artifact_path,
     planning_provenance: planning_provenance,
     warnings: config_warnings(config),
-    next_action: runs.next_action_for_run(planned_run),
+    next_action: runs.next_action_for_run(recorded_run),
   ))
 }
 
