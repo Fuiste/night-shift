@@ -1,3 +1,5 @@
+//// Provider model discovery for interactive setup flows.
+
 import filepath
 import gleam/dynamic/decode
 import gleam/json
@@ -10,10 +12,12 @@ import night_shift/shell
 import night_shift/types
 import simplifile
 
+/// A provider model that can be presented to the operator.
 pub type ProviderModel {
   ProviderModel(id: String, label: String, is_default: Bool)
 }
 
+/// Ask a provider CLI for the models it can currently run.
 pub fn list_models(
   provider_name: types.Provider,
   repo_root: String,
@@ -39,6 +43,7 @@ pub fn list_models(
   }
 }
 
+/// Return the index of the default model, or `0` when none is marked.
 pub fn default_index(models: List(ProviderModel)) -> Int {
   find_default_index(models, 0)
 }

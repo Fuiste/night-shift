@@ -1,3 +1,8 @@
+//// Provider-facing orchestration helpers for planning and execution.
+////
+//// This module turns typed Night Shift state into provider prompts, command
+//// invocations, and decoded payloads.
+
 import filepath
 import gleam/int
 import gleam/option.{type Option, None, Some}
@@ -14,6 +19,7 @@ import night_shift/types
 import night_shift/worktree_setup
 import simplifile
 
+/// Handle and metadata for a task that is currently executing.
 pub type TaskRun {
   TaskRun(
     task: types.Task,
@@ -27,12 +33,14 @@ pub type TaskRun {
   )
 }
 
+/// How Night Shift obtained the worktree used for a task run.
 pub type WorktreeOrigin {
   CreatedWorktree
   AttachedWorktree
   ReusedWorktree
 }
 
+/// Structured execution failure information returned by `await_task_detailed`.
 pub type AwaitTaskError {
   ProviderCommandFailed(message: String)
   PayloadExtractionFailed(message: String)
@@ -42,6 +50,7 @@ pub type AwaitTaskError {
   )
 }
 
+/// Ask the planning provider to draft or refresh the execution brief.
 pub fn plan_document(
   agent: types.ResolvedAgentConfig,
   repo_root: String,
@@ -65,6 +74,7 @@ pub fn plan_document(
   )
 }
 
+/// Ask the planning provider to generate a worktree setup file.
 pub fn generate_worktree_setup(
   agent: types.ResolvedAgentConfig,
   repo_root: String,
@@ -129,6 +139,7 @@ pub fn generate_worktree_setup(
   }
 }
 
+/// Ask the planning provider for a task graph.
 pub fn plan_tasks(
   agent: types.ResolvedAgentConfig,
   repo_root: String,
@@ -149,6 +160,7 @@ pub fn plan_tasks(
   )
 }
 
+/// Ask the planning provider for a task graph, optionally with retry feedback.
 pub fn plan_tasks_attempt(
   agent: types.ResolvedAgentConfig,
   repo_root: String,
@@ -191,6 +203,8 @@ pub fn plan_tasks_attempt(
         phase: "plan_tasks",
       ),
     )
+  // Keep a canonical prompt and log path alongside attempt-specific artifacts
+  // so the latest run is easy for operators to inspect.
   use _ <- result.try(sync_attempt_artifact(log_path, canonical_log_path))
 
   case shell.succeeded(command_result) {
@@ -202,6 +216,7 @@ pub fn plan_tasks_attempt(
   }
 }
 
+/// Start provider execution for one task in its prepared worktree.
 pub fn start_task(
   agent: types.ResolvedAgentConfig,
   repo_root: String,
@@ -251,16 +266,20 @@ pub fn start_task(
   ))
 }
 
+/// Wait for a running task and collapse detailed failures into a string.
 pub fn await_task(run: TaskRun) -> Result(types.ExecutionResult, String) {
   await_task_detailed(run) |> result.map_error(await_task_error_message)
 }
 
+/// Wait for a running task and preserve detailed payload failures.
 pub fn await_task_detailed(
   run: TaskRun,
 ) -> Result(types.ExecutionResult, AwaitTaskError) {
   let command_result = shell.wait(run.handle)
   case shell.succeeded(command_result) {
     True -> {
+      // Clean the log before decoding so transcript noise does not masquerade
+      // as payload bytes.
       use _ <- result.try(
         log_cleanup.clean_operator_log(run.log_path)
         |> result.map_error(PayloadExtractionFailed),
@@ -289,6 +308,7 @@ pub fn await_task_detailed(
   }
 }
 
+/// Ask the execution provider to repair a task after local verification fails.
 pub fn repair_task(
   agent: types.ResolvedAgentConfig,
   repo_root: String,
@@ -340,14 +360,17 @@ pub fn repair_task(
   }
 }
 
+/// Extract the sentinel-delimited provider payload from raw command output.
 pub fn extract_payload(output: String) -> Result(String, String) {
   provider_payload.extract_payload(output)
 }
 
+/// Extract and normalize a JSON payload from raw command output.
 pub fn extract_json_payload(output: String) -> Result(String, String) {
   provider_payload.extract_json_payload(output)
 }
 
+/// Clean a JSON payload before decoding it into Night Shift types.
 pub fn sanitize_json_payload(payload: String) -> Result(String, String) {
   provider_payload.sanitize_json_payload(payload)
 }
@@ -398,6 +421,8 @@ fn plan_document_attempt(
         phase: "plan_document",
       ),
     )
+  // Mirror the latest attempt into stable file names so humans and later phases
+  // can inspect the current prompt and log without guessing the retry count.
   use _ <- result.try(sync_attempt_artifact(log_path, canonical_log_path))
 
   case shell.succeeded(command_result) {

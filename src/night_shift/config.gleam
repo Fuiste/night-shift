@@ -1,3 +1,8 @@
+//// Repo-local Night Shift config parsing and rendering.
+////
+//// The format is intentionally small and line-oriented so operators can edit
+//// it by hand and Night Shift can round-trip it predictably.
+
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -18,6 +23,8 @@ type ParseState {
   ParseState(config: types.Config, section: Section)
 }
 
+/// Load repo-local config from disk, falling back to defaults when the file
+/// does not exist yet.
 pub fn load(path: String) -> Result(types.Config, String) {
   case simplifile.read(path) {
     Ok(contents) -> parse(contents)
@@ -25,6 +32,7 @@ pub fn load(path: String) -> Result(types.Config, String) {
   }
 }
 
+/// Render config to the repo-local file format.
 pub fn render(config: types.Config) -> String {
   let root_lines = [
     "default_profile = " <> shared.render_string(config.default_profile),
@@ -61,6 +69,14 @@ pub fn render(config: types.Config) -> String {
   <> "\n"
 }
 
+/// Parse repo-local config contents.
+///
+/// ## Examples
+///
+/// ```gleam
+/// > parse("default_profile = \"default\"\nbase_branch = \"main\"\nmax_workers = 4\nbranch_prefix = \"night-shift\"\npr_title_prefix = \"[night-shift]\"\nnotifiers = [\"console\", \"report_file\"]\n")
+/// Ok(types.default_config())
+/// ```
 pub fn parse(contents: String) -> Result(types.Config, String) {
   let initial = ParseState(types.default_config(), RootSection)
 

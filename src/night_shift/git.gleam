@@ -1,3 +1,5 @@
+//// Thin git command wrappers used by Night Shift orchestration.
+
 import filepath
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -5,6 +7,7 @@ import gleam/string
 import night_shift/shell
 import night_shift/system
 
+/// Resolve the repository root for the given working directory.
 pub fn repo_root(cwd: String) -> String {
   let log_path =
     filepath.join(system.state_directory(), "night-shift/git-root.log")
@@ -15,6 +18,7 @@ pub fn repo_root(cwd: String) -> String {
   }
 }
 
+/// Create a new worktree and branch for a task.
 pub fn create_worktree(
   repo_root: String,
   worktree_path: String,
@@ -34,6 +38,7 @@ pub fn create_worktree(
   )
 }
 
+/// Attach an existing branch to a worktree path, fetching it first if needed.
 pub fn attach_worktree(
   repo_root: String,
   worktree_path: String,
@@ -56,6 +61,7 @@ pub fn attach_worktree(
   )
 }
 
+/// Return the mounted worktree path for a branch when one already exists.
 pub fn mounted_worktree_path(
   repo_root: String,
   branch_name: String,
@@ -76,12 +82,14 @@ pub fn mounted_worktree_path(
   }
 }
 
+/// Return `True` when the working tree has tracked or untracked changes.
 pub fn has_changes(cwd: String, log_path: String) -> Bool {
   let result =
     shell.run("git status --short --untracked-files=all", cwd, log_path)
   shell.succeeded(result) && string.trim(result.output) != ""
 }
 
+/// List changed file paths from `git status --short`.
 pub fn changed_files(cwd: String, log_path: String) -> List(String) {
   let result =
     shell.run("git status --short --untracked-files=all", cwd, log_path)
@@ -107,6 +115,7 @@ pub fn changed_files(cwd: String, log_path: String) -> List(String) {
   }
 }
 
+/// Remove a worktree path forcefully.
 pub fn remove_worktree(
   repo_root: String,
   worktree_path: String,
@@ -119,6 +128,7 @@ pub fn remove_worktree(
   )
 }
 
+/// Prune stale git worktree metadata.
 pub fn prune_worktrees(
   repo_root: String,
   log_path: String,
@@ -126,6 +136,7 @@ pub fn prune_worktrees(
   run_git("git worktree prune", repo_root, log_path)
 }
 
+/// List file paths changed between two refs.
 pub fn changed_files_between(
   cwd: String,
   from_ref: String,
@@ -157,6 +168,7 @@ pub fn changed_files_between(
   }
 }
 
+/// Resolve `HEAD` to a commit id.
 pub fn head_commit(cwd: String, log_path: String) -> Result(String, String) {
   let result = shell.run("git rev-parse HEAD", cwd, log_path)
   case shell.succeeded(result) {
@@ -165,6 +177,7 @@ pub fn head_commit(cwd: String, log_path: String) -> Result(String, String) {
   }
 }
 
+/// Stage all changes and create one commit.
 pub fn commit_all(
   cwd: String,
   message: String,
@@ -173,6 +186,7 @@ pub fn commit_all(
   run_git("git add -A && git commit -m " <> shell.quote(message), cwd, log_path)
 }
 
+/// Push a branch and set its upstream.
 pub fn push_branch(
   cwd: String,
   branch_name: String,

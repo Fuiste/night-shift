@@ -38,6 +38,8 @@ pub fn parse(contents: String) -> Result(model.WorktreeSetupConfig, String) {
 
       contents
       |> string.split("\n")
+      // Collapse multiline list syntax before the line-oriented parser runs so
+      // command arrays can be handled without a full TOML parser.
       |> collapse_multiline_values([], None)
       |> parse_lines(initial)
       |> result.map(fn(state) { state.config })
@@ -111,6 +113,8 @@ fn collapse_multiline_values(
         "" -> current
         _ -> current <> " " <> cleaned
       }
+      // Preserve the accumulated list until we see the closing bracket so the
+      // downstream parser only ever sees complete assignments.
       case string.ends_with(cleaned, "]") {
         True -> collapse_multiline_values(rest, [next, ..acc], None)
         False -> collapse_multiline_values(rest, acc, Some(next))

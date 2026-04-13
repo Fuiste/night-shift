@@ -1,3 +1,8 @@
+//// Core planning and execution state machine for Night Shift runs.
+////
+//// This module owns the impure edges between persisted run state, provider
+//// execution, verification, and task delivery.
+
 import filepath
 import gleam/int
 import gleam/list
@@ -22,6 +27,7 @@ import night_shift/types
 import night_shift/worktree_setup
 import night_shift/worktree_setup_model
 
+/// Start executing a run from its current persisted state.
 pub fn start(
   run: types.RunRecord,
   config: types.Config,
@@ -29,6 +35,7 @@ pub fn start(
   continue_run(run, config)
 }
 
+/// Continue a run that may already have planned or running tasks.
 pub fn continue_run(
   run: types.RunRecord,
   config: types.Config,
@@ -40,10 +47,12 @@ pub fn continue_run(
   }
 }
 
+/// Ask the planning provider to produce the initial task graph for a run.
 pub fn plan(run: types.RunRecord) -> Result(types.RunRecord, String) {
   plan_with_event(run, "run_planned", "Planner produced ")
 }
 
+/// Re-run planning after decisions or follow-up work changed the graph.
 pub fn replan(run: types.RunRecord) -> Result(types.RunRecord, String) {
   plan_with_event(run, "run_replanned", "Replanner produced ")
 }
@@ -146,6 +155,8 @@ fn load_planned_tasks(
                     warnings,
                     retry_events(attempt, retry_feedback),
                   ))
+                // Give the planner one corrective retry when the shape is close
+                // enough to explain what invariant it violated.
                 Error(message) ->
                   maybe_retry_planned_tasks(
                     run,
@@ -161,6 +172,8 @@ fn load_planned_tasks(
           let message = domain_summary.planning_validation_summary(issues)
           case attempt < 2 && retryable_planning_issue(message) {
             True ->
+              // Feed validation failures back into the next attempt so the
+              // planner can repair the task graph without losing prior context.
               load_planned_tasks(
                 run,
                 attempt + 1,
@@ -191,6 +204,8 @@ fn maybe_retry_planned_tasks(
 ) {
   case attempt < 2 && retryable_planning_issue(message) {
     True ->
+      // Retrying only once keeps the state machine predictable while still
+      // letting providers self-correct common contract mistakes.
       load_planned_tasks(
         run,
         attempt + 1,

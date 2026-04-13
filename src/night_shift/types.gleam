@@ -1,13 +1,21 @@
+//// Shared domain types for Night Shift's CLI, planner, and runtime.
+////
+//// This module is the common language spoken across parsing, orchestration,
+//// persistence, and provider integration layers.
+
 import gleam/list
 import gleam/option.{type Option, None}
 
+/// Default filename used for the repo-local execution brief.
 pub const default_brief_filename = "execution-brief.md"
 
+/// Supported external agent providers.
 pub type Provider {
   Codex
   Cursor
 }
 
+/// Parse a provider identifier from configuration or CLI input.
 pub fn provider_from_string(value: String) -> Result(Provider, String) {
   case value {
     "codex" -> Ok(Codex)
@@ -16,6 +24,7 @@ pub fn provider_from_string(value: String) -> Result(Provider, String) {
   }
 }
 
+/// Render a provider as its stable config and CLI identifier.
 pub fn provider_to_string(provider: Provider) -> String {
   case provider {
     Codex -> "codex"
@@ -23,6 +32,7 @@ pub fn provider_to_string(provider: Provider) -> String {
   }
 }
 
+/// Supported reasoning presets for provider backends that expose them.
 pub type ReasoningLevel {
   Low
   Medium
@@ -30,6 +40,7 @@ pub type ReasoningLevel {
   ExtraHigh
 }
 
+/// Parse a reasoning level from configuration or CLI input.
 pub fn reasoning_from_string(value: String) -> Result(ReasoningLevel, String) {
   case value {
     "low" -> Ok(Low)
@@ -40,6 +51,7 @@ pub fn reasoning_from_string(value: String) -> Result(ReasoningLevel, String) {
   }
 }
 
+/// Render a reasoning level as its stable config and CLI identifier.
 pub fn reasoning_to_string(reasoning: ReasoningLevel) -> String {
   case reasoning {
     Low -> "low"
@@ -49,10 +61,12 @@ pub fn reasoning_to_string(reasoning: ReasoningLevel) -> String {
   }
 }
 
+/// Provider-specific configuration key-value pairs to pass through verbatim.
 pub type ProviderOverride {
   ProviderOverride(key: String, value: String)
 }
 
+/// Named provider profile loaded from repo-local config.
 pub type AgentProfile {
   AgentProfile(
     name: String,
@@ -63,6 +77,7 @@ pub type AgentProfile {
   )
 }
 
+/// Construct the default agent profile used in new repositories.
 pub fn default_agent_profile() -> AgentProfile {
   AgentProfile(
     name: "default",
@@ -73,6 +88,7 @@ pub fn default_agent_profile() -> AgentProfile {
   )
 }
 
+/// Fully resolved provider configuration for a specific Night Shift phase.
 pub type ResolvedAgentConfig {
   ResolvedAgentConfig(
     profile_name: String,
@@ -83,6 +99,8 @@ pub type ResolvedAgentConfig {
   )
 }
 
+/// Build a minimal resolved config from a provider when older flows only know
+/// the provider identity.
 pub fn resolved_agent_from_provider(provider: Provider) -> ResolvedAgentConfig {
   ResolvedAgentConfig(
     profile_name: "legacy",
@@ -93,6 +111,7 @@ pub fn resolved_agent_from_provider(provider: Provider) -> ResolvedAgentConfig {
   )
 }
 
+/// CLI-level overrides that can refine a chosen profile without rewriting it.
 pub type AgentOverrides {
   AgentOverrides(
     profile: Option(String),
@@ -102,15 +121,18 @@ pub type AgentOverrides {
   )
 }
 
+/// Construct an empty set of CLI overrides.
 pub fn empty_agent_overrides() -> AgentOverrides {
   AgentOverrides(profile: None, provider: None, model: None, reasoning: None)
 }
 
+/// Notification sinks that receive Night Shift progress updates.
 pub type NotifierName {
   ConsoleNotifier
   ReportFileNotifier
 }
 
+/// Parse a notifier identifier from config.
 pub fn notifier_from_string(value: String) -> Result(NotifierName, String) {
   case value {
     "console" -> Ok(ConsoleNotifier)
@@ -119,6 +141,7 @@ pub fn notifier_from_string(value: String) -> Result(NotifierName, String) {
   }
 }
 
+/// Render a notifier as its stable config identifier.
 pub fn notifier_to_string(notifier: NotifierName) -> String {
   case notifier {
     ConsoleNotifier -> "console"
@@ -126,6 +149,7 @@ pub fn notifier_to_string(notifier: NotifierName) -> String {
   }
 }
 
+/// Lifecycle states for individual tasks within a run.
 pub type TaskState {
   Queued
   Ready
@@ -136,6 +160,7 @@ pub type TaskState {
   ManualAttention
 }
 
+/// Render a task state for persistence and user-facing output.
 pub fn task_state_to_string(state: TaskState) -> String {
   case state {
     Queued -> "queued"
@@ -148,12 +173,14 @@ pub fn task_state_to_string(state: TaskState) -> String {
   }
 }
 
+/// Scheduling discipline for a planned task.
 pub type ExecutionMode {
   Parallel
   Serial
   Exclusive
 }
 
+/// Parse an execution mode from planner output.
 pub fn execution_mode_from_string(
   value: String,
 ) -> Result(ExecutionMode, String) {
@@ -165,6 +192,7 @@ pub fn execution_mode_from_string(
   }
 }
 
+/// Render an execution mode for persistence and planner prompts.
 pub fn execution_mode_to_string(mode: ExecutionMode) -> String {
   case mode {
     Parallel -> "parallel"
@@ -173,11 +201,13 @@ pub fn execution_mode_to_string(mode: ExecutionMode) -> String {
   }
 }
 
+/// High-level task classes understood by the orchestrator.
 pub type TaskKind {
   ImplementationTask
   ManualAttentionTask
 }
 
+/// Parse a task kind from planner output.
 pub fn task_kind_from_string(value: String) -> Result(TaskKind, String) {
   case value {
     "implementation" -> Ok(ImplementationTask)
@@ -186,6 +216,7 @@ pub fn task_kind_from_string(value: String) -> Result(TaskKind, String) {
   }
 }
 
+/// Render a task kind for persistence and planner prompts.
 pub fn task_kind_to_string(kind: TaskKind) -> String {
   case kind {
     ImplementationTask -> "implementation"
@@ -193,10 +224,12 @@ pub fn task_kind_to_string(kind: TaskKind) -> String {
   }
 }
 
+/// A single structured answer option for a manual planning decision.
 pub type DecisionOption {
   DecisionOption(label: String, description: String)
 }
 
+/// A planner request for human input before execution can continue.
 pub type DecisionRequest {
   DecisionRequest(
     key: String,
@@ -208,6 +241,7 @@ pub type DecisionRequest {
   )
 }
 
+/// A recorded operator answer to a previous `DecisionRequest`.
 pub type RecordedDecision {
   RecordedDecision(
     key: String,
@@ -217,11 +251,13 @@ pub type RecordedDecision {
   )
 }
 
+/// Origin metadata for the notes used to produce an execution brief.
 pub type NotesSource {
   NotesFile(path: String)
   InlineNotes(path: String)
 }
 
+/// Render a short operator-facing label for a notes source.
 pub fn notes_source_label(source: NotesSource) -> String {
   case source {
     NotesFile(path) -> "file: " <> path
@@ -229,6 +265,7 @@ pub fn notes_source_label(source: NotesSource) -> String {
   }
 }
 
+/// A planner-emitted task that should be merged into a running graph later.
 pub type FollowUpTask {
   FollowUpTask(
     id: String,
@@ -243,6 +280,7 @@ pub type FollowUpTask {
   )
 }
 
+/// A scheduled unit of work inside a Night Shift run.
 pub type Task {
   Task(
     id: String,
@@ -262,6 +300,7 @@ pub type Task {
   )
 }
 
+/// Return `True` when a queued task's dependencies have all completed.
 pub fn is_task_ready(task: Task, completed_ids: List(String)) -> Bool {
   case task.state {
     Queued ->
@@ -277,6 +316,10 @@ pub fn decision_recorded(decisions: List(RecordedDecision), key: String) -> Bool
   list.any(decisions, fn(decision) { decision.key == key })
 }
 
+/// Return the subset of decision requests that still need operator input.
+///
+/// Manual-attention tasks without explicit requests are coerced into one
+/// synthetic request so the rest of the pipeline can stay uniform.
 pub fn unresolved_decision_requests(
   decisions: List(RecordedDecision),
   task: Task,
@@ -298,6 +341,7 @@ pub fn unresolved_decision_requests(
   }
 }
 
+/// Return `True` when a task should pause the run for manual intervention.
 pub fn task_requires_manual_attention(
   decisions: List(RecordedDecision),
   task: Task,
@@ -306,6 +350,7 @@ pub fn task_requires_manual_attention(
   && unresolved_decision_requests(decisions, task) != []
 }
 
+/// Pull request delivery plan returned by an executor.
 pub type PrPlan {
   PrPlan(
     title: String,
@@ -315,6 +360,7 @@ pub type PrPlan {
   )
 }
 
+/// Structured result emitted by provider execution.
 pub type ExecutionResult {
   ExecutionResult(
     status: TaskState,
@@ -326,6 +372,7 @@ pub type ExecutionResult {
   )
 }
 
+/// Lifecycle states for a Night Shift run.
 pub type RunStatus {
   RunPending
   RunActive
@@ -334,6 +381,7 @@ pub type RunStatus {
   RunFailed
 }
 
+/// Render a run status for persistence and user-facing output.
 pub fn run_status_to_string(status: RunStatus) -> String {
   case status {
     RunPending -> "pending"
@@ -344,10 +392,12 @@ pub fn run_status_to_string(status: RunStatus) -> String {
   }
 }
 
+/// A timestamped event recorded in the run journal.
 pub type RunEvent {
   RunEvent(kind: String, at: String, message: String, task_id: Option(String))
 }
 
+/// Persistent record for one Night Shift run.
 pub type RunRecord {
   RunRecord(
     run_id: String,
@@ -372,11 +422,13 @@ pub type RunRecord {
   )
 }
 
+/// Selector syntax used by CLI commands that operate on existing runs.
 pub type RunSelector {
   LatestRun
   RunId(String)
 }
 
+/// Repo-local operator configuration for Night Shift.
 pub type Config {
   Config(
     base_branch: String,
@@ -393,6 +445,7 @@ pub type Config {
   )
 }
 
+/// Construct the default config used before a repo writes its own file.
 pub fn default_config() -> Config {
   Config(
     base_branch: "main",
@@ -409,6 +462,7 @@ pub fn default_config() -> Config {
   )
 }
 
+/// Parsed CLI commands for the operator-facing executable.
 pub type Command {
   Start(run: RunSelector, ui_enabled: Bool)
   Init(agent_overrides: AgentOverrides, generate_setup: Bool, assume_yes: Bool)

@@ -1,3 +1,5 @@
+//// GitHub CLI integration for pull request delivery and review ingestion.
+
 import filepath
 import gleam/dynamic/decode
 import gleam/int
@@ -9,10 +11,12 @@ import night_shift/shell
 import night_shift/system
 import simplifile
 
+/// Minimal pull request identity returned after delivery.
 pub type PullRequest {
   PullRequest(number: Int, url: String, head_ref_name: String, title: String)
 }
 
+/// Review details ingested when Night Shift turns open PR feedback into work.
 pub type ReviewWorkItem {
   ReviewWorkItem(
     number: Int,
@@ -27,6 +31,7 @@ pub type ReviewWorkItem {
   )
 }
 
+/// Create or update the pull request for a task branch.
 pub fn open_or_update_pr(
   cwd: String,
   branch_name: String,
@@ -73,6 +78,7 @@ pub fn open_or_update_pr(
   }
 }
 
+/// List open pull requests created by the configured Night Shift branch prefix.
 pub fn list_night_shift_prs(
   cwd: String,
   branch_prefix: String,
@@ -87,6 +93,7 @@ pub fn list_night_shift_prs(
   )
 }
 
+/// Load review decision, failing checks, and comments for one pull request.
 pub fn review_item(
   cwd: String,
   pr_number: Int,
