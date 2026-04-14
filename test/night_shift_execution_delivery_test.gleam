@@ -5,6 +5,7 @@ import gleam/option.{None, Some}
 import gleam/result
 import gleam/string
 import night_shift/domain/pr_handoff
+import night_shift/git
 import night_shift/github
 import night_shift/journal
 import night_shift/orchestrator
@@ -13,6 +14,7 @@ import night_shift/provider
 import night_shift/shell
 import night_shift/system
 import night_shift/types
+import night_shift/usecase/resume
 import night_shift/worktree_setup
 import night_shift_test_support as support
 import simplifile
@@ -527,6 +529,160 @@ pub fn orchestrator_start_preserves_partial_success_after_delivery_failure_test(
   )
   assert string.contains(does: events, contain: "\"kind\":\"pr_opened\"")
   let assert Error(_) = simplifile.read(project.active_lock_path(repo_root))
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn orchestrator_resume_preserves_original_base_ref_for_delivery_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    support.absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-resume-base-ref-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let remote_root = filepath.join(base_dir, "remote.git")
+  let worktree_path = filepath.join(base_dir, "task-worktree")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let brief_path = filepath.join(base_dir, "brief.md")
+  let fake_provider = filepath.join(bin_dir, "fake-provider")
+  let fake_gh = filepath.join(bin_dir, "gh")
+  let state_home = filepath.join(base_dir, "state")
+  let old_path = system.get_env("PATH")
+  let old_gh_bin = system.get_env("NIGHT_SHIFT_GH_BIN")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
+  let old_state_home = system.get_env("XDG_STATE_HOME")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
+  let assert Ok(_) = support.write_committing_fake_provider(fake_provider)
+  let assert Ok(_) =
+    simplifile.write(
+      "#!/bin/sh\n"
+        <> "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"list\" ]; then\n"
+        <> "  printf '[]\\n'\n"
+        <> "  exit 0\n"
+        <> "fi\n"
+        <> "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"create\" ]; then\n"
+        <> "  BASE=''\n"
+        <> "  HEAD=''\n"
+        <> "  shift 2\n"
+        <> "  while [ $# -gt 0 ]; do\n"
+        <> "    case \"$1\" in\n"
+        <> "      --base)\n"
+        <> "        BASE=$2\n"
+        <> "        shift 2\n"
+        <> "        ;;\n"
+        <> "      --head)\n"
+        <> "        HEAD=$2\n"
+        <> "        shift 2\n"
+        <> "        ;;\n"
+        <> "      *)\n"
+        <> "        shift\n"
+        <> "        ;;\n"
+        <> "    esac\n"
+        <> "  done\n"
+        <> "  if [ \"$BASE\" = \"$HEAD\" ]; then\n"
+        <> "    printf 'head branch \"%s\" is the same as base branch \"%s\", cannot create a pull request\\n' \"$HEAD\" \"$BASE\" >&2\n"
+        <> "    exit 1\n"
+        <> "  fi\n"
+        <> "  if [ \"$BASE\" != \"main\" ]; then\n"
+        <> "    printf 'expected base main, got %s\\n' \"$BASE\" >&2\n"
+        <> "    exit 1\n"
+        <> "  fi\n"
+        <> "  printf 'https://example.test/pr/7\\n'\n"
+        <> "  exit 0\n"
+        <> "fi\n"
+        <> "printf 'unsupported gh invocation: %s %s\\n' \"$1\" \"$2\" >&2\n"
+        <> "exit 1\n",
+      to: fake_gh,
+    )
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_provider) <> " " <> shell.quote(fake_gh),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+  let _ =
+    shell.run(
+      "git init --bare " <> shell.quote(remote_root),
+      base_dir,
+      filepath.join(base_dir, "remote.log"),
+    )
+  support.seed_git_repo(repo_root, base_dir)
+  let _ =
+    shell.run(
+      "git remote add origin " <> shell.quote(remote_root),
+      repo_root,
+      filepath.join(base_dir, "remote-add.log"),
+    )
+  let _ =
+    shell.run(
+      "git push -u origin main",
+      repo_root,
+      filepath.join(base_dir, "push-main.log"),
+    )
+  let assert Ok(_) =
+    git.create_worktree(
+      repo_root,
+      worktree_path,
+      "night-shift/resume-base-ref-task",
+      "main",
+      filepath.join(base_dir, "worktree.log"),
+    )
+
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("NIGHT_SHIFT_GH_BIN", fake_gh)
+  system.set_env("XDG_STATE_HOME", state_home)
+
+  let config =
+    types.Config(
+      ..types.default_config(),
+      verification_commands: [],
+      max_workers: 1,
+    )
+  let assert Ok(run) = support.start_run(repo_root, brief_path, types.Codex, 1)
+  let interrupted_task =
+    types.Task(
+      id: "demo-task",
+      title: "Implement demo task",
+      description: "Create a file to prove execution",
+      dependencies: [],
+      acceptance: ["Create IMPLEMENTED.md"],
+      demo_plan: ["Show the new file"],
+      decision_requests: [],
+      superseded_pr_numbers: [],
+      kind: types.ImplementationTask,
+      execution_mode: types.Serial,
+      state: types.Running,
+      worktree_path: worktree_path,
+      branch_name: "night-shift/resume-base-ref-task",
+      pr_number: "",
+      summary: "",
+      runtime_context: None,
+    )
+  let interrupted_run = types.RunRecord(..run, tasks: [interrupted_task])
+  let assert Ok(_) = journal.rewrite_run(interrupted_run)
+  let assert Ok(resumed_run) = resume.prepare_resumed_run(interrupted_run)
+  let assert Ok(completed_run) = orchestrator.continue_run(resumed_run, config)
+
+  system.set_env("PATH", old_path)
+  support.restore_env("NIGHT_SHIFT_GH_BIN", old_gh_bin)
+  support.restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
+  support.restore_env("XDG_STATE_HOME", old_state_home)
+
+  let assert [completed_task] = completed_run.tasks
+  let assert Ok(report_contents) = simplifile.read(completed_run.report_path)
+
+  assert completed_run.status == types.RunCompleted
+  assert completed_task.state == types.Completed
+  assert completed_task.pr_number == "7"
+  assert string.contains(does: report_contents, contain: "- Opened PRs: 1")
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }

@@ -130,10 +130,8 @@ fn launch_batch_loop(
           let is_existing_worktree = task.branch_name != ""
           let default_worktree_path =
             filepath.join(run.run_path, "worktrees/" <> task.id)
-          let base_ref = case task.branch_name {
-            "" -> task_graph.task_base_ref(task, run.tasks, config.base_branch)
-            existing_branch -> existing_branch
-          }
+          let base_ref =
+            task_graph.task_base_ref(task, run.tasks, config.base_branch)
           let git_log =
             filepath.join(run.run_path, "logs/" <> task.id <> ".git.log")
           let env_log =
