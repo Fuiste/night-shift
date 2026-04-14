@@ -176,5 +176,9 @@ If you want a dry proof that the end-to-end harness is wired correctly:
 
 ```sh
 night-shift --demo
-night-shift --demo --ui
+night-shift dash
 ```
+
+`night-shift --demo` keeps validating the fixture-backed CLI flow. Use
+`night-shift dash` when you want the real browser workspace and its live audit
+surface.

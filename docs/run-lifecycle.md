@@ -61,12 +61,16 @@ and the next action becomes `night-shift start`.
 night-shift doctor
 night-shift resume --explain
 night-shift resume
-night-shift resume --run run-123 --ui
+night-shift dash
 ```
 
 Night Shift reloads the saved run, validates the saved environment, recovers
 in-flight tasks, and continues orchestration. It does not re-resolve provider
 or environment settings; it reuses what the run journal already saved.
+
+Use `night-shift dash` when you want the browser workflow for the same durable
+run state. Use `resume --explain` and `resume` when you prefer the CLI
+recovery path.
 
 `doctor` and `resume --explain` are the read-only recovery surfaces. They
 inspect the saved run, active lock, worktrees, logs, review drift, and

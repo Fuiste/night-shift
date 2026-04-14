@@ -134,20 +134,15 @@ fn run_initialized_command(
           )
         Error(message) -> message
       })
-    types.Start(run, False) -> io.println(start(repo_root, run, config))
+    types.Start(run) -> io.println(start(repo_root, run, config))
     types.Status(run) -> io.println(status(repo_root, run, config))
     types.Report(run) -> io.println(report(repo_root, run, config))
     types.Provenance(run, task_id, format) ->
       io.println(provenance(repo_root, run, task_id, format, config))
     types.Doctor(run) -> io.println(doctor(repo_root, run, config))
     types.Resolve(run) -> io.println(resolve(repo_root, run, config))
-    types.Resume(run, False, False) ->
-      io.println(resume(repo_root, run, config))
-    types.Resume(run, False, True) -> io.println(doctor(repo_root, run, config))
-    types.Start(_, True) | types.Resume(_, True, False) ->
-      io.println(
-        "The `--ui` entrypoint was replaced by `night-shift dash`.",
-      )
+    types.Resume(run, False) -> io.println(resume(repo_root, run, config))
+    types.Resume(run, True) -> io.println(doctor(repo_root, run, config))
     _ -> io.println("Unsupported command.")
   }
 }

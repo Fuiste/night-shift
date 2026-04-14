@@ -114,8 +114,10 @@ leave that disabled and still use the PR-body overlay.
 The local dashboard now uses `night-shift dash`. It binds to `127.0.0.1` and
 serves a Dash backend for:
 
-- structured bootstrap state for the current repository
-- SSE-first live updates
+- structured bootstrap state for the current repository, including init state,
+  selected-run audit data, DAG metadata, repo-state drift, delivery context,
+  and runtime identity
+- SSE-first live updates for the selected run and audit surface
 - browser command handlers for `init`, `plan`, `plan --from-reviews`,
   `resolve`, `start`, and `resume`
 - audit and raw artifact routes for reports, provenance, logs, payloads, and
@@ -128,7 +130,8 @@ shelling out to `night-shift` subprocesses.
 
 `night-shift --demo` exercises a fixture-backed flow and prints a compact proof
 summary. The headless demo validates `plan`, `start`, `status`, and `report`.
-The UI demo validates Dash bootstrap plus browser-command execution as well.
+The UI demo validates Dash bootstrap plus browser-command execution as well,
+but the supported human entrypoint is `night-shift dash`.
 
 Demo artifacts live under:
 

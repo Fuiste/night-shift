@@ -7,7 +7,7 @@ import night_shift/types
 import night_shift/worktree_setup
 
 pub fn parse_start_command_test() {
-  let assert Ok(types.Start(types.RunId("run-123"), False)) =
+  let assert Ok(types.Start(types.RunId("run-123"))) =
     cli.parse(["start", "--run", "run-123"])
 }
 
@@ -76,7 +76,7 @@ pub fn parse_start_rejects_ui_test() {
 }
 
 pub fn parse_start_command_without_brief_test() {
-  let assert Ok(types.Start(types.LatestRun, False)) = cli.parse(["start"])
+  let assert Ok(types.Start(types.LatestRun)) = cli.parse(["start"])
 }
 
 pub fn parse_plan_requires_notes_test() {
@@ -89,13 +89,12 @@ pub fn parse_resolve_defaults_to_latest_test() {
 }
 
 pub fn parse_resume_rejects_ui_test() {
-  let assert Error(message) =
-    cli.parse(["resume", "--run", "run-123", "--ui"])
+  let assert Error(message) = cli.parse(["resume", "--run", "run-123", "--ui"])
   assert message == "Unsupported flag: --ui"
 }
 
 pub fn parse_resume_explain_command_test() {
-  let assert Ok(types.Resume(types.LatestRun, False, True)) =
+  let assert Ok(types.Resume(types.LatestRun, True)) =
     cli.parse(["resume", "--explain"])
 }
 

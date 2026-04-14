@@ -688,7 +688,7 @@ pub fn default_config() -> Config {
 /// Parsed CLI commands for the operator-facing executable.
 pub type Command {
   Dash
-  Start(run: RunSelector, ui_enabled: Bool)
+  Start(run: RunSelector)
   Init(agent_overrides: AgentOverrides, generate_setup: Bool, assume_yes: Bool)
   Reset(assume_yes: Bool, force: Bool)
   Plan(
@@ -706,7 +706,7 @@ pub type Command {
   )
   Doctor(run: RunSelector)
   Resolve(run: RunSelector)
-  Resume(run: RunSelector, ui_enabled: Bool, explain_only: Bool)
+  Resume(run: RunSelector, explain_only: Bool)
   Demo(ui_enabled: Bool)
   Help
 }
