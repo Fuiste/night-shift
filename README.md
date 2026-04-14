@@ -21,7 +21,7 @@ Night Shift already has working support for:
 - provider adapters for Codex CLI and Cursor Agent
 - local verification before pull request delivery
 - review-loop ingestion for open Night Shift pull requests
-- a local monitor-only dashboard via `start --ui` and `resume --ui`
+- a localhost-only Dash control surface via `night-shift dash`
 
 The current operator flow is:
 
@@ -126,10 +126,10 @@ night-shift resume --explain
 night-shift resume
 ```
 
-If you want the local dashboard while a run is active:
+If you want the local dashboard:
 
 ```sh
-night-shift start --ui
+night-shift dash
 ```
 
 ## Source Development

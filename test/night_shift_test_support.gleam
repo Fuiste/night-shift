@@ -998,7 +998,7 @@ pub fn wait_for_run_payload(
   run_id: String,
   attempts: Int,
 ) -> String {
-  let url = base_url <> "/api/runs/" <> run_id
+  let url = base_url <> "/api/audit?run_id=" <> run_id
   case attempts {
     value if value <= 0 ->
       dashboard.http_get(url)
@@ -1021,6 +1021,14 @@ pub fn wait_for_run_payload(
         }
       }
   }
+}
+
+pub fn post_dash_command(
+  base_url: String,
+  command: String,
+  body: String,
+) -> Result(String, String) {
+  dashboard.http_post(base_url <> "/api/commands/" <> command, body)
 }
 
 pub fn write_fake_gh(path: String) -> Result(Nil, simplifile.FileError) {

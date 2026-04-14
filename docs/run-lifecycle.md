@@ -151,22 +151,15 @@ attention with both the original and repair artifacts recorded.
 
 ## Dashboard
 
-The dashboard is monitor-only:
+Dash is the human-first local control surface:
 
 ```sh
-night-shift start --ui
-night-shift resume --ui
+night-shift dash
 ```
 
-Night Shift binds to `127.0.0.1`, prefers port `8787`, and serves:
+Night Shift binds Dash to `127.0.0.1` for the current repository and serves:
 
-- run history for the current repository
-- run summary metadata
-- repo-state summary for review-driven runs, including open PR counts and drift
-- confidence posture and provenance path
-- task status
-- event timeline
-- report content
-
-There are no browser-side controls for starting or resuming runs in this
-version.
+- structured bootstrap state for initialization, runs, task DAG metadata, repo-state drift, confidence, runtime identities, report, and provenance references
+- SSE-first live updates for the selected repository state
+- browser command endpoints for `init`, `plan`, `plan --from-reviews`, `resolve`, `start`, and `resume`
+- raw artifact and audit routes for reports, provenance, logs, payloads, and runtime handoff files

@@ -66,9 +66,13 @@ pub fn parse_status_defaults_to_latest_test() {
   let assert Ok(types.Status(types.LatestRun)) = cli.parse(["status"])
 }
 
-pub fn parse_start_command_with_ui_test() {
-  let assert Ok(types.Start(types.LatestRun, True)) =
-    cli.parse(["start", "--ui"])
+pub fn parse_dash_command_test() {
+  let assert Ok(types.Dash) = cli.parse(["dash"])
+}
+
+pub fn parse_start_rejects_ui_test() {
+  let assert Error(message) = cli.parse(["start", "--ui"])
+  assert message == "Unsupported start flag: --ui"
 }
 
 pub fn parse_start_command_without_brief_test() {
@@ -84,9 +88,10 @@ pub fn parse_resolve_defaults_to_latest_test() {
   let assert Ok(types.Resolve(types.LatestRun)) = cli.parse(["resolve"])
 }
 
-pub fn parse_resume_command_with_ui_test() {
-  let assert Ok(types.Resume(types.RunId("run-123"), True, False)) =
+pub fn parse_resume_rejects_ui_test() {
+  let assert Error(message) =
     cli.parse(["resume", "--run", "run-123", "--ui"])
+  assert message == "Unsupported flag: --ui"
 }
 
 pub fn parse_resume_explain_command_test() {

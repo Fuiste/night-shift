@@ -252,16 +252,16 @@ pub fn dashboard_server_serves_run_data_test() {
   let assert Ok(_) = simplifile.create_directory_all(base_dir)
   let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
   let assert Ok(run) = support.start_run(repo_root, brief_path, types.Codex, 1)
-  let assert Ok(session) = dashboard.start_view_session(repo_root, run.run_id)
+  let assert Ok(session) = dashboard.start_session(repo_root)
 
   system.sleep(100)
 
   let assert Ok(index_html) = dashboard.http_get(session.url)
-  let assert Ok(runs_payload) = dashboard.http_get(session.url <> "/api/runs")
+  let assert Ok(runs_payload) = dashboard.http_get(session.url <> "/api/bootstrap")
   let assert Ok(run_payload) =
-    dashboard.http_get(session.url <> "/api/runs/" <> run.run_id)
+    dashboard.http_get(session.url <> "/api/audit?run_id=" <> run.run_id)
 
-  assert string.contains(does: index_html, contain: "Night Shift Dashboard")
+  assert string.contains(does: index_html, contain: "Night Shift Dash")
   assert string.contains(does: runs_payload, contain: run.run_id)
   assert string.contains(
     does: run_payload,

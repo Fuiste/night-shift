@@ -111,23 +111,24 @@ leave that disabled and still use the PR-body overlay.
 
 ## Dashboard
 
-The local dashboard is intentionally narrow in scope. It binds to `127.0.0.1`,
-prefers port `8787`, and serves a monitor-only UI for:
+The local dashboard now uses `night-shift dash`. It binds to `127.0.0.1` and
+serves a Dash backend for:
 
-- run history
-- summary metadata for the selected run
-- repo-state summary for review-driven runs, including snapshot time and drift
-- task status
-- event timeline
-- report content
+- structured bootstrap state for the current repository
+- SSE-first live updates
+- browser command handlers for `init`, `plan`, `plan --from-reviews`,
+  `resolve`, `start`, and `resume`
+- audit and raw artifact routes for reports, provenance, logs, payloads, and
+  runtime identity files
 
-There are no browser-side mutation controls.
+The browser surface reuses the same in-process usecases as the CLI rather than
+shelling out to `night-shift` subprocesses.
 
 ## Demo Mode
 
 `night-shift --demo` exercises a fixture-backed flow and prints a compact proof
 summary. The headless demo validates `plan`, `start`, `status`, and `report`.
-The UI demo validates the local dashboard payload as well.
+The UI demo validates Dash bootstrap plus browser-command execution as well.
 
 Demo artifacts live under:
 

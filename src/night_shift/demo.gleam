@@ -134,8 +134,8 @@ fn run_headless_demo(
 }
 
 fn run_ui_demo(repo_root: String, demo_root: String) -> Result(String, String) {
-  let log_path = filepath.join(demo_root, "ui-start.log")
-  let pid_path = filepath.join(demo_root, "ui-start.pid")
+  let log_path = filepath.join(demo_root, "dash.log")
+  let pid_path = filepath.join(demo_root, "dash.pid")
 
   use _plan_output <- result.try(run_cli_command(
     ["plan", "--notes", "Implement the demo task with a proof file."],
@@ -144,7 +144,19 @@ fn run_ui_demo(repo_root: String, demo_root: String) -> Result(String, String) {
     "UI demo failed while running `plan`.",
   ))
   use _ <- result.try(start_ui_command(repo_root, demo_root, log_path, pid_path))
-  use #(url, run_id) <- result.try(wait_for_ui_details(log_path, 40))
+  use url <- result.try(wait_for_ui_details(log_path, 40))
+  use bootstrap <- result.try(wait_for_bootstrap_payload(url, 40))
+  use run_id <- result.try(extract_json_string(
+    bootstrap,
+    "\"selected_run_id\":\"",
+    "UI demo bootstrap did not expose the planned run id.",
+  ))
+  use _ <- result.try(post_dashboard_command(
+    url,
+    "start",
+    "{\"run_id\":\"" <> run_id <> "\"}",
+    "UI demo failed while posting the `start` command.",
+  ))
   use payload <- result.try(wait_for_completed_dashboard_payload(
     url,
     run_id,
@@ -158,7 +170,7 @@ fn run_ui_demo(repo_root: String, demo_root: String) -> Result(String, String) {
   ))
   use _ <- result.try(assert_contains(
     payload,
-    "\"pr_number\":\"1\"",
+    "\"number\":\"1\"",
     "UI demo dashboard never showed the delivered PR.",
   ))
 
@@ -181,7 +193,7 @@ fn run_ui_demo(repo_root: String, demo_root: String) -> Result(String, String) {
   }
   |> result.map(fn(_) {
     "Demo succeeded.\n"
-    <> "Validated UI flows: plan, start --ui, dashboard payload, status\n"
+    <> "Validated UI flows: dash, bootstrap, start, status\n"
     <> "Dashboard: "
     <> url
     <> "\n"
@@ -300,7 +312,7 @@ fn start_ui_command(
 ) -> Result(Nil, String) {
   let command =
     "nohup "
-    <> build_cli_command(["start", "--ui"])
+    <> build_cli_command(["dash"])
     <> " > "
     <> shell.quote(log_path)
     <> " 2>&1 & echo $! > "
@@ -326,19 +338,16 @@ fn stop_ui_command(demo_root: String, pid_path: String) -> Result(Nil, String) {
 fn wait_for_ui_details(
   log_path: String,
   attempts: Int,
-) -> Result(#(String, String), String) {
+) -> Result(String, String) {
   case attempts {
     value if value <= 0 ->
       Error("UI demo did not publish a dashboard URL in time.")
     _ ->
       case simplifile.read(log_path) {
         Ok(contents) ->
-          case
-            extract_prefixed_line(contents, "Dashboard: "),
-            extract_prefixed_line(contents, "Run: ")
-          {
-            Ok(url), Ok(run_id) -> Ok(#(url, run_id))
-            _, _ -> {
+          case extract_prefixed_line(contents, "Dash: ") {
+            Ok(url) -> Ok(url)
+            Error(_) -> {
               system.sleep(150)
               wait_for_ui_details(log_path, attempts - 1)
             }
@@ -346,6 +355,32 @@ fn wait_for_ui_details(
         Error(_) -> {
           system.sleep(150)
           wait_for_ui_details(log_path, attempts - 1)
+        }
+      }
+  }
+}
+
+fn wait_for_bootstrap_payload(
+  url: String,
+  attempts: Int,
+) -> Result(String, String) {
+  let endpoint = url <> "/api/bootstrap"
+  case attempts {
+    value if value <= 0 ->
+      Error("UI demo bootstrap never became readable.")
+    _ ->
+      case dashboard.http_get(endpoint) {
+        Ok(payload) ->
+          case string.contains(does: payload, contain: "\"selected_run_id\":\"") {
+            True -> Ok(payload)
+            False -> {
+              system.sleep(150)
+              wait_for_bootstrap_payload(url, attempts - 1)
+            }
+          }
+        Error(_) -> {
+          system.sleep(150)
+          wait_for_bootstrap_payload(url, attempts - 1)
         }
       }
   }
@@ -399,7 +434,7 @@ fn wait_for_completed_dashboard_payload(
   run_id: String,
   attempts: Int,
 ) -> Result(String, String) {
-  let endpoint = url <> "/api/runs/" <> run_id
+  let endpoint = url <> "/api/audit?run_id=" <> run_id
   case attempts {
     value if value <= 0 ->
       Error("UI demo dashboard never reached a completed state.")
@@ -423,6 +458,18 @@ fn wait_for_completed_dashboard_payload(
   }
 }
 
+fn post_dashboard_command(
+  url: String,
+  command: String,
+  body: String,
+  error_message: String,
+) -> Result(String, String) {
+  case dashboard.http_post(url <> "/api/commands/" <> command, body) {
+    Ok(payload) -> Ok(payload)
+    Error(_) -> Error(error_message)
+  }
+}
+
 fn extract_prefixed_line(
   contents: String,
   prefix: String,
@@ -431,6 +478,21 @@ fn extract_prefixed_line(
   |> string.trim
   |> string.split("\n")
   |> find_prefixed_line(prefix)
+}
+
+fn extract_json_string(
+  contents: String,
+  prefix: String,
+  error_message: String,
+) -> Result(String, String) {
+  case string.split_once(contents, prefix) {
+    Ok(#(_, suffix)) ->
+      case string.split_once(suffix, "\"") {
+        Ok(#(value, _)) -> Ok(value)
+        Error(_) -> Error(error_message)
+      }
+    Error(_) -> Error(error_message)
+  }
 }
 
 fn find_prefixed_line(

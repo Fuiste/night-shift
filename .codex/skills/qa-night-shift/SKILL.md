@@ -131,6 +131,8 @@ Typical flow:
    resume attempt when the run was interrupted
 10. use `night-shift resolve` or `night-shift resume` only if the run actually
    requires it
+11. use `night-shift dash` when the QA pass needs browser-visible bootstrap,
+    SSE, command, audit, or raw artifact validation
 
 For review-driven investigations, replace steps 3-4 with:
 
@@ -143,6 +145,8 @@ In review-driven runs, pay attention to repo-state evidence:
 
 - the stored open-PR snapshot captured during planning
 - whether `status`, `report`, or the dashboard show repo-state drift
+- whether `night-shift dash` bootstrap and SSE payloads stay aligned with the
+  journal-backed repo-state snapshot
 - whether `night-shift report` shows the actionable/impacted subtree and
   replacement lineage, while the persisted `report.md` remains readable
   without live GitHub refresh
@@ -175,6 +179,8 @@ In review-driven runs, pay attention to repo-state evidence:
   failures with usable artifact paths
 - whether `status`, `report`, and the dashboard agree on the confidence posture
   and its reasons
+- whether Dash command handlers mutate the same durable run state as the CLI,
+  without scraping command output
 - whether `provenance` records the expected prompt paths, payload artifacts,
   verification evidence, worktree paths, and PR linkage
 - whether `doctor` classifies interrupted tasks as `safe_to_resume`,

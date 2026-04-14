@@ -10,18 +10,19 @@ pub fn usage() -> String {
   <> "\n"
   <> "Commands:\n"
   <> "  --demo [--ui]\n"
+  <> "  dash\n"
   <> "  init [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>] [--yes] [--generate-setup]\n"
   <> "    Prompts interactively for provider, model, and initial worktree setup when those answers are not supplied.\n"
   <> "  reset [--yes] [--force]\n"
   <> "  plan --notes <file-or-inline-text> [--doc <path>] [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>]\n"
   <> "  plan --from-reviews [--notes <file-or-inline-text>] [--doc <path>] [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>]\n"
-  <> "  start [--run <id>|latest] [--ui]\n"
+  <> "  start [--run <id>|latest]\n"
   <> "  status [--run <id>|latest]\n"
   <> "  report [--run <id>|latest]\n"
   <> "  provenance [--run <id>|latest] [--task <task-id>] [--format <json|md>]\n"
   <> "  doctor [--run <id>|latest]\n"
   <> "  resolve [--run <id>|latest]\n"
-  <> "  resume [--run <id>|latest] [--ui|--explain]\n"
+  <> "  resume [--run <id>|latest] [--explain]\n"
 }
 
 /// Parse raw command-line arguments into a `Command`.
@@ -44,6 +45,7 @@ pub fn parse(args: List(String)) -> Result(types.Command, String) {
       case args {
         [] -> Ok(types.Help)
         ["help", ..] -> Ok(types.Help)
+        ["dash"] -> Ok(types.Dash)
         ["init", ..rest] -> parse_init(rest)
         ["reset", ..rest] -> parse_reset(rest)
         ["plan", ..rest] -> parse_plan(rest)
@@ -254,7 +256,6 @@ fn parse_start_flags(
       parse_start_flags(rest, types.LatestRun, ui_enabled)
     ["--run", run_id, ..rest] ->
       parse_start_flags(rest, types.RunId(run_id), ui_enabled)
-    ["--ui", ..rest] -> parse_start_flags(rest, run, True)
     [flag, ..] -> Error("Unsupported start flag: " <> flag)
   }
 }
@@ -270,16 +271,11 @@ fn parse_resume_flags(
   explain_only: Bool,
 ) -> Result(types.Command, String) {
   case args {
-    [] ->
-      case ui_enabled && explain_only {
-        True -> Error("`resume --explain` cannot be combined with `--ui`.")
-        False -> Ok(types.Resume(run, ui_enabled, explain_only))
-      }
+    [] -> Ok(types.Resume(run, ui_enabled, explain_only))
     ["--run", "latest", ..rest] ->
       parse_resume_flags(rest, types.LatestRun, ui_enabled, explain_only)
     ["--run", run_id, ..rest] ->
       parse_resume_flags(rest, types.RunId(run_id), ui_enabled, explain_only)
-    ["--ui", ..rest] -> parse_resume_flags(rest, run, True, explain_only)
     ["--explain", ..rest] -> parse_resume_flags(rest, run, ui_enabled, True)
     [flag, ..] -> Error("Unsupported flag: " <> flag)
   }
