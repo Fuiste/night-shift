@@ -61,8 +61,8 @@ pub fn resume_keeps_clean_interrupted_worktree_requeueable_test() {
 
   assert task.state == types.Ready
   assert task.summary == ""
-  assert
-    git.changed_files(worktree_path, filepath.join(base_dir, "status.log")) == []
+  assert git.changed_files(worktree_path, filepath.join(base_dir, "status.log"))
+    == []
   let assert Error(_) =
     simplifile.read(filepath.join(worktree_path, ".night-shift-recover.log"))
 

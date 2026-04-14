@@ -23,7 +23,13 @@ pub fn write_persisted(
   let repo_state_view = None
   let assessment = confidence.assess(run, events, repo_state_view)
   let manifest =
-    manifest_json(run, events, repo_state_view, verification_commands, assessment)
+    manifest_json(
+      run,
+      events,
+      repo_state_view,
+      verification_commands,
+      assessment,
+    )
   write_file(artifact_path(run), json.to_string(manifest))
 }
 
@@ -38,7 +44,8 @@ pub fn render(
   use filtered_tasks <- result.try(filter_tasks(run.tasks, task_filter))
   let filtered_run = types.RunRecord(..run, tasks: filtered_tasks)
   let filtered_events = filter_events(events, task_filter)
-  let assessment = confidence.assess(filtered_run, filtered_events, repo_state_view)
+  let assessment =
+    confidence.assess(filtered_run, filtered_events, repo_state_view)
 
   Ok(case format {
     types.ProvenanceJson ->
@@ -80,10 +87,13 @@ fn render_markdown(
     "- Confidence posture: "
       <> types.confidence_posture_to_string(assessment.posture),
     "- Confidence reasons: " <> confidence.reasons_summary(assessment),
-    "- Planning provenance: " <> render_planning_provenance(run.planning_provenance),
+    "- Planning provenance: "
+      <> render_planning_provenance(run.planning_provenance),
     "- Notes source: " <> render_notes_source(run.notes_source),
-    "- Planning artifacts: " <> render_string_list(planning_artifact_paths(run, events)),
-    "- Planner prompt: " <> render_optional_path(planner_prompt_path(run.run_path)),
+    "- Planning artifacts: "
+      <> render_string_list(planning_artifact_paths(run, events)),
+    "- Planner prompt: "
+      <> render_optional_path(planner_prompt_path(run.run_path)),
     "- Planner log: " <> render_optional_path(planner_log_path(run.run_path)),
     render_review_state_markdown(run, repo_state_view),
     "",
@@ -117,9 +127,10 @@ fn manifest_json(
         #("provenance_path", json.string(artifact_path(run))),
         #("planning_agent", agent_json(run.planning_agent)),
         #("execution_agent", agent_json(run.execution_agent)),
-        #("planning_provenance", json.string(render_planning_provenance(
-          run.planning_provenance,
-        ))),
+        #(
+          "planning_provenance",
+          json.string(render_planning_provenance(run.planning_provenance)),
+        ),
         #("notes_source", json.string(render_notes_source(run.notes_source))),
         #(
           "planning_artifacts",
@@ -127,7 +138,10 @@ fn manifest_json(
         ),
         #(
           "planner_prompt_path",
-          json.nullable(from: planner_prompt_path(run.run_path), of: json.string),
+          json.nullable(
+            from: planner_prompt_path(run.run_path),
+            of: json.string,
+          ),
         ),
         #(
           "planner_log_path",
@@ -152,7 +166,10 @@ fn manifest_json(
         of: identity_json,
       ),
     ),
-    #("tasks", json.array(run.tasks, task_json(_, run, events, verification_commands))),
+    #(
+      "tasks",
+      json.array(run.tasks, task_json(_, run, events, verification_commands)),
+    ),
     #("event_refs", json.array(events, event_ref_json)),
   ])
 }
@@ -166,7 +183,8 @@ fn task_json(
   let relevant_events =
     events
     |> list.filter(fn(event) { event.task_id == Some(task.id) })
-  let verification_log = existing_file(verification_log_path(run.run_path, task.id))
+  let verification_log =
+    existing_file(verification_log_path(run.run_path, task.id))
 
   json.object([
     #("id", json.string(task.id)),
@@ -176,34 +194,40 @@ fn task_json(
     #("worktree_path", json.string(task.worktree_path)),
     #("branch_name", json.string(task.branch_name)),
     #("pr_number", json.string(task.pr_number)),
+    #("superseded_pr_numbers", json.array(task.superseded_pr_numbers, json.int)),
     #(
-      "superseded_pr_numbers",
-      json.array(task.superseded_pr_numbers, json.int),
+      "files_touched",
+      json.array(parse_changed_files(task.summary), json.string),
     ),
-    #("files_touched", json.array(parse_changed_files(task.summary), json.string)),
     #(
       "verification",
       json.object([
         #("commands", json.array(verification_commands, json.string)),
-        #(
-          "outcome",
-          json.string(verification_outcome(task, relevant_events)),
-        ),
-        #(
-          "log_path",
-          json.nullable(from: verification_log, of: json.string),
-        ),
+        #("outcome", json.string(verification_outcome(task, relevant_events))),
+        #("log_path", json.nullable(from: verification_log, of: json.string)),
       ]),
     ),
     #(
       "artifacts",
       json.object([
-        #("prompt_paths", json.array(task_prompt_paths(run.run_path, task.id), json.string)),
-        #("log_paths", json.array(task_log_paths(run.run_path, task.id), json.string)),
-        #("raw_payload_paths", json.array(raw_payload_paths(run.run_path, task.id), json.string)),
+        #(
+          "prompt_paths",
+          json.array(task_prompt_paths(run.run_path, task.id), json.string),
+        ),
+        #(
+          "log_paths",
+          json.array(task_log_paths(run.run_path, task.id), json.string),
+        ),
+        #(
+          "raw_payload_paths",
+          json.array(raw_payload_paths(run.run_path, task.id), json.string),
+        ),
         #(
           "sanitized_payload_paths",
-          json.array(sanitized_payload_paths(run.run_path, task.id), json.string),
+          json.array(
+            sanitized_payload_paths(run.run_path, task.id),
+            json.string,
+          ),
         ),
       ]),
     ),
@@ -218,25 +242,30 @@ fn review_state_json(
   case run.repo_state_snapshot {
     None -> None
     Some(snapshot) ->
-      Some(json.object([
-        #("snapshot_captured_at", json.string(snapshot.captured_at)),
-        #("captured_open_pr_count", json.int(list.length(snapshot.open_pull_requests))),
-        #(
-          "captured_actionable_pr_count",
-          json.int(
-            snapshot.open_pull_requests
-            |> list.filter(fn(pr) { pr.actionable })
-            |> list.length,
+      Some(
+        json.object([
+          #("snapshot_captured_at", json.string(snapshot.captured_at)),
+          #(
+            "captured_open_pr_count",
+            json.int(list.length(snapshot.open_pull_requests)),
           ),
-        ),
-        #(
-          "drift",
-          json.string(case repo_state_view {
-            Some(view) -> repo_state_runtime.drift_label(view.drift)
-            None -> "unknown"
-          }),
-        ),
-      ]))
+          #(
+            "captured_actionable_pr_count",
+            json.int(
+              snapshot.open_pull_requests
+              |> list.filter(fn(pr) { pr.actionable })
+              |> list.length,
+            ),
+          ),
+          #(
+            "drift",
+            json.string(case repo_state_view {
+              Some(view) -> repo_state_runtime.drift_label(view.drift)
+              None -> "unknown"
+            }),
+          ),
+        ]),
+      )
   }
 }
 
@@ -262,18 +291,24 @@ fn render_task_sections(
           "  Branch: " <> render_empty_as_dash(task.branch_name),
           "  PR: " <> render_empty_as_dash(task.pr_number),
           "  Worktree: " <> render_empty_as_dash(task.worktree_path),
-          "  Files touched: " <> render_string_list(parse_changed_files(task.summary)),
-          "  Verification commands: " <> render_string_list(verification_commands),
-          "  Verification outcome: " <> verification_outcome(task, relevant_events),
-          "  Prompt artifacts: " <> render_string_list(task_prompt_paths(run.run_path, task.id)),
-          "  Log artifacts: " <> render_string_list(task_log_paths(run.run_path, task.id)),
-          "  Raw payloads: " <> render_string_list(raw_payload_paths(run.run_path, task.id)),
+          "  Files touched: "
+            <> render_string_list(parse_changed_files(task.summary)),
+          "  Verification commands: "
+            <> render_string_list(verification_commands),
+          "  Verification outcome: "
+            <> verification_outcome(task, relevant_events),
+          "  Prompt artifacts: "
+            <> render_string_list(task_prompt_paths(run.run_path, task.id)),
+          "  Log artifacts: "
+            <> render_string_list(task_log_paths(run.run_path, task.id)),
+          "  Raw payloads: "
+            <> render_string_list(raw_payload_paths(run.run_path, task.id)),
           "  Sanitized payloads: "
             <> render_string_list(sanitized_payload_paths(run.run_path, task.id)),
           "  Event refs: "
             <> render_string_list(
-              relevant_events |> list.map(render_event_ref_label),
-            ),
+            relevant_events |> list.map(render_event_ref_label),
+          ),
         ]
         |> string.join(with: "\n")
       })
@@ -410,7 +445,10 @@ fn task_log_paths(run_path: String, task_id: String) -> List(String) {
 fn raw_payload_paths(run_path: String, task_id: String) -> List(String) {
   [
     filepath.join(run_path, "logs/" <> task_id <> ".result.raw.jsonish"),
-    filepath.join(run_path, "logs/" <> task_id <> ".payload-repair.result.raw.jsonish"),
+    filepath.join(
+      run_path,
+      "logs/" <> task_id <> ".payload-repair.result.raw.jsonish",
+    ),
   ]
   |> existing_files
 }
@@ -418,7 +456,10 @@ fn raw_payload_paths(run_path: String, task_id: String) -> List(String) {
 fn sanitized_payload_paths(run_path: String, task_id: String) -> List(String) {
   [
     filepath.join(run_path, "logs/" <> task_id <> ".result.sanitized.json"),
-    filepath.join(run_path, "logs/" <> task_id <> ".payload-repair.result.sanitized.json"),
+    filepath.join(
+      run_path,
+      "logs/" <> task_id <> ".payload-repair.result.sanitized.json",
+    ),
   ]
   |> existing_files
 }
@@ -448,7 +489,9 @@ fn verification_outcome(
     False ->
       case task.state {
         types.Failed ->
-          case string.contains(does: task.summary, contain: "verification failed") {
+          case
+            string.contains(does: task.summary, contain: "verification failed")
+          {
             True -> "failed"
             False -> "not_recorded"
           }

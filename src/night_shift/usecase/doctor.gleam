@@ -16,14 +16,21 @@ pub fn execute(
   config: types.Config,
 ) -> Result(String, String) {
   use #(run, events) <- result.try(journal.load(repo_root, selector))
-  let repo_state_view = repo_state_runtime.inspect(run, config.branch_prefix).view
+  let repo_state_view =
+    repo_state_runtime.inspect(run, config.branch_prefix).view
   let active_lock = active_lock_state(repo_root, run.run_id)
   let assessments =
     run.tasks |> list.map(diagnose_task(repo_root, run.run_path, _))
   let recommendation =
     recommend_next_action(run.status, events, active_lock, assessments)
 
-  Ok(render_doctor(run, repo_state_view, active_lock, recommendation, assessments))
+  Ok(render_doctor(
+    run,
+    repo_state_view,
+    active_lock,
+    recommendation,
+    assessments,
+  ))
 }
 
 type ActiveLockState {
@@ -113,11 +120,10 @@ fn diagnose_task(
 ) -> TaskAssessment {
   let git_log = filepath.join(run_path, "logs/" <> task.id <> ".doctor.git.log")
   let execution_log = filepath.join(run_path, "logs/" <> task.id <> ".log")
-  let worktree_exists =
-    case task.worktree_path {
-      "" -> False
-      path -> directory_exists(path)
-    }
+  let worktree_exists = case task.worktree_path {
+    "" -> False
+    path -> directory_exists(path)
+  }
   let mounted_worktree = case task.branch_name {
     "" -> Ok(None)
     _ -> git.mounted_worktree_path(repo_root, task.branch_name, git_log)
@@ -125,19 +131,13 @@ fn diagnose_task(
 
   case task.state {
     types.Completed ->
-      TaskAssessment(
-        task: task,
-        classification: types.SafeToResume,
-        reasons: [
-          "Task is already completed and does not need recovery work.",
-        ],
-      )
+      TaskAssessment(task: task, classification: types.SafeToResume, reasons: [
+        "Task is already completed and does not need recovery work.",
+      ])
     types.Ready | types.Queued ->
-      TaskAssessment(
-        task: task,
-        classification: types.SafeToResume,
-        reasons: ["Task has not started yet; resume would schedule it normally."],
-      )
+      TaskAssessment(task: task, classification: types.SafeToResume, reasons: [
+        "Task has not started yet; resume would schedule it normally.",
+      ])
     types.Blocked | types.ManualAttention ->
       TaskAssessment(
         task: task,
@@ -193,11 +193,11 @@ fn diagnose_running_task(
           )
         True -> {
           let doctor_git_log =
-            filepath.join(run_path, "logs/" <> task.id <> ".doctor.has-changes.log")
-          case git.has_changes(
-            task.worktree_path,
-            doctor_git_log,
-          ) {
+            filepath.join(
+              run_path,
+              "logs/" <> task.id <> ".doctor.has-changes.log",
+            )
+          case git.has_changes(task.worktree_path, doctor_git_log) {
             True ->
               TaskAssessment(
                 task: task,
@@ -289,10 +289,9 @@ fn recommend_next_action(
             True ->
               "At least one task is irrecoverable from saved state; inspect the journal and replan rather than resuming."
             False ->
-              case has_classification(
-                assessments,
-                types.RecoveryManualAttention,
-              ) {
+              case
+                has_classification(assessments, types.RecoveryManualAttention)
+              {
                 True ->
                   "Resolve the manual-attention tasks first; `resume` would not safely clear them."
                 False ->
@@ -302,10 +301,9 @@ fn recommend_next_action(
                       <> other_run_id
                       <> "); clear that ambiguity before resuming."
                     _ ->
-                      case has_classification(
-                        assessments,
-                        types.ResumeWithWarning,
-                      ) {
+                      case
+                        has_classification(assessments, types.ResumeWithWarning)
+                      {
                         True ->
                           "Resume is possible, but review the warnings above before you let Night Shift continue."
                         False ->
@@ -322,9 +320,7 @@ fn has_classification(
   assessments: List(TaskAssessment),
   target: types.RecoveryClassification,
 ) -> Bool {
-  list.any(assessments, fn(assessment) {
-    assessment.classification == target
-  })
+  list.any(assessments, fn(assessment) { assessment.classification == target })
 }
 
 fn latest_environment_preflight_failure(

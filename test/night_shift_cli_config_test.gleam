@@ -104,8 +104,7 @@ pub fn parse_provenance_command_test() {
     types.LatestRun,
     Some("task-1"),
     types.ProvenanceJson,
-  )) =
-    cli.parse(["provenance", "--task", "task-1", "--format", "json"])
+  )) = cli.parse(["provenance", "--task", "task-1", "--format", "json"])
 }
 
 pub fn parse_resume_rejects_environment_flag_test() {

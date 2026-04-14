@@ -280,8 +280,7 @@ fn parse_resume_flags(
     ["--run", run_id, ..rest] ->
       parse_resume_flags(rest, types.RunId(run_id), ui_enabled, explain_only)
     ["--ui", ..rest] -> parse_resume_flags(rest, run, True, explain_only)
-    ["--explain", ..rest] ->
-      parse_resume_flags(rest, run, ui_enabled, True)
+    ["--explain", ..rest] -> parse_resume_flags(rest, run, ui_enabled, True)
     [flag, ..] -> Error("Unsupported flag: " <> flag)
   }
 }

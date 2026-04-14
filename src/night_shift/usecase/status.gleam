@@ -15,8 +15,7 @@ pub fn execute(
   use #(run, events) <- result.try(runs.load_display_run(repo_root, selector))
   let next_action = runs.next_action_for_run(run)
   let inspection = repo_state_runtime.inspect(run, config.branch_prefix)
-  let confidence_assessment =
-    confidence.assess(run, events, inspection.view)
+  let confidence_assessment = confidence.assess(run, events, inspection.view)
   Ok(workflow.StatusResult(
     run: run,
     events: events,

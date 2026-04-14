@@ -66,12 +66,13 @@ fn severe_reasons(
     |> list.filter(fn(task) { task.worktree_path != "" })
     |> list.filter(fn(task) { !directory_exists(task.worktree_path) })
     |> list.length
-  let payload_repair_failures = event_count(events, "execution_payload_repair_failed")
+  let payload_repair_failures =
+    event_count(events, "execution_payload_repair_failed")
   let run_failed = event_count(events, "run_failed")
 
   [
     latest_environment_preflight_failure(events)
-    |> option_reason("Environment bootstrap failed."),
+      |> option_reason("Environment bootstrap failed."),
     count_reason(
       manual_attention_count,
       "manual-attention task is still unresolved.",
@@ -93,7 +94,11 @@ fn severe_reasons(
       "retained worktree is missing from disk.",
       "retained worktrees are missing from disk.",
     ),
-    count_reason(run_failed, "run failure was recorded.", "run failures were recorded."),
+    count_reason(
+      run_failed,
+      "run failure was recorded.",
+      "run failures were recorded.",
+    ),
   ]
   |> list.filter_map(identity_reason)
 }
@@ -103,7 +108,8 @@ fn moderate_reasons(
   repo_state_view: Option(repo_state_runtime.RepoStateView),
 ) -> List(String) {
   let payload_warnings = event_count(events, "execution_payload_warning")
-  let payload_repairs = event_count(events, "execution_payload_repair_succeeded")
+  let payload_repairs =
+    event_count(events, "execution_payload_repair_succeeded")
   let prune_warnings = event_count(events, "worktree_prune_warning")
   let supersession_warnings = event_count(events, "review_supersession_warning")
   let repo_state_reason = case repo_state_view {
@@ -158,7 +164,7 @@ fn positive_reasons(
     retained_worktrees > 0
     && list.all(
       run.tasks
-      |> list.filter(fn(task) { task.worktree_path != "" }),
+        |> list.filter(fn(task) { task.worktree_path != "" }),
       fn(task) { directory_exists(task.worktree_path) },
     )
 
@@ -176,7 +182,8 @@ fn positive_reasons(
       False -> None
     },
     case retained_and_present {
-      True -> Some("Retained worktrees remain mounted for inspection and recovery.")
+      True ->
+        Some("Retained worktrees remain mounted for inspection and recovery.")
       False -> None
     },
   ]
@@ -260,6 +267,7 @@ fn take_first_loop(
   case values, remaining <= 0 {
     _, True -> list.reverse(acc)
     [], False -> list.reverse(acc)
-    [value, ..rest], False -> take_first_loop(rest, remaining - 1, [value, ..acc])
+    [value, ..rest], False ->
+      take_first_loop(rest, remaining - 1, [value, ..acc])
   }
 }

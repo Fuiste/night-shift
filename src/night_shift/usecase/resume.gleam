@@ -39,7 +39,9 @@ pub fn execute(
   ))
 }
 
-pub fn prepare_resumed_run(run: types.RunRecord) -> Result(types.RunRecord, String) {
+pub fn prepare_resumed_run(
+  run: types.RunRecord,
+) -> Result(types.RunRecord, String) {
   let resumed_tasks =
     run.tasks
     |> list.map(fn(task) { recover_task(run.run_path, task) })
@@ -63,7 +65,10 @@ fn recover_task(run_path: String, task: types.Task) -> types.Task {
     worktree_path ->
       git.has_changes(
         worktree_path,
-        filepath.join(run_path, "logs/" <> task.id <> ".recover.has-changes.log"),
+        filepath.join(
+          run_path,
+          "logs/" <> task.id <> ".recover.has-changes.log",
+        ),
       )
   }
 

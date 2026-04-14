@@ -200,7 +200,10 @@ pub fn save(
     journal_codec.encode_run(run),
   ))
   use _ <- result.try(write_events(run.events_path, events))
-  use _ <- result.try(write_string(run.report_path, report.render_persisted(run, events)))
+  use _ <- result.try(write_string(
+    run.report_path,
+    report.render_persisted(run, events),
+  ))
   provenance.write_persisted(run, events)
 }
 

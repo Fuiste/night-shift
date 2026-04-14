@@ -6,8 +6,8 @@ import night_shift/domain/provenance as provenance_domain
 import night_shift/domain/repo_state
 import night_shift/git
 import night_shift/journal
-import night_shift/report
 import night_shift/repo_state_runtime
+import night_shift/report
 import night_shift/shell
 import night_shift/system
 import night_shift/types
@@ -48,7 +48,10 @@ pub fn report_includes_confidence_and_provenance_test() {
 
   assert string.contains(does: rendered, contain: "Confidence posture:")
   assert string.contains(does: rendered, contain: "Confidence reasons:")
-  assert string.contains(does: rendered, contain: "Provenance: /tmp/repo/.night-shift/runs/review-run/provenance.json")
+  assert string.contains(
+    does: rendered,
+    contain: "Provenance: /tmp/repo/.night-shift/runs/review-run/provenance.json",
+  )
 }
 
 pub fn provenance_render_includes_review_drift_test() {
@@ -121,53 +124,56 @@ pub fn doctor_flags_dirty_and_missing_worktrees_test() {
   let assert Ok(_) =
     simplifile.write("dirty\n", to: filepath.join(repo_root, "DIRTY.md"))
   let updated_run =
-    types.RunRecord(
-      ..run,
-      tasks: [
-        types.Task(
-          id: "dirty-task",
-          title: "Dirty task",
-          description: "",
-          dependencies: [],
-          acceptance: [],
-          demo_plan: [],
-          decision_requests: [],
-          superseded_pr_numbers: [],
-          kind: types.ImplementationTask,
-          execution_mode: types.Serial,
-          state: types.Running,
-          worktree_path: repo_root,
-          branch_name: "night-shift/dirty-task",
-          pr_number: "",
-          summary: "",
-          runtime_context: None,
-        ),
-        types.Task(
-          id: "missing-task",
-          title: "Missing task",
-          description: "",
-          dependencies: [],
-          acceptance: [],
-          demo_plan: [],
-          decision_requests: [],
-          superseded_pr_numbers: [],
-          kind: types.ImplementationTask,
-          execution_mode: types.Serial,
-          state: types.Running,
-          worktree_path: missing_worktree,
-          branch_name: "night-shift/missing-task",
-          pr_number: "",
-          summary: "",
-          runtime_context: None,
-        ),
-      ],
-    )
+    types.RunRecord(..run, tasks: [
+      types.Task(
+        id: "dirty-task",
+        title: "Dirty task",
+        description: "",
+        dependencies: [],
+        acceptance: [],
+        demo_plan: [],
+        decision_requests: [],
+        superseded_pr_numbers: [],
+        kind: types.ImplementationTask,
+        execution_mode: types.Serial,
+        state: types.Running,
+        worktree_path: repo_root,
+        branch_name: "night-shift/dirty-task",
+        pr_number: "",
+        summary: "",
+        runtime_context: None,
+      ),
+      types.Task(
+        id: "missing-task",
+        title: "Missing task",
+        description: "",
+        dependencies: [],
+        acceptance: [],
+        demo_plan: [],
+        decision_requests: [],
+        superseded_pr_numbers: [],
+        kind: types.ImplementationTask,
+        execution_mode: types.Serial,
+        state: types.Running,
+        worktree_path: missing_worktree,
+        branch_name: "night-shift/missing-task",
+        pr_number: "",
+        summary: "",
+        runtime_context: None,
+      ),
+    ])
   let assert Ok(_) = journal.rewrite_run(updated_run)
   let assert Ok(rendered) =
     doctor.execute(repo_root, types.LatestRun, types.default_config())
 
-  assert string.contains(does: rendered, contain: "[manual_attention] Dirty task")
-  assert string.contains(does: rendered, contain: "[irrecoverable] Missing task")
+  assert string.contains(
+    does: rendered,
+    contain: "[manual_attention] Dirty task",
+  )
+  assert string.contains(
+    does: rendered,
+    contain: "[irrecoverable] Missing task",
+  )
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
@@ -199,34 +205,34 @@ pub fn doctor_does_not_write_probe_log_into_worktree_test() {
     )
   let assert Ok(run) = support.start_run(repo_root, brief_path, types.Codex, 1)
   let updated_run =
-    types.RunRecord(
-      ..run,
-      tasks: [
-        types.Task(
-          id: "clean-task",
-          title: "Clean task",
-          description: "",
-          dependencies: [],
-          acceptance: [],
-          demo_plan: [],
-          decision_requests: [],
-          superseded_pr_numbers: [],
-          kind: types.ImplementationTask,
-          execution_mode: types.Serial,
-          state: types.Running,
-          worktree_path: worktree_path,
-          branch_name: "night-shift/clean-task",
-          pr_number: "",
-          summary: "",
-          runtime_context: None,
-        ),
-      ],
-    )
+    types.RunRecord(..run, tasks: [
+      types.Task(
+        id: "clean-task",
+        title: "Clean task",
+        description: "",
+        dependencies: [],
+        acceptance: [],
+        demo_plan: [],
+        decision_requests: [],
+        superseded_pr_numbers: [],
+        kind: types.ImplementationTask,
+        execution_mode: types.Serial,
+        state: types.Running,
+        worktree_path: worktree_path,
+        branch_name: "night-shift/clean-task",
+        pr_number: "",
+        summary: "",
+        runtime_context: None,
+      ),
+    ])
   let assert Ok(_) = journal.rewrite_run(updated_run)
   let assert Ok(rendered) =
     doctor.execute(repo_root, types.LatestRun, types.default_config())
 
-  assert string.contains(does: rendered, contain: "[resume_with_warning] Clean task")
+  assert string.contains(
+    does: rendered,
+    contain: "[resume_with_warning] Clean task",
+  )
   let assert Error(_) = simplifile.read(probe_path)
 
   let _ =

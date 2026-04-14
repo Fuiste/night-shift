@@ -137,7 +137,8 @@ fn run_initialized_command(
       io.println(provenance(repo_root, run, task_id, format, config))
     types.Doctor(run) -> io.println(doctor(repo_root, run, config))
     types.Resolve(run) -> io.println(resolve(repo_root, run, config))
-    types.Resume(run, False, False) -> io.println(resume(repo_root, run, config))
+    types.Resume(run, False, False) ->
+      io.println(resume(repo_root, run, config))
     types.Resume(run, True, False) -> resume_with_ui(repo_root, run, config)
     types.Resume(run, False, True) -> io.println(doctor(repo_root, run, config))
     _ -> io.println("Unsupported command.")

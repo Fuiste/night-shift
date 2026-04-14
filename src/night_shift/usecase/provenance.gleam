@@ -1,5 +1,5 @@
-import gleam/result
 import gleam/option.{type Option}
+import gleam/result
 import night_shift/domain/provenance as provenance_domain
 import night_shift/journal
 import night_shift/repo_state_runtime
@@ -13,7 +13,8 @@ pub fn execute(
   config: types.Config,
 ) -> Result(String, String) {
   use #(run, events) <- result.try(journal.load(repo_root, selector))
-  let repo_state_view = repo_state_runtime.inspect(run, config.branch_prefix).view
+  let repo_state_view =
+    repo_state_runtime.inspect(run, config.branch_prefix).view
   provenance_domain.render(
     run,
     events,

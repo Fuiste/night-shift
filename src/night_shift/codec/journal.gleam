@@ -561,6 +561,7 @@ fn runtime_port_decoder() -> decode.Decoder(types.RuntimePort) {
   use value <- decode.field("value", decode.int)
   decode.success(types.RuntimePort(name: name, value: value))
 }
+
 fn decision_request_decoder() -> decode.Decoder(types.DecisionRequest) {
   use key <- decode.field("key", decode.string)
   use question <- decode.field("question", decode.string)
