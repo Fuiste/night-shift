@@ -31,7 +31,7 @@ pub fn usage() -> String {
 ///
 /// ```gleam
 /// > parse(["start", "--run", "latest"])
-/// Ok(types.Start(types.LatestRun, False))
+/// Ok(types.Start(types.LatestRun))
 /// ```
 ///
 /// ```gleam
@@ -225,7 +225,7 @@ fn parse_init_flags(
 }
 
 fn parse_start(args: List(String)) -> Result(types.Command, String) {
-  parse_start_flags(args, types.LatestRun, False)
+  parse_start_flags(args, types.LatestRun)
 }
 
 fn parse_reset(args: List(String)) -> Result(types.Command, String) {
@@ -248,35 +248,31 @@ fn parse_reset_flags(
 fn parse_start_flags(
   args: List(String),
   run: types.RunSelector,
-  ui_enabled: Bool,
 ) -> Result(types.Command, String) {
   case args {
-    [] -> Ok(types.Start(run, ui_enabled))
-    ["--run", "latest", ..rest] ->
-      parse_start_flags(rest, types.LatestRun, ui_enabled)
-    ["--run", run_id, ..rest] ->
-      parse_start_flags(rest, types.RunId(run_id), ui_enabled)
+    [] -> Ok(types.Start(run))
+    ["--run", "latest", ..rest] -> parse_start_flags(rest, types.LatestRun)
+    ["--run", run_id, ..rest] -> parse_start_flags(rest, types.RunId(run_id))
     [flag, ..] -> Error("Unsupported start flag: " <> flag)
   }
 }
 
 fn parse_resume(args: List(String)) -> Result(types.Command, String) {
-  parse_resume_flags(args, types.LatestRun, False, False)
+  parse_resume_flags(args, types.LatestRun, False)
 }
 
 fn parse_resume_flags(
   args: List(String),
   run: types.RunSelector,
-  ui_enabled: Bool,
   explain_only: Bool,
 ) -> Result(types.Command, String) {
   case args {
-    [] -> Ok(types.Resume(run, ui_enabled, explain_only))
+    [] -> Ok(types.Resume(run, explain_only))
     ["--run", "latest", ..rest] ->
-      parse_resume_flags(rest, types.LatestRun, ui_enabled, explain_only)
+      parse_resume_flags(rest, types.LatestRun, explain_only)
     ["--run", run_id, ..rest] ->
-      parse_resume_flags(rest, types.RunId(run_id), ui_enabled, explain_only)
-    ["--explain", ..rest] -> parse_resume_flags(rest, run, ui_enabled, True)
+      parse_resume_flags(rest, types.RunId(run_id), explain_only)
+    ["--explain", ..rest] -> parse_resume_flags(rest, run, True)
     [flag, ..] -> Error("Unsupported flag: " <> flag)
   }
 }

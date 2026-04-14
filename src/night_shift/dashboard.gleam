@@ -9,6 +9,7 @@ import gleam/result
 import gleam/string
 import night_shift/agent_config
 import night_shift/config
+import night_shift/dashboard_view
 import night_shift/domain/confidence
 import night_shift/domain/decisions as decision_domain
 import night_shift/domain/provenance
@@ -24,8 +25,8 @@ import night_shift/types
 import night_shift/usecase/init as init_usecase
 import night_shift/usecase/plan as plan_usecase
 import night_shift/usecase/resolve as resolve_usecase
-import night_shift/usecase/resume as resume_usecase
 import night_shift/usecase/result as workflow
+import night_shift/usecase/resume as resume_usecase
 import night_shift/usecase/start as start_usecase
 import simplifile
 
@@ -120,52 +121,7 @@ pub fn start_resume_session(
 }
 
 pub fn index_html(_initial_run_id: String) -> String {
-  "<!doctype html>\n"
-  <> "<html lang=\"en\">\n"
-  <> "<head>\n"
-  <> "  <meta charset=\"utf-8\">\n"
-  <> "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
-  <> "  <title>Night Shift Dash</title>\n"
-  <> "  <style>\n"
-  <> "    :root { color-scheme: light; font-family: Georgia, 'Iowan Old Style', serif; }\n"
-  <> "    * { box-sizing: border-box; }\n"
-  <> "    body { margin: 0; min-height: 100vh; background: linear-gradient(180deg, #fbf8f2 0%, #efe8dd 100%); color: #211a14; }\n"
-  <> "    main { padding: 24px; display: grid; gap: 18px; max-width: 1180px; margin: 0 auto; }\n"
-  <> "    section { padding: 18px; border-radius: 18px; background: rgba(255, 252, 247, 0.92); border: 1px solid rgba(72, 48, 26, 0.12); box-shadow: 0 14px 40px rgba(66, 43, 24, 0.08); }\n"
-  <> "    h1, h2 { margin: 0 0 10px 0; }\n"
-  <> "    pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: 'SFMono-Regular', 'Menlo', monospace; font-size: 0.9rem; }\n"
-  <> "    .muted { opacity: 0.7; }\n"
-  <> "  </style>\n"
-  <> "</head>\n"
-  <> "<body>\n"
-  <> "  <main>\n"
-  <> "    <section>\n"
-  <> "      <h1>Night Shift Dash</h1>\n"
-  <> "      <p class=\"muted\">This backend now serves a structured bootstrap plus SSE-first state updates.</p>\n"
-  <> "    </section>\n"
-  <> "    <section>\n"
-  <> "      <h2>Bootstrap</h2>\n"
-  <> "      <pre id=\"bootstrap\">Loading bootstrap...</pre>\n"
-  <> "    </section>\n"
-  <> "    <section>\n"
-  <> "      <h2>Live State</h2>\n"
-  <> "      <pre id=\"events\">Connecting...</pre>\n"
-  <> "    </section>\n"
-  <> "  </main>\n"
-  <> "  <script>\n"
-  <> "    const bootstrapNode = document.getElementById('bootstrap');\n"
-  <> "    const eventsNode = document.getElementById('events');\n"
-  <> "    fetch('/api/bootstrap', { cache: 'no-store' })\n"
-  <> "      .then((response) => response.json())\n"
-  <> "      .then((payload) => { bootstrapNode.textContent = JSON.stringify(payload, null, 2); })\n"
-  <> "      .catch((error) => { bootstrapNode.textContent = error.message; });\n"
-  <> "    const stream = new EventSource('/api/events');\n"
-  <> "    stream.addEventListener('bootstrap', (event) => { eventsNode.textContent = event.data; });\n"
-  <> "    stream.addEventListener('state', (event) => { eventsNode.textContent = event.data; });\n"
-  <> "    stream.onerror = () => { eventsNode.textContent = 'Event stream disconnected.'; };\n"
-  <> "  </script>\n"
-  <> "</body>\n"
-  <> "</html>\n"
+  dashboard_view.index_html()
 }
 
 pub fn bootstrap_json(
@@ -233,14 +189,12 @@ pub fn command_json(
     "start" -> start_command_json(repo_root, body)
     "resume" -> resume_command_json(repo_root, body)
     _ ->
-      Error(
-        command_error_json(
-          repo_root,
-          command,
-          "Unsupported dash command: " <> command,
-          None,
-        ),
-      )
+      Error(command_error_json(
+        repo_root,
+        command,
+        "Unsupported dash command: " <> command,
+        None,
+      ))
   }
 }
 
@@ -279,14 +233,18 @@ fn bootstrap_payload(
   let runs = list_runs_or_empty(repo_root)
   let active_run_id = active_run_id_or_none(repo_root)
   let latest_run_id = latest_run_id(runs)
-  let selected_run_id = choose_selected_run_id(requested_run_id, active_run_id, runs)
+  let selected_run_id =
+    choose_selected_run_id(requested_run_id, active_run_id, runs)
 
   json.object([
     #("mode", json.string("dash")),
     #("repo_root", json.string(repo_root)),
     #("initialized", json.bool(configuration.initialized)),
     #("config_path", json.string(project.config_path(repo_root))),
-    #("worktree_setup_path", json.string(project.worktree_setup_path(repo_root))),
+    #(
+      "worktree_setup_path",
+      json.string(project.worktree_setup_path(repo_root)),
+    ),
     #(
       "config_error",
       json.nullable(from: repo_config_error(configuration), of: json.string),
@@ -379,14 +337,8 @@ fn run_payload_json(
     #("state_path", json.string(run.state_path)),
     #("events_path", json.string(run.events_path)),
     #("lock_path", json.string(run.lock_path)),
-    #(
-      "planning_agent",
-      agent_json(run.planning_agent),
-    ),
-    #(
-      "execution_agent",
-      agent_json(run.execution_agent),
-    ),
+    #("planning_agent", agent_json(run.planning_agent)),
+    #("execution_agent", agent_json(run.execution_agent)),
     #("environment_name", json.string(run.environment_name)),
     #("max_workers", json.int(run.max_workers)),
     #("planning_dirty", json.bool(run.planning_dirty)),
@@ -395,17 +347,15 @@ fn run_payload_json(
     #("updated_at", json.string(run.updated_at)),
     #(
       "planning_provenance",
-      json.nullable(
-        from: run.planning_provenance,
-        of: fn(value) { json.string(types.planning_provenance_label(value)) },
-      ),
+      json.nullable(from: run.planning_provenance, of: fn(value) {
+        json.string(types.planning_provenance_label(value))
+      }),
     ),
     #(
       "notes_source",
-      json.nullable(
-        from: run.notes_source,
-        of: fn(value) { json.string(types.notes_source_label(value)) },
-      ),
+      json.nullable(from: run.notes_source, of: fn(value) {
+        json.string(types.notes_source_label(value))
+      }),
     ),
     #(
       "confidence_posture",
@@ -417,14 +367,14 @@ fn run_payload_json(
       "confidence_reasons",
       json.array(confidence_assessment.reasons, json.string),
     ),
-    #(
-      "decision_requests",
-      json.array(pending_decisions, pending_decision_json),
-    ),
+    #("decision_requests", json.array(pending_decisions, pending_decision_json)),
     #("recorded_decisions", json.array(run.decisions, recorded_decision_json)),
     #(
       "repo_state",
-      json.nullable(from: review_projection, of: review_projection_repo_state_json),
+      json.nullable(
+        from: review_projection,
+        of: review_projection_repo_state_json,
+      ),
     ),
     #(
       "review_lineage",
@@ -530,9 +480,10 @@ fn plan_command_json(
       command_error_json(repo_root, command_name, decode_message(message), None)
     }),
   )
-  use configuration <- result.try(
-    require_initialized_config(repo_root, command_name)
-  )
+  use configuration <- result.try(require_initialized_config(
+    repo_root,
+    command_name,
+  ))
   use agent_overrides <- result.try(
     agent_overrides_from_strings(
       request.profile,
@@ -545,7 +496,10 @@ fn plan_command_json(
     }),
   )
   use planning_agent <- result.try(
-    agent_config.resolve_plan_agent(extract_config(configuration), agent_overrides)
+    agent_config.resolve_plan_agent(
+      extract_config(configuration),
+      agent_overrides,
+    )
     |> result.map_error(fn(message) {
       command_error_json(repo_root, command_name, message, None)
     }),
@@ -591,11 +545,9 @@ fn resolve_command_json(
   let selector = run_selector(request.run_id)
 
   case
-    resolve_usecase.execute(
-      repo_root,
-      selector,
-      fn(run, tasks) { collect_dash_decisions(run, tasks, request.answers) },
-    )
+    resolve_usecase.execute(repo_root, selector, fn(run, tasks) {
+      collect_dash_decisions(run, tasks, request.answers)
+    })
   {
     Ok(view) ->
       Ok(command_success_json(
@@ -615,10 +567,7 @@ fn resolve_command_json(
   }
 }
 
-fn start_command_json(
-  repo_root: String,
-  body: String,
-) -> Result(String, String) {
+fn start_command_json(repo_root: String, body: String) -> Result(String, String) {
   use request <- result.try(
     decode_or_default(body, run_request_decoder(), RawRunRequest(run_id: ""))
     |> result.map_error(fn(message) {
@@ -627,7 +576,13 @@ fn start_command_json(
   )
   use configuration <- result.try(require_initialized_config(repo_root, "start"))
 
-  case start_usecase.execute(repo_root, run_selector(request.run_id), extract_config(configuration)) {
+  case
+    start_usecase.execute(
+      repo_root,
+      run_selector(request.run_id),
+      extract_config(configuration),
+    )
+  {
     Ok(view) ->
       Ok(command_success_json(
         repo_root,
@@ -656,15 +611,18 @@ fn resume_command_json(
       command_error_json(repo_root, "resume", decode_message(message), None)
     }),
   )
-  use configuration <- result.try(
-    require_initialized_config(repo_root, "resume")
-  )
-
-  case resume_usecase.execute(
+  use configuration <- result.try(require_initialized_config(
     repo_root,
-    run_selector(request.run_id),
-    extract_config(configuration),
-  ) {
+    "resume",
+  ))
+
+  case
+    resume_usecase.execute(
+      repo_root,
+      run_selector(request.run_id),
+      extract_config(configuration),
+    )
+  {
     Ok(view) ->
       Ok(command_success_json(
         repo_root,
@@ -759,7 +717,8 @@ fn task_json(
   let relevant_events =
     events
     |> list.filter(fn(event) { event.task_id == Some(task.id) })
-  let delivered_link = delivered_pr_link(task, run.handoff_states, relevant_events)
+  let delivered_link =
+    delivered_pr_link(task, run.handoff_states, relevant_events)
 
   json.object([
     #("id", json.string(task.id)),
@@ -779,10 +738,7 @@ fn task_json(
         decision_request_json,
       ),
     ),
-    #(
-      "superseded_pr_numbers",
-      json.array(task.superseded_pr_numbers, json.int),
-    ),
+    #("superseded_pr_numbers", json.array(task.superseded_pr_numbers, json.int)),
     #("task_kind", json.string(types.task_kind_to_string(task.kind))),
     #(
       "execution_mode",
@@ -857,8 +813,8 @@ fn task_dag_json(tasks: List(types.Task)) -> json.Json {
       "ready_task_ids",
       json.array(
         tasks
-        |> list.filter(fn(task) { task.state == types.Ready })
-        |> list.map(fn(task) { task.id }),
+          |> list.filter(fn(task) { task.state == types.Ready })
+          |> list.map(fn(task) { task.id }),
         json.string,
       ),
     ),
@@ -866,8 +822,8 @@ fn task_dag_json(tasks: List(types.Task)) -> json.Json {
       "running_task_ids",
       json.array(
         tasks
-        |> list.filter(fn(task) { task.state == types.Running })
-        |> list.map(fn(task) { task.id }),
+          |> list.filter(fn(task) { task.state == types.Running })
+          |> list.map(fn(task) { task.id }),
         json.string,
       ),
     ),
@@ -875,10 +831,10 @@ fn task_dag_json(tasks: List(types.Task)) -> json.Json {
       "blocked_task_ids",
       json.array(
         tasks
-        |> list.filter(fn(task) {
-          task.state == types.Blocked || task.state == types.ManualAttention
-        })
-        |> list.map(fn(task) { task.id }),
+          |> list.filter(fn(task) {
+            task.state == types.Blocked || task.state == types.ManualAttention
+          })
+          |> list.map(fn(task) { task.id }),
         json.string,
       ),
     ),
@@ -886,8 +842,8 @@ fn task_dag_json(tasks: List(types.Task)) -> json.Json {
       "completed_task_ids",
       json.array(
         tasks
-        |> list.filter(fn(task) { task.state == types.Completed })
-        |> list.map(fn(task) { task.id }),
+          |> list.filter(fn(task) { task.state == types.Completed })
+          |> list.map(fn(task) { task.id }),
         json.string,
       ),
     ),
@@ -920,10 +876,7 @@ fn review_projection_repo_state_json(
   let summary = projection.repo_state
 
   json.object([
-    #(
-      "captured_open_pr_count",
-      json.int(summary.captured_open_pr_count),
-    ),
+    #("captured_open_pr_count", json.int(summary.captured_open_pr_count)),
     #(
       "captured_actionable_pr_count",
       json.int(summary.captured_actionable_pr_count),
@@ -1019,18 +972,9 @@ fn handoff_state_json(state: types.TaskHandoffState) -> json.Json {
   json.object([
     #("task_id", json.string(state.task_id)),
     #("delivered_pr_number", json.string(state.delivered_pr_number)),
-    #(
-      "last_delivered_commit_sha",
-      json.string(state.last_delivered_commit_sha),
-    ),
-    #(
-      "last_handoff_files",
-      json.array(state.last_handoff_files, json.string),
-    ),
-    #(
-      "last_verification_digest",
-      json.string(state.last_verification_digest),
-    ),
+    #("last_delivered_commit_sha", json.string(state.last_delivered_commit_sha)),
+    #("last_handoff_files", json.array(state.last_handoff_files, json.string)),
+    #("last_verification_digest", json.string(state.last_verification_digest)),
     #("last_risks", json.array(state.last_risks, json.string)),
     #("last_handoff_updated_at", json.string(state.last_handoff_updated_at)),
     #("body_region_present", json.bool(state.body_region_present)),
@@ -1107,13 +1051,10 @@ fn recorded_decision_json(decision: types.RecordedDecision) -> json.Json {
 fn repo_configuration(repo_root: String) -> RepoConfiguration {
   let config_path = project.config_path(repo_root)
   let initialized = file_exists(config_path)
-  RepoConfiguration(
-    initialized: initialized,
-    config_result: case initialized {
-      True -> config.load(config_path)
-      False -> Ok(types.default_config())
-    },
-  )
+  RepoConfiguration(initialized: initialized, config_result: case initialized {
+    True -> config.load(config_path)
+    False -> Ok(types.default_config())
+  })
 }
 
 fn require_initialized_config(
@@ -1123,14 +1064,12 @@ fn require_initialized_config(
   let configuration = repo_configuration(repo_root)
   case configuration.initialized, configuration.config_result {
     False, _ ->
-      Error(
-        command_error_json(
-          repo_root,
-          command,
-          "Night Shift is not initialized for this repository. Run `night-shift init` or POST `/api/commands/init` first.",
-          None,
-        ),
-      )
+      Error(command_error_json(
+        repo_root,
+        command,
+        "Night Shift is not initialized for this repository. Run `night-shift init` or POST `/api/commands/init` first.",
+        None,
+      ))
     True, Ok(_) -> Ok(configuration)
     True, Error(message) ->
       Error(command_error_json(repo_root, command, message, None))
@@ -1273,7 +1212,11 @@ fn init_request_decoder() -> decode.Decoder(RawInitRequest) {
   use provider <- decode.optional_field("provider", "", decode.string)
   use model <- decode.optional_field("model", "", decode.string)
   use reasoning <- decode.optional_field("reasoning", "", decode.string)
-  use generate_setup <- decode.optional_field("generate_setup", False, decode.bool)
+  use generate_setup <- decode.optional_field(
+    "generate_setup",
+    False,
+    decode.bool,
+  )
   decode.success(RawInitRequest(
     profile: profile,
     provider: provider,
@@ -1351,7 +1294,8 @@ fn decision_answer_decoder() -> decode.Decoder(RawDecisionAnswer) {
 
 fn decode_message(error: json.DecodeError) -> String {
   case error {
-    json.UnexpectedEndOfInput -> "Invalid JSON payload: unexpected end of input."
+    json.UnexpectedEndOfInput ->
+      "Invalid JSON payload: unexpected end of input."
     json.UnexpectedByte(byte) ->
       "Invalid JSON payload: unexpected byte `" <> byte <> "`."
     json.UnexpectedSequence(sequence) ->
@@ -1449,8 +1393,7 @@ fn collect_dash_decisions(
   case prompts {
     [] ->
       Error("No unresolved manual-attention decisions were found for this run.")
-    _ ->
-      collect_dash_decisions_loop(prompts, answers, [], [])
+    _ -> collect_dash_decisions_loop(prompts, answers, [], [])
   }
 }
 
@@ -1497,13 +1440,12 @@ fn resolve_dash_answer(
   use answer <- result.try(find_decision_answer(answers, request.key))
   case request.options {
     [] ->
-      Ok(#(
-        answer,
-        case request.allow_freeform {
+      Ok(
+        #(answer, case request.allow_freeform {
           True -> None
           False -> Some(decision_contract_warning_event(task, request))
-        },
-      ))
+        }),
+      )
     options ->
       case list.any(options, fn(option) { option.label == answer }) {
         True -> Ok(#(answer, None))
@@ -1548,10 +1490,7 @@ fn decision_contract_warning_event(
 fn resolve_message(view: workflow.ResolveResult) -> String {
   case view.summary {
     Some(summary) -> summary
-    None ->
-      "Resolved run "
-      <> view.run.run_id
-      <> "."
+    None -> "Resolved run " <> view.run.run_id <> "."
   }
 }
 
@@ -1694,9 +1633,7 @@ fn runtime_manifest_path(
   }
 }
 
-fn runtime_handoff_path(
-  context: Option(types.RuntimeContext),
-) -> Option(String) {
+fn runtime_handoff_path(context: Option(types.RuntimeContext)) -> Option(String) {
   case context {
     Some(value) -> existing_file(value.handoff_path)
     None -> None
@@ -1711,7 +1648,8 @@ fn runtime_env_path(context: Option(types.RuntimeContext)) -> Option(String) {
 }
 
 fn existing_files(paths: List(String)) -> List(String) {
-  paths |> list.filter_map(fn(path) {
+  paths
+  |> list.filter_map(fn(path) {
     case existing_file(path) {
       Some(value) -> Ok(value)
       None -> Error(Nil)
@@ -1751,10 +1689,9 @@ fn agent_json(agent: types.ResolvedAgentConfig) -> json.Json {
     #("model", json.nullable(from: agent.model, of: json.string)),
     #(
       "reasoning",
-      json.nullable(
-        from: agent.reasoning,
-        of: fn(level) { json.string(types.reasoning_to_string(level)) },
-      ),
+      json.nullable(from: agent.reasoning, of: fn(level) {
+        json.string(types.reasoning_to_string(level))
+      }),
     ),
   ])
 }

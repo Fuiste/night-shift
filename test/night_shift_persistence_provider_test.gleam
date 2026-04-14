@@ -257,11 +257,15 @@ pub fn dashboard_server_serves_run_data_test() {
   system.sleep(100)
 
   let assert Ok(index_html) = dashboard.http_get(session.url)
-  let assert Ok(runs_payload) = dashboard.http_get(session.url <> "/api/bootstrap")
+  let assert Ok(runs_payload) =
+    dashboard.http_get(session.url <> "/api/bootstrap")
   let assert Ok(run_payload) =
     dashboard.http_get(session.url <> "/api/audit?run_id=" <> run.run_id)
 
   assert string.contains(does: index_html, contain: "Night Shift Dash")
+  assert string.contains(does: index_html, contain: "Task DAG")
+  assert string.contains(does: index_html, contain: "Command Center")
+  assert string.contains(does: index_html, contain: "Plan from reviews")
   assert string.contains(does: runs_payload, contain: run.run_id)
   assert string.contains(
     does: run_payload,
