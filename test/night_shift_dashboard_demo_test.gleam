@@ -91,18 +91,17 @@ pub fn dashboard_start_session_tracks_completed_run_test() {
   system.set_env("PATH", bin_dir <> ":" <> old_path)
   system.set_env("NIGHT_SHIFT_GH_BIN", fake_gh)
   system.set_env("XDG_STATE_HOME", state_home)
-
-  let config =
-    types.Config(
-      ..types.default_config(),
-      verification_commands: [],
-      max_workers: 1,
-    )
+  let assert Ok(_) = support.initialize_project_home(repo_root)
 
   let assert Ok(run) =
     support.planned_run(repo_root, brief_path, types.Codex, 1)
-  let assert Ok(session) =
-    dashboard.start_start_session(repo_root, run.run_id, run, config)
+  let assert Ok(session) = dashboard.start_session(repo_root)
+  let assert Ok(_) =
+    support.post_dash_command(
+      session.url,
+      "start",
+      "{\"run_id\":\"" <> run.run_id <> "\"}",
+    )
   let final_payload = support.wait_for_run_payload(session.url, run.run_id, 40)
 
   system.set_env("PATH", old_path)
@@ -114,7 +113,10 @@ pub fn dashboard_start_session_tracks_completed_run_test() {
     does: final_payload,
     contain: "\"status\":\"completed\"",
   )
-  assert string.contains(does: final_payload, contain: "\"pr_number\":\"1\"")
+  assert string.contains(
+    does: final_payload,
+    contain: "\"number\":\"1\"",
+  )
 
   let _ = dashboard.stop_session(session)
   let _ = simplifile.delete(file_or_dir_at: base_dir)
@@ -167,7 +169,7 @@ pub fn demo_run_succeeds_with_ui_test() {
 
   assert string.contains(
     does: summary,
-    contain: "Validated UI flows: plan, start --ui, dashboard payload, status",
+    contain: "Validated UI flows: dash, bootstrap, start, status",
   )
   assert string.contains(does: summary, contain: "Dashboard: http://127.0.0.1:")
   assert string.contains(

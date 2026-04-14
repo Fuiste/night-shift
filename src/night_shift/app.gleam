@@ -49,6 +49,11 @@ pub fn run(command: types.Command) -> Nil {
         <> "\n"
         <> crate_summary(types.default_config()),
       )
+    types.Dash ->
+      case dashboard_session.start(repo_root) {
+        Ok(Nil) -> Nil
+        Error(message) -> io.println(message)
+      }
     types.Demo(ui) ->
       case demo.run(ui) {
         Ok(summary) -> io.println(summary)
@@ -130,7 +135,6 @@ fn run_initialized_command(
         Error(message) -> message
       })
     types.Start(run, False) -> io.println(start(repo_root, run, config))
-    types.Start(run, True) -> start_with_ui(repo_root, run, config)
     types.Status(run) -> io.println(status(repo_root, run, config))
     types.Report(run) -> io.println(report(repo_root, run, config))
     types.Provenance(run, task_id, format) ->
@@ -139,8 +143,11 @@ fn run_initialized_command(
     types.Resolve(run) -> io.println(resolve(repo_root, run, config))
     types.Resume(run, False, False) ->
       io.println(resume(repo_root, run, config))
-    types.Resume(run, True, False) -> resume_with_ui(repo_root, run, config)
     types.Resume(run, False, True) -> io.println(doctor(repo_root, run, config))
+    types.Start(_, True) | types.Resume(_, True, False) ->
+      io.println(
+        "The `--ui` entrypoint was replaced by `night-shift dash`.",
+      )
     _ -> io.println("Unsupported command.")
   }
 }
@@ -327,28 +334,6 @@ fn reset(repo_root: String, assume_yes: Bool, force: Bool) -> String {
         Error(message) -> message
         Ok(Nil) -> usecase_render.render_reset(reset_usecase.execute(repo_root))
       }
-  }
-}
-
-fn start_with_ui(
-  repo_root: String,
-  selector: types.RunSelector,
-  config: types.Config,
-) -> Nil {
-  case dashboard_session.start(repo_root, selector, config) {
-    Ok(Nil) -> Nil
-    Error(message) -> io.println(message)
-  }
-}
-
-fn resume_with_ui(
-  repo_root: String,
-  run: types.RunSelector,
-  config: types.Config,
-) -> Nil {
-  case dashboard_session.resume(repo_root, run, config) {
-    Ok(Nil) -> Nil
-    Error(message) -> io.println(message)
   }
 }
 

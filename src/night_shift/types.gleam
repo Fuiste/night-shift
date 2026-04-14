@@ -687,6 +687,7 @@ pub fn default_config() -> Config {
 
 /// Parsed CLI commands for the operator-facing executable.
 pub type Command {
+  Dash
   Start(run: RunSelector, ui_enabled: Bool)
   Init(agent_overrides: AgentOverrides, generate_setup: Bool, assume_yes: Bool)
   Reset(assume_yes: Bool, force: Bool)

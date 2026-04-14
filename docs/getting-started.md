@@ -100,11 +100,11 @@ Kick off the most recent pending run:
 night-shift start
 ```
 
-You can also target a specific run or open the local dashboard:
+You can also target a specific run or open Dash:
 
 ```sh
 night-shift start --run run-123
-night-shift start --ui
+night-shift dash
 ```
 
 `start` is execution-only. It uses the execution agent, environment, and brief
@@ -154,7 +154,6 @@ If a run was interrupted, resume from the saved journal:
 night-shift doctor
 night-shift resume --explain
 night-shift resume
-night-shift resume --ui
 ```
 
 `doctor` is the dry recovery pass. It classifies each task as
