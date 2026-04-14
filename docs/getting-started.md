@@ -114,6 +114,13 @@ Before it starts, Night Shift checks that the source repository is clean apart
 from changes inside `./.night-shift/`. That guard exists so worktree execution
 and delivery stay aligned with the source checkout.
 
+When a task worktree is prepared, Night Shift also generates deterministic
+runtime artifacts under the run directory and injects stable `NIGHT_SHIFT_*`
+variables into setup, maintenance, provider execution, and verification. The
+zero-config defaults are usually enough; add `runtime.named_ports` in
+`worktree-setup.toml` only when you want friendly aliases like
+`NIGHT_SHIFT_PORT_WEB`.
+
 ## Inspect Results
 
 Use these commands while a run is active or after it finishes:
@@ -121,11 +128,15 @@ Use these commands while a run is active or after it finishes:
 ```sh
 night-shift status
 night-shift report
+night-shift provenance
 ```
 
 `status` prints the current run state, planning and execution agent summaries,
-notes source, event count, and report location. `report` prints the current
-markdown report directly.
+confidence posture, provenance path, notes source, event count, runtime
+identity counts, and report location. `report` prints the current markdown
+report directly, including per-task runtime manifest and handoff paths once
+worktrees have been prepared. `provenance` prints the run's evidence ledger
+from the saved artifact graph.
 
 ## Supporting Flows
 
@@ -140,9 +151,15 @@ night-shift start
 If a run was interrupted, resume from the saved journal:
 
 ```sh
+night-shift doctor
+night-shift resume --explain
 night-shift resume
 night-shift resume --ui
 ```
+
+`doctor` is the dry recovery pass. It classifies each task as
+`safe_to_resume`, `resume_with_warning`, `manual_attention`, or
+`irrecoverable` before you mutate any run state.
 
 If open Night Shift pull requests received feedback and you want a fresh
 replacement stack instead of in-place edits:

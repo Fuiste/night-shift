@@ -18,8 +18,10 @@ pub fn usage() -> String {
   <> "  start [--run <id>|latest] [--ui]\n"
   <> "  status [--run <id>|latest]\n"
   <> "  report [--run <id>|latest]\n"
+  <> "  provenance [--run <id>|latest] [--task <task-id>] [--format <json|md>]\n"
+  <> "  doctor [--run <id>|latest]\n"
   <> "  resolve [--run <id>|latest]\n"
-  <> "  resume [--run <id>|latest] [--ui]\n"
+  <> "  resume [--run <id>|latest] [--ui|--explain]\n"
 }
 
 /// Parse raw command-line arguments into a `Command`.
@@ -48,6 +50,8 @@ pub fn parse(args: List(String)) -> Result(types.Command, String) {
         ["start", ..rest] -> parse_start(rest)
         ["status", ..rest] -> parse_run_lookup(rest, types.Status)
         ["report", ..rest] -> parse_run_lookup(rest, types.Report)
+        ["provenance", ..rest] -> parse_provenance(rest)
+        ["doctor", ..rest] -> parse_run_lookup(rest, types.Doctor)
         ["resolve", ..rest] -> parse_run_lookup(rest, types.Resolve)
         ["resume", ..rest] -> parse_resume(rest)
         ["review", ..] ->
@@ -256,21 +260,55 @@ fn parse_start_flags(
 }
 
 fn parse_resume(args: List(String)) -> Result(types.Command, String) {
-  parse_resume_flags(args, types.LatestRun, False)
+  parse_resume_flags(args, types.LatestRun, False, False)
 }
 
 fn parse_resume_flags(
   args: List(String),
   run: types.RunSelector,
   ui_enabled: Bool,
+  explain_only: Bool,
 ) -> Result(types.Command, String) {
   case args {
-    [] -> Ok(types.Resume(run, ui_enabled))
+    [] ->
+      case ui_enabled && explain_only {
+        True -> Error("`resume --explain` cannot be combined with `--ui`.")
+        False -> Ok(types.Resume(run, ui_enabled, explain_only))
+      }
     ["--run", "latest", ..rest] ->
-      parse_resume_flags(rest, types.LatestRun, ui_enabled)
+      parse_resume_flags(rest, types.LatestRun, ui_enabled, explain_only)
     ["--run", run_id, ..rest] ->
-      parse_resume_flags(rest, types.RunId(run_id), ui_enabled)
-    ["--ui", ..rest] -> parse_resume_flags(rest, run, True)
+      parse_resume_flags(rest, types.RunId(run_id), ui_enabled, explain_only)
+    ["--ui", ..rest] -> parse_resume_flags(rest, run, True, explain_only)
+    ["--explain", ..rest] -> parse_resume_flags(rest, run, ui_enabled, True)
+    [flag, ..] -> Error("Unsupported flag: " <> flag)
+  }
+}
+
+fn parse_provenance(args: List(String)) -> Result(types.Command, String) {
+  parse_provenance_flags(args, types.LatestRun, None, types.ProvenanceMarkdown)
+}
+
+fn parse_provenance_flags(
+  args: List(String),
+  run: types.RunSelector,
+  task_id: Option(String),
+  format: types.ProvenanceFormat,
+) -> Result(types.Command, String) {
+  case args {
+    [] -> Ok(types.Provenance(run, task_id, format))
+    ["--run", "latest", ..rest] ->
+      parse_provenance_flags(rest, types.LatestRun, task_id, format)
+    ["--run", run_id, ..rest] ->
+      parse_provenance_flags(rest, types.RunId(run_id), task_id, format)
+    ["--task", next_task_id, ..rest] ->
+      parse_provenance_flags(rest, run, Some(next_task_id), format)
+    ["--format", "json", ..rest] ->
+      parse_provenance_flags(rest, run, task_id, types.ProvenanceJson)
+    ["--format", "md", ..rest] ->
+      parse_provenance_flags(rest, run, task_id, types.ProvenanceMarkdown)
+    ["--format", raw_format, ..] ->
+      Error("Unsupported provenance format: " <> raw_format)
     [flag, ..] -> Error("Unsupported flag: " <> flag)
   }
 }

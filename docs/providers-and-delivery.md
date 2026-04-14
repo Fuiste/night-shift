@@ -64,6 +64,8 @@ Night Shift's current delivery model is:
 - each completed task is delivered as a pull request
 - dependent tasks may be delivered as stacked pull requests
 - verification runs locally before PR creation
+- Night Shift can overlay a configurable reviewer handoff block onto the PR
+  body, with repo-local markdown snippets before or after the generated block
 - the local markdown report is updated throughout the run
 - `night-shift report` is the live audit view for review-driven runs and can
   show current drift against the saved open-PR snapshot
@@ -82,7 +84,30 @@ Night Shift's current delivery model is:
   worktree before falling back to manual attention
 
 Delivery behavior is shaped by `base_branch`, `branch_prefix`,
-`pr_title_prefix`, and `[verification].commands` in `config.toml`.
+`pr_title_prefix`, `[verification].commands`, and `[handoff]` in
+`config.toml`.
+
+## Reviewer Handoff
+
+When handoff output is enabled, Night Shift can add a structured PR-body region
+covering:
+
+- context for why the PR exists
+- scope such as `files_touched`, acceptance cues, and stack/supersession
+  metadata when configured
+- model-authored summary text and known risks
+- deterministic evidence such as verification output
+- provenance labels that distinguish Night Shift-owned facts from inferred
+  provider-authored text
+
+Night Shift encloses its PR-body overlay in stable markers and only rewrites
+that marked region on later updates, so manual text outside the markers can
+survive future delivery passes.
+
+If `[handoff].managed_comment = true`, Night Shift also owns one PR comment for
+incremental review deltas such as "Since Last Review", review-driven context,
+and replacement-stack status. Repositories with stricter comment etiquette can
+leave that disabled and still use the PR-body overlay.
 
 ## Dashboard
 

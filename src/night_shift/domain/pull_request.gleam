@@ -1,9 +1,10 @@
 import gleam/int
 import gleam/list
+import gleam/option.{None}
 import gleam/string
 import night_shift/types
 
-pub fn render_body(
+pub fn render_legacy_body(
   run: types.RunRecord,
   task: types.Task,
   execution_result: types.ExecutionResult,
@@ -25,6 +26,15 @@ pub fn render_body(
   <> ";brief="
   <> run.brief_path
   <> " -->"
+}
+
+pub fn render_body(
+  run: types.RunRecord,
+  task: types.Task,
+  execution_result: types.ExecutionResult,
+  verification_output: String,
+) -> String {
+  render_legacy_body(run, task, execution_result, verification_output)
 }
 
 pub fn review_task(
@@ -66,6 +76,7 @@ pub fn review_task(
     branch_name: head_ref_name,
     pr_number: int.to_string(number),
     summary: "",
+    runtime_context: None,
   )
 }
 

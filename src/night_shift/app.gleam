@@ -25,8 +25,10 @@ import night_shift/repo_state_runtime
 import night_shift/report
 import night_shift/system
 import night_shift/types
+import night_shift/usecase/doctor as doctor_usecase
 import night_shift/usecase/init as init_usecase
 import night_shift/usecase/plan as plan_usecase
+import night_shift/usecase/provenance as provenance_usecase
 import night_shift/usecase/render as usecase_render
 import night_shift/usecase/reset as reset_usecase
 import night_shift/usecase/resolve as resolve_usecase
@@ -131,9 +133,14 @@ fn run_initialized_command(
     types.Start(run, True) -> start_with_ui(repo_root, run, config)
     types.Status(run) -> io.println(status(repo_root, run, config))
     types.Report(run) -> io.println(report(repo_root, run, config))
+    types.Provenance(run, task_id, format) ->
+      io.println(provenance(repo_root, run, task_id, format, config))
+    types.Doctor(run) -> io.println(doctor(repo_root, run, config))
     types.Resolve(run) -> io.println(resolve(repo_root, run, config))
-    types.Resume(run, False) -> io.println(resume(repo_root, run, config))
-    types.Resume(run, True) -> resume_with_ui(repo_root, run, config)
+    types.Resume(run, False, False) ->
+      io.println(resume(repo_root, run, config))
+    types.Resume(run, True, False) -> resume_with_ui(repo_root, run, config)
+    types.Resume(run, False, True) -> io.println(doctor(repo_root, run, config))
     _ -> io.println("Unsupported command.")
   }
 }
@@ -272,6 +279,30 @@ fn resume(
 ) -> String {
   case resume_usecase.execute(repo_root, run, config) {
     Ok(view) -> usecase_render.render_resume(view)
+    Error(message) -> message
+  }
+}
+
+fn doctor(
+  repo_root: String,
+  run: types.RunSelector,
+  config: types.Config,
+) -> String {
+  case doctor_usecase.execute(repo_root, run, config) {
+    Ok(rendered) -> rendered
+    Error(message) -> message
+  }
+}
+
+fn provenance(
+  repo_root: String,
+  run: types.RunSelector,
+  task_id: Option(String),
+  format: types.ProvenanceFormat,
+  config: types.Config,
+) -> String {
+  case provenance_usecase.execute(repo_root, run, task_id, format, config) {
+    Ok(rendered) -> rendered
     Error(message) -> message
   }
 }

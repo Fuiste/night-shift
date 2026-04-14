@@ -44,6 +44,10 @@ pub fn encode_run(run: types.RunRecord) -> String {
     #("created_at", json.string(run.created_at)),
     #("updated_at", json.string(run.updated_at)),
     #("tasks", json.array(run.tasks, encode_task)),
+    #(
+      "handoff_states",
+      json.array(run.handoff_states, encode_task_handoff_state),
+    ),
   ])
   |> json.to_string
 }
@@ -190,6 +194,44 @@ fn encode_task(task: types.Task) -> json.Json {
     #("branch_name", json.string(task.branch_name)),
     #("pr_number", json.string(task.pr_number)),
     #("summary", json.string(task.summary)),
+    #(
+      "runtime_context",
+      json.nullable(from: task.runtime_context, of: encode_runtime_context),
+    ),
+  ])
+}
+
+fn encode_runtime_context(context: types.RuntimeContext) -> json.Json {
+  json.object([
+    #("worktree_id", json.string(context.worktree_id)),
+    #("compose_project", json.string(context.compose_project)),
+    #("port_base", json.int(context.port_base)),
+    #("named_ports", json.array(context.named_ports, encode_runtime_port)),
+    #("runtime_dir", json.string(context.runtime_dir)),
+    #("env_file_path", json.string(context.env_file_path)),
+    #("manifest_path", json.string(context.manifest_path)),
+    #("handoff_path", json.string(context.handoff_path)),
+  ])
+}
+
+fn encode_runtime_port(port: types.RuntimePort) -> json.Json {
+  json.object([
+    #("name", json.string(port.name)),
+    #("value", json.int(port.value)),
+  ])
+}
+
+fn encode_task_handoff_state(state: types.TaskHandoffState) -> json.Json {
+  json.object([
+    #("task_id", json.string(state.task_id)),
+    #("delivered_pr_number", json.string(state.delivered_pr_number)),
+    #("last_delivered_commit_sha", json.string(state.last_delivered_commit_sha)),
+    #("last_handoff_files", json.array(state.last_handoff_files, json.string)),
+    #("last_verification_digest", json.string(state.last_verification_digest)),
+    #("last_risks", json.array(state.last_risks, json.string)),
+    #("last_handoff_updated_at", json.string(state.last_handoff_updated_at)),
+    #("body_region_present", json.bool(state.body_region_present)),
+    #("managed_comment_present", json.bool(state.managed_comment_present)),
   ])
 }
 
@@ -262,45 +304,56 @@ fn run_decoder() -> decode.Decoder(types.RunRecord) {
   use created_at <- decode.field("created_at", decode.string)
   use updated_at <- decode.field("updated_at", decode.string)
   use tasks <- decode.field("tasks", decode.list(task_decoder()))
-  decode.success(types.RunRecord(
-    run_id: run_id,
-    repo_root: repo_root,
-    run_path: run_path,
-    brief_path: brief_path,
-    state_path: state_path,
-    events_path: events_path,
-    report_path: report_path,
-    lock_path: lock_path,
-    planning_agent: planning_agent,
-    execution_agent: execution_agent,
-    environment_name: case maybe_environment_name {
-      Some(name) -> name
-      None -> ""
-    },
-    max_workers: max_workers,
-    notes_source: notes_source,
-    planning_provenance: case planning_provenance {
-      Some(provenance) -> Some(provenance)
-      None ->
-        case notes_source {
-          Some(source) -> Some(types.NotesOnly(source))
-          None -> None
-        }
-    },
-    repo_state_snapshot: repo_state_snapshot,
-    decisions: case decisions {
-      Some(entries) -> entries
-      None -> []
-    },
-    planning_dirty: case planning_dirty {
-      Some(value) -> value
-      None -> False
-    },
-    status: status,
-    created_at: created_at,
-    updated_at: updated_at,
-    tasks: tasks,
-  ))
+  use handoff_states <- decode.optional_field(
+    "handoff_states",
+    None,
+    decode.optional(decode.list(task_handoff_state_decoder())),
+  )
+  decode.success(
+    types.RunRecord(
+      run_id: run_id,
+      repo_root: repo_root,
+      run_path: run_path,
+      brief_path: brief_path,
+      state_path: state_path,
+      events_path: events_path,
+      report_path: report_path,
+      lock_path: lock_path,
+      planning_agent: planning_agent,
+      execution_agent: execution_agent,
+      environment_name: case maybe_environment_name {
+        Some(name) -> name
+        None -> ""
+      },
+      max_workers: max_workers,
+      notes_source: notes_source,
+      planning_provenance: case planning_provenance {
+        Some(provenance) -> Some(provenance)
+        None ->
+          case notes_source {
+            Some(source) -> Some(types.NotesOnly(source))
+            None -> None
+          }
+      },
+      repo_state_snapshot: repo_state_snapshot,
+      decisions: case decisions {
+        Some(entries) -> entries
+        None -> []
+      },
+      planning_dirty: case planning_dirty {
+        Some(value) -> value
+        None -> False
+      },
+      status: status,
+      created_at: created_at,
+      updated_at: updated_at,
+      tasks: tasks,
+      handoff_states: case handoff_states {
+        Some(entries) -> entries
+        None -> []
+      },
+    ),
+  )
 }
 
 fn legacy_run_decoder() -> decode.Decoder(types.RunRecord) {
@@ -319,29 +372,32 @@ fn legacy_run_decoder() -> decode.Decoder(types.RunRecord) {
   use updated_at <- decode.field("updated_at", decode.string)
   use tasks <- decode.field("tasks", decode.list(task_decoder()))
   let resolved_agent = types.resolved_agent_from_provider(provider)
-  decode.success(types.RunRecord(
-    run_id: run_id,
-    repo_root: repo_root,
-    run_path: run_path,
-    brief_path: brief_path,
-    state_path: state_path,
-    events_path: events_path,
-    report_path: report_path,
-    lock_path: lock_path,
-    planning_agent: resolved_agent,
-    execution_agent: resolved_agent,
-    environment_name: "",
-    max_workers: max_workers,
-    notes_source: None,
-    planning_provenance: None,
-    repo_state_snapshot: None,
-    decisions: [],
-    planning_dirty: False,
-    status: status,
-    created_at: created_at,
-    updated_at: updated_at,
-    tasks: tasks,
-  ))
+  decode.success(
+    types.RunRecord(
+      run_id: run_id,
+      repo_root: repo_root,
+      run_path: run_path,
+      brief_path: brief_path,
+      state_path: state_path,
+      events_path: events_path,
+      report_path: report_path,
+      lock_path: lock_path,
+      planning_agent: resolved_agent,
+      execution_agent: resolved_agent,
+      environment_name: "",
+      max_workers: max_workers,
+      notes_source: None,
+      planning_provenance: None,
+      repo_state_snapshot: None,
+      decisions: [],
+      planning_dirty: False,
+      status: status,
+      created_at: created_at,
+      updated_at: updated_at,
+      tasks: tasks,
+      handoff_states: [],
+    ),
+  )
 }
 
 fn resolved_agent_decoder() -> decode.Decoder(types.ResolvedAgentConfig) {
@@ -413,6 +469,11 @@ fn task_decoder() -> decode.Decoder(types.Task) {
   use branch_name <- decode.field("branch_name", decode.string)
   use pr_number <- decode.field("pr_number", decode.string)
   use summary <- decode.field("summary", decode.string)
+  use runtime_context <- decode.optional_field(
+    "runtime_context",
+    None,
+    decode.optional(runtime_context_decoder()),
+  )
   decode.success(types.Task(
     id: id,
     title: title,
@@ -429,7 +490,76 @@ fn task_decoder() -> decode.Decoder(types.Task) {
     branch_name: branch_name,
     pr_number: pr_number,
     summary: summary,
+    runtime_context: runtime_context,
   ))
+}
+
+fn task_handoff_state_decoder() -> decode.Decoder(types.TaskHandoffState) {
+  use task_id <- decode.field("task_id", decode.string)
+  use delivered_pr_number <- decode.field("delivered_pr_number", decode.string)
+  use last_delivered_commit_sha <- decode.field(
+    "last_delivered_commit_sha",
+    decode.string,
+  )
+  use last_handoff_files <- decode.field(
+    "last_handoff_files",
+    decode.list(decode.string),
+  )
+  use last_verification_digest <- decode.field(
+    "last_verification_digest",
+    decode.string,
+  )
+  use last_risks <- decode.field("last_risks", decode.list(decode.string))
+  use last_handoff_updated_at <- decode.field(
+    "last_handoff_updated_at",
+    decode.string,
+  )
+  use body_region_present <- decode.field("body_region_present", decode.bool)
+  use managed_comment_present <- decode.field(
+    "managed_comment_present",
+    decode.bool,
+  )
+  decode.success(types.TaskHandoffState(
+    task_id: task_id,
+    delivered_pr_number: delivered_pr_number,
+    last_delivered_commit_sha: last_delivered_commit_sha,
+    last_handoff_files: last_handoff_files,
+    last_verification_digest: last_verification_digest,
+    last_risks: last_risks,
+    last_handoff_updated_at: last_handoff_updated_at,
+    body_region_present: body_region_present,
+    managed_comment_present: managed_comment_present,
+  ))
+}
+
+fn runtime_context_decoder() -> decode.Decoder(types.RuntimeContext) {
+  use worktree_id <- decode.field("worktree_id", decode.string)
+  use compose_project <- decode.field("compose_project", decode.string)
+  use port_base <- decode.field("port_base", decode.int)
+  use named_ports <- decode.field(
+    "named_ports",
+    decode.list(runtime_port_decoder()),
+  )
+  use runtime_dir <- decode.field("runtime_dir", decode.string)
+  use env_file_path <- decode.field("env_file_path", decode.string)
+  use manifest_path <- decode.field("manifest_path", decode.string)
+  use handoff_path <- decode.field("handoff_path", decode.string)
+  decode.success(types.RuntimeContext(
+    worktree_id: worktree_id,
+    compose_project: compose_project,
+    port_base: port_base,
+    named_ports: named_ports,
+    runtime_dir: runtime_dir,
+    env_file_path: env_file_path,
+    manifest_path: manifest_path,
+    handoff_path: handoff_path,
+  ))
+}
+
+fn runtime_port_decoder() -> decode.Decoder(types.RuntimePort) {
+  use name <- decode.field("name", decode.string)
+  use value <- decode.field("value", decode.int)
+  decode.success(types.RuntimePort(name: name, value: value))
 }
 
 fn decision_request_decoder() -> decode.Decoder(types.DecisionRequest) {

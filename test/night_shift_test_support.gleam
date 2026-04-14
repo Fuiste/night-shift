@@ -36,26 +36,11 @@ pub fn initialize_project_home(
 }
 
 pub fn local_demo_command() -> String {
-  let cwd = system.cwd()
-  let erlang_root = filepath.join(cwd, "build/dev/erlang")
-  let ebin_paths = [
-    filepath.join(erlang_root, "night_shift/ebin"),
-    filepath.join(erlang_root, "gleam_stdlib/ebin"),
-    filepath.join(erlang_root, "gleam_json/ebin"),
-    filepath.join(erlang_root, "filepath/ebin"),
-    filepath.join(erlang_root, "simplifile/ebin"),
-    filepath.join(erlang_root, "gleeunit/ebin"),
-  ]
-
-  "erl"
-  <> {
-    ebin_paths
-    |> list.map(fn(path) { " -pa " <> shell.quote(path) })
-    |> string.join(with: "")
-  }
-  <> " -noshell -eval "
-  <> shell.quote("'night_shift@@main':run(night_shift).")
-  <> " -extra"
+  "sh -lc "
+  <> shell.quote(
+    "cd " <> shell.quote(system.cwd()) <> " && gleam run -- \"$@\"",
+  )
+  <> " night-shift"
 }
 
 pub fn script_capture_command(command: String) -> String {
@@ -279,8 +264,9 @@ pub fn write_test_worktree_setup(
   setup_commands: List(String),
   maintenance_commands: List(String),
 ) -> Result(Nil, simplifile.FileError) {
-  write_test_worktree_setup_with_preflight(
+  write_test_worktree_setup_with_runtime_and_preflight(
     path,
+    [],
     [],
     setup_commands,
     maintenance_commands,
@@ -293,10 +279,51 @@ pub fn write_test_worktree_setup_with_preflight(
   setup_commands: List(String),
   maintenance_commands: List(String),
 ) -> Result(Nil, simplifile.FileError) {
+  write_test_worktree_setup_with_runtime_and_preflight(
+    path,
+    [],
+    preflight_commands,
+    setup_commands,
+    maintenance_commands,
+  )
+}
+
+pub fn write_test_worktree_setup_with_runtime(
+  path: String,
+  named_ports: List(String),
+  setup_commands: List(String),
+  maintenance_commands: List(String),
+) -> Result(Nil, simplifile.FileError) {
+  write_test_worktree_setup_with_runtime_and_preflight(
+    path,
+    named_ports,
+    [],
+    setup_commands,
+    maintenance_commands,
+  )
+}
+
+pub fn write_test_worktree_setup_with_runtime_and_preflight(
+  path: String,
+  named_ports: List(String),
+  preflight_commands: List(String),
+  setup_commands: List(String),
+  maintenance_commands: List(String),
+) -> Result(Nil, simplifile.FileError) {
+  let runtime_section = case named_ports {
+    [] -> ""
+    _ ->
+      "[environments.default.runtime]\n"
+      <> "named_ports = "
+      <> render_command_list(named_ports)
+      <> "\n\n"
+  }
+
   simplifile.write(
     "version = 1\n"
       <> "default_environment = \"default\"\n\n"
       <> "[environments.default.env]\n\n"
+      <> runtime_section
       <> "[environments.default.preflight]\n"
       <> "default = "
       <> render_command_list(preflight_commands)
@@ -1111,6 +1138,101 @@ pub fn write_branch_sensitive_fake_gh(
       <> "    *beta-task)\n"
       <> "      printf 'simulated PR delivery failure for %s\\n' \"$BRANCH\" >&2\n"
       <> "      exit 1\n"
+      <> "      ;;\n"
+      <> "  esac\n"
+      <> "fi\n"
+      <> "printf 'unsupported gh invocation: %s %s\\n' \"$1\" \"$2\" >&2\n"
+      <> "exit 1\n",
+    to: path,
+  )
+}
+
+pub fn write_handoff_fake_gh(path: String) -> Result(Nil, simplifile.FileError) {
+  simplifile.write(
+    "#!/bin/sh\n"
+      <> "BODY_FILE=\"$0.body.txt\"\n"
+      <> "COMMENT_FILE=\"$0.comment.txt\"\n"
+      <> "COMMENT_PAGES_FILE=\"$0.comment-pages.json\"\n"
+      <> "if [ ! -f \"$BODY_FILE\" ]; then\n"
+      <> "  printf 'Legacy body\\n' > \"$BODY_FILE\"\n"
+      <> "fi\n"
+      <> "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"list\" ]; then\n"
+      <> "  BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || printf 'night-shift/demo')\n"
+      <> "  printf '[{\"number\":1,\"url\":\"https://example.test/pr/1\",\"headRefName\":\"%s\",\"title\":\"Night Shift PR\"}]\\n' \"$BRANCH\"\n"
+      <> "  exit 0\n"
+      <> "fi\n"
+      <> "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"view\" ]; then\n"
+      <> "  if [ \"$4\" = \"--json\" ] && [ \"$5\" = \"body\" ]; then\n"
+      <> "    python3 - <<'PY' \"$BODY_FILE\"\n"
+      <> "import json, sys\n"
+      <> "body = open(sys.argv[1]).read()\n"
+      <> "print(json.dumps({'body': body}))\n"
+      <> "PY\n"
+      <> "    exit 0\n"
+      <> "  fi\n"
+      <> "  printf '{\"number\":1,\"title\":\"Night Shift PR\",\"body\":\"Review body\",\"headRefName\":\"night-shift/demo\",\"baseRefName\":\"main\",\"url\":\"https://example.test/pr/1\",\"reviewDecision\":\"REVIEW_REQUIRED\",\"statusCheckRollup\":[],\"reviews\":[],\"comments\":[]}'\n"
+      <> "  exit 0\n"
+      <> "fi\n"
+      <> "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"edit\" ]; then\n"
+      <> "  shift 2\n"
+      <> "  while [ $# -gt 0 ]; do\n"
+      <> "    case \"$1\" in\n"
+      <> "      --body-file)\n"
+      <> "        cp \"$2\" \"$BODY_FILE\"\n"
+      <> "        shift 2\n"
+      <> "        ;;\n"
+      <> "      *)\n"
+      <> "        shift\n"
+      <> "        ;;\n"
+      <> "    esac\n"
+      <> "  done\n"
+      <> "  exit 0\n"
+      <> "fi\n"
+      <> "if [ \"$1\" = \"api\" ]; then\n"
+      <> "  PATH_ARG=$2\n"
+      <> "  METHOD=GET\n"
+      <> "  BODY=''\n"
+      <> "  shift 2\n"
+      <> "  while [ $# -gt 0 ]; do\n"
+      <> "    case \"$1\" in\n"
+      <> "      --method)\n"
+      <> "        METHOD=$2\n"
+      <> "        shift 2\n"
+      <> "        ;;\n"
+      <> "      --raw-field)\n"
+      <> "        BODY=${2#body=}\n"
+      <> "        shift 2\n"
+      <> "        ;;\n"
+      <> "      *)\n"
+      <> "        shift\n"
+      <> "        ;;\n"
+      <> "    esac\n"
+      <> "  done\n"
+      <> "  case \"$METHOD:$PATH_ARG\" in\n"
+      <> "    GET:repos/:owner/:repo/issues/1/comments*)\n"
+      <> "      python3 - <<'PY' \"$COMMENT_FILE\" \"$COMMENT_PAGES_FILE\" \"$PATH_ARG\"\n"
+      <> "import json, os, sys, urllib.parse\n"
+      <> "comment_path, pages_path, path_arg = sys.argv[1:4]\n"
+      <> "parsed = urllib.parse.urlparse('https://example.test/' + path_arg)\n"
+      <> "page = urllib.parse.parse_qs(parsed.query).get('page', ['1'])[0]\n"
+      <> "if os.path.exists(pages_path):\n"
+      <> "    pages = json.load(open(pages_path))\n"
+      <> "    print(json.dumps(pages.get(page, [])))\n"
+      <> "elif not os.path.exists(comment_path):\n"
+      <> "    print('[]')\n"
+      <> "else:\n"
+      <> "    body = open(comment_path).read()\n"
+      <> "    print(json.dumps([{'id': 1, 'body': body}]))\n"
+      <> "PY\n"
+      <> "      exit 0\n"
+      <> "      ;;\n"
+      <> "    POST:repos/:owner/:repo/issues/1/comments)\n"
+      <> "      printf '%s' \"$BODY\" > \"$COMMENT_FILE\"\n"
+      <> "      exit 0\n"
+      <> "      ;;\n"
+      <> "    PATCH:repos/:owner/:repo/issues/comments/*)\n"
+      <> "      printf '%s' \"$BODY\" > \"$COMMENT_FILE\"\n"
+      <> "      exit 0\n"
       <> "      ;;\n"
       <> "  esac\n"
       <> "fi\n"

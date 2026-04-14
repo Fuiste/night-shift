@@ -1,4 +1,5 @@
 import gleam/int
+import gleam/option.{None}
 import gleam/string
 import night_shift/domain/repo_state
 import night_shift/domain/review_lineage
@@ -90,5 +91,6 @@ fn task(id: String, dependencies: List(String)) -> types.Task {
     branch_name: "",
     pr_number: "",
     summary: "",
+    runtime_context: None,
   )
 }

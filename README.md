@@ -31,11 +31,14 @@ night-shift plan --notes notes/today.md
 night-shift start
 night-shift status
 night-shift report
+night-shift provenance
 ```
 
 Supporting commands round out the lifecycle:
 
 - `resolve` records answers for blocked planning decisions and replans the run
+- `doctor` explains whether a saved run is safe to resume and why
+- `provenance` renders a per-run evidence ledger from saved artifacts
 - `resume` recovers an interrupted run from saved state
 - `plan --from-reviews` turns open Night Shift PR feedback into a fresh
   successor stack
@@ -105,6 +108,7 @@ Inspect progress and outputs:
 ```sh
 night-shift status
 night-shift report
+night-shift provenance
 ```
 
 If planning blocked on manual decisions:
@@ -117,6 +121,8 @@ night-shift start
 If Night Shift was interrupted mid-run:
 
 ```sh
+night-shift doctor
+night-shift resume --explain
 night-shift resume
 ```
 

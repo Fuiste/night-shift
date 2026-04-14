@@ -3,6 +3,8 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
 import night_shift/agent_config
+import night_shift/domain/confidence
+import night_shift/domain/provenance
 import night_shift/domain/repo_state
 import night_shift/domain/review_run_projection
 import night_shift/repo_state_runtime
@@ -13,6 +15,7 @@ pub fn render(
   events: List(types.RunEvent),
   repo_state_view: Option(repo_state_runtime.RepoStateView),
 ) -> String {
+  let confidence_assessment = confidence.assess(run, events, repo_state_view)
   [
     "# Night Shift Report",
     "",
@@ -28,9 +31,14 @@ pub fn render(
     "- Created at: " <> run.created_at,
     "- Updated at: " <> run.updated_at,
     "- Brief: " <> run.brief_path,
+    "- Provenance: " <> provenance.artifact_path(run),
     render_repo_state_section(run, repo_state_view),
     "",
     "## Summary",
+    "- Confidence posture: "
+      <> types.confidence_posture_to_string(confidence_assessment.posture),
+    "- Confidence reasons: "
+      <> confidence.reasons_summary(confidence_assessment),
     render_summary(run.decisions, run.planning_dirty, run.tasks, events),
     render_planning_validation_summary(events),
     render_failure_summary(run, events),
@@ -178,6 +186,10 @@ fn render_summary(
     tasks
     |> list.filter(fn(task) { task.worktree_path != "" })
     |> list.length
+  let runtime_identity_count =
+    tasks
+    |> list.filter(fn(task) { task.runtime_context != None })
+    |> list.length
 
   [
     "- Completed tasks: " <> int.to_string(completed_count),
@@ -189,6 +201,7 @@ fn render_summary(
     "- Failed tasks: " <> int.to_string(failed_count),
     "- Queued tasks: " <> int.to_string(queued_count),
     "- Retained worktrees: " <> int.to_string(retained_worktrees),
+    "- Runtime identities: " <> int.to_string(runtime_identity_count),
     "- Pruned superseded worktrees: "
       <> int.to_string(event_count(events, "worktree_pruned")),
     "- Execution recovery warnings: "
@@ -394,8 +407,22 @@ fn render_task_details(
     pr_numbers -> "\n  Supersedes: " <> render_pr_numbers(pr_numbers)
   }
 
+  let runtime_fragment = case task.runtime_context {
+    None -> ""
+    Some(context) ->
+      "\n  Runtime: "
+      <> context.compose_project
+      <> " | base "
+      <> int.to_string(context.port_base)
+      <> "\n  Runtime manifest: "
+      <> context.manifest_path
+      <> "\n  Runtime handoff: "
+      <> context.handoff_path
+  }
+
   pr_fragment
   <> lineage_fragment
+  <> runtime_fragment
   <> decision_fragment
   <> planning_fragment
   <> summary_fragment

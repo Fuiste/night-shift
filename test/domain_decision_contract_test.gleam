@@ -38,6 +38,7 @@ pub fn reconcile_decision_requests_reuses_recorded_file_location_answer_test() {
       branch_name: "",
       pr_number: "",
       summary: "",
+      runtime_context: None,
     )
 
   let assert Ok(#([updated_task], warnings)) =
@@ -91,6 +92,7 @@ pub fn reconcile_decision_requests_rejects_ambiguous_matches_test() {
       branch_name: "",
       pr_number: "",
       summary: "",
+      runtime_context: None,
     )
 
   let assert Error(message) =

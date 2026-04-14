@@ -85,8 +85,26 @@ pub fn parse_resolve_defaults_to_latest_test() {
 }
 
 pub fn parse_resume_command_with_ui_test() {
-  let assert Ok(types.Resume(types.RunId("run-123"), True)) =
+  let assert Ok(types.Resume(types.RunId("run-123"), True, False)) =
     cli.parse(["resume", "--run", "run-123", "--ui"])
+}
+
+pub fn parse_resume_explain_command_test() {
+  let assert Ok(types.Resume(types.LatestRun, False, True)) =
+    cli.parse(["resume", "--explain"])
+}
+
+pub fn parse_doctor_command_test() {
+  let assert Ok(types.Doctor(types.RunId("run-123"))) =
+    cli.parse(["doctor", "--run", "run-123"])
+}
+
+pub fn parse_provenance_command_test() {
+  let assert Ok(types.Provenance(
+    types.LatestRun,
+    Some("task-1"),
+    types.ProvenanceJson,
+  )) = cli.parse(["provenance", "--task", "task-1", "--format", "json"])
 }
 
 pub fn parse_resume_rejects_environment_flag_test() {
@@ -206,4 +224,59 @@ pub fn parse_notifiers_and_verification_commands_test() {
 
   assert parsed.notifiers == [types.ConsoleNotifier, types.ReportFileNotifier]
   assert parsed.verification_commands == ["gleam test", "npm test"]
+}
+
+pub fn parse_handoff_config_test() {
+  let source =
+    "[handoff]\n"
+    <> "enabled = false\n"
+    <> "pr_body_mode = \"prepend\"\n"
+    <> "managed_comment = true\n"
+    <> "provenance = \"light\"\n"
+    <> "include_files_touched = false\n"
+    <> "include_acceptance = true\n"
+    <> "include_stack_context = false\n"
+    <> "include_verification_summary = false\n"
+    <> "pr_body_prefix_path = \".night-shift/pr-prefix.md\"\n"
+    <> "comment_suffix_path = \".night-shift/comment-suffix.md\"\n"
+
+  let assert Ok(parsed) = config.parse(source)
+
+  assert parsed.handoff.enabled == False
+  assert parsed.handoff.pr_body_mode == types.HandoffBodyPrepend
+  assert parsed.handoff.managed_comment == True
+  assert parsed.handoff.provenance == types.HandoffProvenanceLight
+  assert parsed.handoff.include_files_touched == False
+  assert parsed.handoff.include_acceptance == True
+  assert parsed.handoff.include_stack_context == False
+  assert parsed.handoff.include_verification_summary == False
+  assert parsed.handoff.pr_body_prefix_path == Some(".night-shift/pr-prefix.md")
+  assert parsed.handoff.comment_suffix_path
+    == Some(".night-shift/comment-suffix.md")
+}
+
+pub fn render_handoff_config_round_trip_test() {
+  let configured =
+    types.Config(
+      ..types.default_config(),
+      handoff: types.HandoffConfig(
+        enabled: True,
+        pr_body_mode: types.HandoffBodyPrepend,
+        managed_comment: True,
+        provenance: types.HandoffProvenanceMinimal,
+        include_files_touched: False,
+        include_acceptance: True,
+        include_stack_context: False,
+        include_verification_summary: False,
+        pr_body_prefix_path: Some(".night-shift/pr-prefix.md"),
+        pr_body_suffix_path: None,
+        comment_prefix_path: Some(".night-shift/comment-prefix.md"),
+        comment_suffix_path: None,
+      ),
+    )
+
+  let rendered = config.render(configured)
+  let assert Ok(parsed) = config.parse(rendered)
+
+  assert parsed.handoff == configured.handoff
 }

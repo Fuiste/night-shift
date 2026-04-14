@@ -1,4 +1,5 @@
 import gleam/list
+import gleam/option.{None}
 import night_shift/domain/task_graph
 import night_shift/types
 
@@ -20,6 +21,7 @@ pub fn refresh_ready_states_promotes_completed_dependencies_test() {
       branch_name: "",
       pr_number: "",
       summary: "",
+      runtime_context: None,
     ),
     types.Task(
       id: "verify",
@@ -37,6 +39,7 @@ pub fn refresh_ready_states_promotes_completed_dependencies_test() {
       branch_name: "",
       pr_number: "",
       summary: "",
+      runtime_context: None,
     ),
   ]
 
@@ -124,5 +127,6 @@ fn ready_task(id: String, mode: types.ExecutionMode) -> types.Task {
     branch_name: "",
     pr_number: "",
     summary: "",
+    runtime_context: None,
   )
 }

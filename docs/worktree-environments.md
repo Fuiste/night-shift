@@ -22,6 +22,10 @@ default_environment = "default"
 
 [environments.default.env]
 
+[environments.default.runtime]
+# Optional aliases for deterministic derived ports.
+# named_ports = ["web", "api"]
+
 [environments.default.preflight]
 default = []
 macos = []
@@ -45,6 +49,8 @@ Each environment can define:
 
 - `env`: environment variables injected into setup, maintenance, provider
   execution, and verification commands
+- `runtime`: optional runtime aliases. v0 supports `named_ports = ["web",
+  "api"]` and nothing else
 - `preflight`: commands that validate the environment before work starts
 - `setup`: commands run when Night Shift creates a task worktree
 - `maintenance`: commands run when Night Shift reattaches to an existing
@@ -52,6 +58,64 @@ Each environment can define:
 
 Commands are grouped by platform key: `default`, `macos`, `linux`, and
 `windows`.
+
+Runtime identity is always enabled, even when `runtime` is omitted. The
+runtime subsection only adds friendly named port aliases on top of the default
+generated values.
+
+## Runtime Identity
+
+Before Night Shift runs environment setup or provider execution for a task, it
+derives a stable per-task runtime identity and assigns a deterministic port
+block for that task. That identity is persisted in the run journal and reused
+on resume, so an existing task does not silently pick up new runtime values
+after a config edit.
+
+Night Shift always injects:
+
+- `NIGHT_SHIFT_WORKTREE_ID`
+- `NIGHT_SHIFT_COMPOSE_PROJECT`
+- `NIGHT_SHIFT_PORT_BASE`
+- `NIGHT_SHIFT_RUNTIME_DIR`
+- `NIGHT_SHIFT_RUNTIME_ENV_FILE`
+- `NIGHT_SHIFT_RUNTIME_MANIFEST`
+- `NIGHT_SHIFT_HANDOFF_FILE`
+
+If `named_ports` is configured, Night Shift also injects one variable per
+normalized alias:
+
+- `NIGHT_SHIFT_PORT_WEB`
+- `NIGHT_SHIFT_PORT_API`
+- and so on
+
+The generated values are meant to be consumed by your existing setup scripts,
+shell wrappers, and verification commands. Night Shift does not reserve ports,
+start services, or manage secrets.
+
+## Validation Rules
+
+Night Shift rejects invalid worktree setup config before any task worktrees
+launch.
+
+- `env` may not define variables with the reserved `NIGHT_SHIFT_` prefix
+- `runtime.named_ports` entries must normalize to unique uppercase identifiers
+- empty names are rejected
+- names that normalize to duplicates are rejected
+- more than 16 named ports are rejected
+
+## Generated Artifacts
+
+Each prepared task gets runtime artifacts under the run directory, not inside
+the git worktree:
+
+- `./.night-shift/runs/<run-id>/runtime/<task-id>/night-shift.env`
+- `./.night-shift/runs/<run-id>/runtime/<task-id>/night-shift.runtime.json`
+- `./.night-shift/runs/<run-id>/runtime/<task-id>/night-shift.handoff.md`
+
+`night-shift.env` is a shell-safe assignment file with quoted values.
+`night-shift.runtime.json` is the machine-readable source of truth when another
+tool needs exact values without shell parsing.
+`night-shift.handoff.md` is the short human-and-agent summary.
 
 ## Selection Rules
 
@@ -81,3 +145,6 @@ it into the repository-local Night Shift home.
 - Put long-lived repo assumptions here rather than inside provider prompts.
 - Treat `preflight` as the place to fail fast when the environment is not
   usable.
+- Prefer consuming `NIGHT_SHIFT_RUNTIME_ENV_FILE` or
+  `NIGHT_SHIFT_RUNTIME_MANIFEST` from scripts instead of re-deriving port or
+  naming schemes yourself.

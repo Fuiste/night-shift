@@ -1,5 +1,5 @@
 import gleam/list
-import gleam/option.{Some}
+import gleam/option.{None, Some}
 import night_shift/domain/decisions
 import night_shift/types
 
@@ -90,5 +90,6 @@ fn manual_attention_task() -> types.Task {
     branch_name: "",
     pr_number: "",
     summary: "",
+    runtime_context: None,
   )
 }

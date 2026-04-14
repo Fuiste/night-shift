@@ -314,6 +314,25 @@ pub type FollowUpTask {
   )
 }
 
+/// One named derived port exposed to a task runtime.
+pub type RuntimePort {
+  RuntimePort(name: String, value: Int)
+}
+
+/// Persisted runtime identity for one task worktree.
+pub type RuntimeContext {
+  RuntimeContext(
+    worktree_id: String,
+    compose_project: String,
+    port_base: Int,
+    named_ports: List(RuntimePort),
+    runtime_dir: String,
+    env_file_path: String,
+    manifest_path: String,
+    handoff_path: String,
+  )
+}
+
 /// A scheduled unit of work inside a Night Shift run.
 pub type Task {
   Task(
@@ -332,6 +351,7 @@ pub type Task {
     branch_name: String,
     pr_number: String,
     summary: String,
+    runtime_context: Option(RuntimeContext),
   )
 }
 
@@ -456,6 +476,7 @@ pub type RunRecord {
     created_at: String,
     updated_at: String,
     tasks: List(Task),
+    handoff_states: List(TaskHandoffState),
   )
 }
 
@@ -463,6 +484,169 @@ pub type RunRecord {
 pub type RunSelector {
   LatestRun
   RunId(String)
+}
+
+pub type ConfidencePosture {
+  ConfidenceHigh
+  ConfidenceGuarded
+  ConfidenceLow
+}
+
+pub fn confidence_posture_to_string(posture: ConfidencePosture) -> String {
+  case posture {
+    ConfidenceHigh -> "high"
+    ConfidenceGuarded -> "guarded"
+    ConfidenceLow -> "low"
+  }
+}
+
+pub type ConfidenceAssessment {
+  ConfidenceAssessment(posture: ConfidencePosture, reasons: List(String))
+}
+
+pub type RecoveryClassification {
+  SafeToResume
+  ResumeWithWarning
+  RecoveryManualAttention
+  RecoveryIrrecoverable
+}
+
+pub fn recovery_classification_to_string(
+  classification: RecoveryClassification,
+) -> String {
+  case classification {
+    SafeToResume -> "safe_to_resume"
+    ResumeWithWarning -> "resume_with_warning"
+    RecoveryManualAttention -> "manual_attention"
+    RecoveryIrrecoverable -> "irrecoverable"
+  }
+}
+
+pub type ProvenanceFormat {
+  ProvenanceJson
+  ProvenanceMarkdown
+}
+
+pub type HandoffBodyMode {
+  HandoffBodyOff
+  HandoffBodyAppend
+  HandoffBodyPrepend
+}
+
+pub fn handoff_body_mode_from_string(
+  value: String,
+) -> Result(HandoffBodyMode, String) {
+  case value {
+    "off" -> Ok(HandoffBodyOff)
+    "append" -> Ok(HandoffBodyAppend)
+    "prepend" -> Ok(HandoffBodyPrepend)
+    _ -> Error("Unsupported handoff PR body mode: " <> value)
+  }
+}
+
+pub fn handoff_body_mode_to_string(mode: HandoffBodyMode) -> String {
+  case mode {
+    HandoffBodyOff -> "off"
+    HandoffBodyAppend -> "append"
+    HandoffBodyPrepend -> "prepend"
+  }
+}
+
+pub type HandoffProvenance {
+  HandoffProvenanceMinimal
+  HandoffProvenanceLight
+  HandoffProvenanceStructured
+}
+
+pub fn handoff_provenance_from_string(
+  value: String,
+) -> Result(HandoffProvenance, String) {
+  case value {
+    "minimal" -> Ok(HandoffProvenanceMinimal)
+    "light" -> Ok(HandoffProvenanceLight)
+    "structured" -> Ok(HandoffProvenanceStructured)
+    _ -> Error("Unsupported handoff provenance level: " <> value)
+  }
+}
+
+pub fn handoff_provenance_to_string(level: HandoffProvenance) -> String {
+  case level {
+    HandoffProvenanceMinimal -> "minimal"
+    HandoffProvenanceLight -> "light"
+    HandoffProvenanceStructured -> "structured"
+  }
+}
+
+pub type HandoffConfig {
+  HandoffConfig(
+    enabled: Bool,
+    pr_body_mode: HandoffBodyMode,
+    managed_comment: Bool,
+    provenance: HandoffProvenance,
+    include_files_touched: Bool,
+    include_acceptance: Bool,
+    include_stack_context: Bool,
+    include_verification_summary: Bool,
+    pr_body_prefix_path: Option(String),
+    pr_body_suffix_path: Option(String),
+    comment_prefix_path: Option(String),
+    comment_suffix_path: Option(String),
+  )
+}
+
+pub fn default_handoff_config() -> HandoffConfig {
+  HandoffConfig(
+    enabled: True,
+    pr_body_mode: HandoffBodyAppend,
+    managed_comment: False,
+    provenance: HandoffProvenanceStructured,
+    include_files_touched: True,
+    include_acceptance: False,
+    include_stack_context: True,
+    include_verification_summary: True,
+    pr_body_prefix_path: None,
+    pr_body_suffix_path: None,
+    comment_prefix_path: None,
+    comment_suffix_path: None,
+  )
+}
+
+pub type TaskHandoffState {
+  TaskHandoffState(
+    task_id: String,
+    delivered_pr_number: String,
+    last_delivered_commit_sha: String,
+    last_handoff_files: List(String),
+    last_verification_digest: String,
+    last_risks: List(String),
+    last_handoff_updated_at: String,
+    body_region_present: Bool,
+    managed_comment_present: Bool,
+  )
+}
+
+pub fn task_handoff_state(
+  handoff_states: List(TaskHandoffState),
+  task_id: String,
+) -> Option(TaskHandoffState) {
+  case handoff_states |> list.find(fn(state) { state.task_id == task_id }) {
+    Ok(state) -> Some(state)
+    Error(_) -> None
+  }
+}
+
+pub fn replace_task_handoff_state(
+  handoff_states: List(TaskHandoffState),
+  next_state: TaskHandoffState,
+) -> List(TaskHandoffState) {
+  case handoff_states {
+    [] -> [next_state]
+    [state, ..rest] if state.task_id == next_state.task_id -> [
+      next_state,
+      ..rest
+    ]
+    [state, ..rest] -> [state, ..replace_task_handoff_state(rest, next_state)]
+  }
 }
 
 /// Repo-local operator configuration for Night Shift.
@@ -479,6 +663,7 @@ pub type Config {
     pr_title_prefix: String,
     verification_commands: List(String),
     notifiers: List(NotifierName),
+    handoff: HandoffConfig,
   )
 }
 
@@ -496,6 +681,7 @@ pub fn default_config() -> Config {
     pr_title_prefix: "[night-shift]",
     verification_commands: [],
     notifiers: [ConsoleNotifier, ReportFileNotifier],
+    handoff: default_handoff_config(),
   )
 }
 
@@ -512,8 +698,14 @@ pub type Command {
   )
   Status(run: RunSelector)
   Report(run: RunSelector)
+  Provenance(
+    run: RunSelector,
+    task_id: Option(String),
+    format: ProvenanceFormat,
+  )
+  Doctor(run: RunSelector)
   Resolve(run: RunSelector)
-  Resume(run: RunSelector, ui_enabled: Bool)
+  Resume(run: RunSelector, ui_enabled: Bool, explain_only: Bool)
   Demo(ui_enabled: Bool)
   Help
 }

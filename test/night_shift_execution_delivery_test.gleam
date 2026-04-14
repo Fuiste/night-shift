@@ -1,8 +1,11 @@
 import filepath
+import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/result
 import gleam/string
+import night_shift/domain/pr_handoff
+import night_shift/git
 import night_shift/github
 import night_shift/journal
 import night_shift/orchestrator
@@ -11,6 +14,7 @@ import night_shift/provider
 import night_shift/shell
 import night_shift/system
 import night_shift/types
+import night_shift/usecase/resume
 import night_shift/worktree_setup
 import night_shift_test_support as support
 import simplifile
@@ -58,6 +62,8 @@ pub fn github_open_or_update_pr_uses_create_output_when_listing_lags_test() {
       "main",
       "Demo PR",
       "Body",
+      None,
+      types.default_handoff_config(),
       run_path,
       filepath.join(run_path, "logs/gh.log"),
     )
@@ -70,6 +76,191 @@ pub fn github_open_or_update_pr_uses_create_output_when_listing_lags_test() {
   assert pr.url == "https://example.test/pr/42"
   assert pr.head_ref_name == "night-shift/demo-branch"
   assert pr.title == "Demo PR"
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn github_open_or_update_pr_preserves_manual_body_outside_handoff_region_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    support.absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-gh-handoff-body-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let run_path = filepath.join(base_dir, "run")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let fake_gh = filepath.join(bin_dir, "gh")
+  let old_path = system.get_env("PATH")
+  let old_gh_bin = system.get_env("NIGHT_SHIFT_GH_BIN")
+  let body_file = fake_gh <> ".body.txt"
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) =
+    simplifile.create_directory_all(filepath.join(run_path, "logs"))
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  support.seed_git_repo(repo_root, base_dir)
+  let _ =
+    shell.run(
+      "git checkout -b night-shift/demo-branch",
+      repo_root,
+      filepath.join(base_dir, "branch.log"),
+    )
+  let assert Ok(_) = support.write_handoff_fake_gh(fake_gh)
+  let assert Ok(_) =
+    simplifile.write(
+      "Manual intro\n\n"
+        <> "<!-- night-shift:handoff-body:start -->\nold body\n<!-- night-shift:handoff-body:end -->\n\n"
+        <> "Manual footer\n",
+      to: body_file,
+    )
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_gh),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("NIGHT_SHIFT_GH_BIN", fake_gh)
+
+  let result =
+    github.open_or_update_pr(
+      repo_root,
+      "night-shift/demo-branch",
+      "main",
+      "Demo PR",
+      "Legacy body",
+      Some(
+        "<!-- night-shift:handoff-body:start -->\nnew body\n<!-- night-shift:handoff-body:end -->",
+      ),
+      types.default_handoff_config(),
+      run_path,
+      filepath.join(run_path, "logs/gh.log"),
+    )
+
+  system.set_env("PATH", old_path)
+  support.restore_env("NIGHT_SHIFT_GH_BIN", old_gh_bin)
+
+  let assert Ok(_) = result
+  let assert Ok(updated_body) = simplifile.read(body_file)
+
+  assert string.contains(updated_body, "Manual intro")
+  assert string.contains(updated_body, "new body")
+  assert string.contains(updated_body, "Manual footer")
+  assert !string.contains(does: updated_body, contain: "old body")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn github_upsert_handoff_comment_updates_existing_comment_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    support.absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-gh-handoff-comment-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let fake_gh = filepath.join(bin_dir, "gh")
+  let old_path = system.get_env("PATH")
+  let old_gh_bin = system.get_env("NIGHT_SHIFT_GH_BIN")
+  let comment_file = fake_gh <> ".comment.txt"
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = support.write_handoff_fake_gh(fake_gh)
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_gh),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("NIGHT_SHIFT_GH_BIN", fake_gh)
+
+  let assert Ok(github.CommentCreated) =
+    github.upsert_handoff_comment(
+      repo_root,
+      1,
+      "task-1",
+      "First body\n\n" <> pr_handoff.comment_marker("task-1"),
+      filepath.join(base_dir, "gh-create.log"),
+    )
+  let assert Ok(github.CommentUpdated) =
+    github.upsert_handoff_comment(
+      repo_root,
+      1,
+      "task-1",
+      "Second body\n\n" <> pr_handoff.comment_marker("task-1"),
+      filepath.join(base_dir, "gh-update.log"),
+    )
+
+  system.set_env("PATH", old_path)
+  support.restore_env("NIGHT_SHIFT_GH_BIN", old_gh_bin)
+
+  let assert Ok(comment_body) = simplifile.read(comment_file)
+  assert string.contains(comment_body, "Second body")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn github_upsert_handoff_comment_finds_existing_marker_across_pages_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    support.absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-gh-handoff-comment-pages-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let fake_gh = filepath.join(bin_dir, "gh")
+  let old_path = system.get_env("PATH")
+  let old_gh_bin = system.get_env("NIGHT_SHIFT_GH_BIN")
+  let comment_file = fake_gh <> ".comment.txt"
+  let pages_file = fake_gh <> ".comment-pages.json"
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = support.write_handoff_fake_gh(fake_gh)
+  let assert Ok(_) =
+    simplifile.write(
+      "{\"1\":["
+        <> support.repeat_text("{\"id\":1,\"body\":\"noise\"},", 99)
+        <> "{\"id\":100,\"body\":\"noise\"}],"
+        <> "\"2\":[{\"id\":101,\"body\":\"Old body\\n\\n"
+        <> pr_handoff.comment_marker("task-1")
+        <> "\"}]}",
+      to: pages_file,
+    )
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_gh),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("NIGHT_SHIFT_GH_BIN", fake_gh)
+
+  let assert Ok(github.CommentUpdated) =
+    github.upsert_handoff_comment(
+      repo_root,
+      1,
+      "task-1",
+      "Updated body\n\n" <> pr_handoff.comment_marker("task-1"),
+      filepath.join(base_dir, "gh-update.log"),
+    )
+
+  system.set_env("PATH", old_path)
+  support.restore_env("NIGHT_SHIFT_GH_BIN", old_gh_bin)
+
+  let assert Ok(comment_body) = simplifile.read(comment_file)
+  assert string.contains(comment_body, "Updated body")
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
@@ -175,7 +366,7 @@ pub fn orchestrator_start_runs_fake_provider_test() {
 
   let completed_task =
     completed_run.tasks
-    |> list.find(fn(task) { task.state == types.Completed })
+    |> list.find(fn(task) { task.id == "demo-task" })
     |> result.unwrap(or: types.Task(
       id: "missing",
       title: "missing",
@@ -192,6 +383,7 @@ pub fn orchestrator_start_runs_fake_provider_test() {
       pr_number: "",
       superseded_pr_numbers: [],
       summary: "",
+      runtime_context: None,
     ))
 
   assert completed_run.status == types.RunCompleted
@@ -294,6 +486,7 @@ pub fn orchestrator_start_preserves_partial_success_after_delivery_failure_test(
       pr_number: "",
       superseded_pr_numbers: [],
       summary: "",
+      runtime_context: None,
     ))
   let beta_task =
     failed_run.tasks
@@ -314,6 +507,7 @@ pub fn orchestrator_start_preserves_partial_success_after_delivery_failure_test(
       pr_number: "",
       superseded_pr_numbers: [],
       summary: "",
+      runtime_context: None,
     ))
   let assert Ok(report_contents) = simplifile.read(failed_run.report_path)
   let assert Ok(events) = simplifile.read(failed_run.events_path)
@@ -335,6 +529,160 @@ pub fn orchestrator_start_preserves_partial_success_after_delivery_failure_test(
   )
   assert string.contains(does: events, contain: "\"kind\":\"pr_opened\"")
   let assert Error(_) = simplifile.read(project.active_lock_path(repo_root))
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn orchestrator_resume_preserves_original_base_ref_for_delivery_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    support.absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-resume-base-ref-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let remote_root = filepath.join(base_dir, "remote.git")
+  let worktree_path = filepath.join(base_dir, "task-worktree")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let brief_path = filepath.join(base_dir, "brief.md")
+  let fake_provider = filepath.join(bin_dir, "fake-provider")
+  let fake_gh = filepath.join(bin_dir, "gh")
+  let state_home = filepath.join(base_dir, "state")
+  let old_path = system.get_env("PATH")
+  let old_gh_bin = system.get_env("NIGHT_SHIFT_GH_BIN")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
+  let old_state_home = system.get_env("XDG_STATE_HOME")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
+  let assert Ok(_) = support.write_committing_fake_provider(fake_provider)
+  let assert Ok(_) =
+    simplifile.write(
+      "#!/bin/sh\n"
+        <> "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"list\" ]; then\n"
+        <> "  printf '[]\\n'\n"
+        <> "  exit 0\n"
+        <> "fi\n"
+        <> "if [ \"$1\" = \"pr\" ] && [ \"$2\" = \"create\" ]; then\n"
+        <> "  BASE=''\n"
+        <> "  HEAD=''\n"
+        <> "  shift 2\n"
+        <> "  while [ $# -gt 0 ]; do\n"
+        <> "    case \"$1\" in\n"
+        <> "      --base)\n"
+        <> "        BASE=$2\n"
+        <> "        shift 2\n"
+        <> "        ;;\n"
+        <> "      --head)\n"
+        <> "        HEAD=$2\n"
+        <> "        shift 2\n"
+        <> "        ;;\n"
+        <> "      *)\n"
+        <> "        shift\n"
+        <> "        ;;\n"
+        <> "    esac\n"
+        <> "  done\n"
+        <> "  if [ \"$BASE\" = \"$HEAD\" ]; then\n"
+        <> "    printf 'head branch \"%s\" is the same as base branch \"%s\", cannot create a pull request\\n' \"$HEAD\" \"$BASE\" >&2\n"
+        <> "    exit 1\n"
+        <> "  fi\n"
+        <> "  if [ \"$BASE\" != \"main\" ]; then\n"
+        <> "    printf 'expected base main, got %s\\n' \"$BASE\" >&2\n"
+        <> "    exit 1\n"
+        <> "  fi\n"
+        <> "  printf 'https://example.test/pr/7\\n'\n"
+        <> "  exit 0\n"
+        <> "fi\n"
+        <> "printf 'unsupported gh invocation: %s %s\\n' \"$1\" \"$2\" >&2\n"
+        <> "exit 1\n",
+      to: fake_gh,
+    )
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_provider) <> " " <> shell.quote(fake_gh),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+  let _ =
+    shell.run(
+      "git init --bare " <> shell.quote(remote_root),
+      base_dir,
+      filepath.join(base_dir, "remote.log"),
+    )
+  support.seed_git_repo(repo_root, base_dir)
+  let _ =
+    shell.run(
+      "git remote add origin " <> shell.quote(remote_root),
+      repo_root,
+      filepath.join(base_dir, "remote-add.log"),
+    )
+  let _ =
+    shell.run(
+      "git push -u origin main",
+      repo_root,
+      filepath.join(base_dir, "push-main.log"),
+    )
+  let assert Ok(_) =
+    git.create_worktree(
+      repo_root,
+      worktree_path,
+      "night-shift/resume-base-ref-task",
+      "main",
+      filepath.join(base_dir, "worktree.log"),
+    )
+
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("NIGHT_SHIFT_GH_BIN", fake_gh)
+  system.set_env("XDG_STATE_HOME", state_home)
+
+  let config =
+    types.Config(
+      ..types.default_config(),
+      verification_commands: [],
+      max_workers: 1,
+    )
+  let assert Ok(run) = support.start_run(repo_root, brief_path, types.Codex, 1)
+  let interrupted_task =
+    types.Task(
+      id: "demo-task",
+      title: "Implement demo task",
+      description: "Create a file to prove execution",
+      dependencies: [],
+      acceptance: ["Create IMPLEMENTED.md"],
+      demo_plan: ["Show the new file"],
+      decision_requests: [],
+      superseded_pr_numbers: [],
+      kind: types.ImplementationTask,
+      execution_mode: types.Serial,
+      state: types.Running,
+      worktree_path: worktree_path,
+      branch_name: "night-shift/resume-base-ref-task",
+      pr_number: "",
+      summary: "",
+      runtime_context: None,
+    )
+  let interrupted_run = types.RunRecord(..run, tasks: [interrupted_task])
+  let assert Ok(_) = journal.rewrite_run(interrupted_run)
+  let assert Ok(resumed_run) = resume.prepare_resumed_run(interrupted_run)
+  let assert Ok(completed_run) = orchestrator.continue_run(resumed_run, config)
+
+  system.set_env("PATH", old_path)
+  support.restore_env("NIGHT_SHIFT_GH_BIN", old_gh_bin)
+  support.restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
+  support.restore_env("XDG_STATE_HOME", old_state_home)
+
+  let assert [completed_task] = completed_run.tasks
+  let assert Ok(report_contents) = simplifile.read(completed_run.report_path)
+
+  assert completed_run.status == types.RunCompleted
+  assert completed_task.state == types.Completed
+  assert completed_task.pr_number == "7"
+  assert string.contains(does: report_contents, contain: "- Opened PRs: 1")
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
@@ -457,6 +805,7 @@ pub fn orchestrator_start_delivers_provider_created_commit_test() {
       pr_number: "",
       superseded_pr_numbers: [],
       summary: "",
+      runtime_context: None,
     ))
 
   assert completed_run.status == types.RunCompleted
@@ -516,6 +865,7 @@ pub fn start_task_runs_codex_execution_in_worktree_test() {
       pr_number: "",
       superseded_pr_numbers: [],
       summary: "",
+      runtime_context: None,
     )
 
   let assert Ok(task_run) =
@@ -540,6 +890,174 @@ pub fn start_task_runs_codex_execution_in_worktree_test() {
     simplifile.read(filepath.join(worktree_path, "EXECUTED.txt"))
   assert result.status == types.Completed
   assert string.contains(does: contents, contain: "executed in worktree")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn orchestrator_start_generates_runtime_identity_artifacts_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    support.absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-runtime-artifacts-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let remote_root = filepath.join(base_dir, "remote.git")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let brief_path = filepath.join(base_dir, "brief.md")
+  let fake_provider = filepath.join(bin_dir, "fake-provider")
+  let fake_gh = filepath.join(bin_dir, "gh")
+  let state_home = filepath.join(base_dir, "state")
+  let old_path = system.get_env("PATH")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
+  let old_gh_bin = system.get_env("NIGHT_SHIFT_GH_BIN")
+  let old_state_home = system.get_env("XDG_STATE_HOME")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
+  let assert Ok(_) = support.initialize_project_home(repo_root)
+  let assert Ok(_) = support.write_fake_provider(fake_provider)
+  let assert Ok(_) = support.write_fake_gh(fake_gh)
+  let assert Ok(_) =
+    support.write_test_worktree_setup_with_runtime(
+      project.worktree_setup_path(repo_root),
+      ["web", "api"],
+      [
+        "printenv NIGHT_SHIFT_COMPOSE_PROJECT > runtime-compose-project.txt",
+        "printenv NIGHT_SHIFT_PORT_WEB > runtime-port-web.txt",
+        "printenv NIGHT_SHIFT_RUNTIME_MANIFEST > runtime-manifest-path.txt",
+      ],
+      [],
+    )
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_provider) <> " " <> shell.quote(fake_gh),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+  let _ =
+    shell.run(
+      "git init --bare " <> shell.quote(remote_root),
+      base_dir,
+      filepath.join(base_dir, "remote.log"),
+    )
+  support.seed_git_repo(repo_root, base_dir)
+  let _ =
+    shell.run(
+      "git remote add origin " <> shell.quote(remote_root),
+      repo_root,
+      filepath.join(base_dir, "remote-add.log"),
+    )
+  let _ =
+    shell.run(
+      "git push -u origin main",
+      repo_root,
+      filepath.join(base_dir, "push-main.log"),
+    )
+
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("NIGHT_SHIFT_GH_BIN", fake_gh)
+  system.set_env("XDG_STATE_HOME", state_home)
+
+  let config =
+    types.Config(
+      ..types.default_config(),
+      verification_commands: [],
+      max_workers: 1,
+    )
+  let assert Ok(run) =
+    support.planned_run_in_environment(
+      repo_root,
+      brief_path,
+      types.Codex,
+      "default",
+      1,
+    )
+  let assert Ok(completed_run) = orchestrator.start(run, config)
+
+  system.set_env("PATH", old_path)
+  support.restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
+  support.restore_env("NIGHT_SHIFT_GH_BIN", old_gh_bin)
+  support.restore_env("XDG_STATE_HOME", old_state_home)
+
+  let completed_task =
+    completed_run.tasks
+    |> list.find(fn(task) { task.state == types.Completed })
+    |> result.unwrap(or: types.Task(
+      id: "missing",
+      title: "missing",
+      description: "",
+      dependencies: [],
+      acceptance: [],
+      demo_plan: [],
+      decision_requests: [],
+      kind: types.ImplementationTask,
+      execution_mode: types.Serial,
+      state: types.Failed,
+      worktree_path: "",
+      branch_name: "",
+      pr_number: "",
+      superseded_pr_numbers: [],
+      summary: "",
+      runtime_context: None,
+    ))
+  assert completed_run.status == types.RunCompleted
+  let assert Some(runtime_context) = completed_task.runtime_context
+  let assert Ok(env_contents) = simplifile.read(runtime_context.env_file_path)
+  let assert Ok(manifest_contents) =
+    simplifile.read(runtime_context.manifest_path)
+  let assert Ok(handoff_contents) =
+    simplifile.read(runtime_context.handoff_path)
+  let assert Ok(compose_project_contents) =
+    simplifile.read(filepath.join(
+      completed_task.worktree_path,
+      "runtime-compose-project.txt",
+    ))
+  let assert Ok(port_web_contents) =
+    simplifile.read(filepath.join(
+      completed_task.worktree_path,
+      "runtime-port-web.txt",
+    ))
+  let assert Ok(manifest_path_contents) =
+    simplifile.read(filepath.join(
+      completed_task.worktree_path,
+      "runtime-manifest-path.txt",
+    ))
+
+  assert string.contains(
+    does: env_contents,
+    contain: "NIGHT_SHIFT_COMPOSE_PROJECT='"
+      <> runtime_context.compose_project
+      <> "'",
+  )
+  assert string.contains(does: env_contents, contain: "NIGHT_SHIFT_PORT_WEB='")
+  assert string.contains(
+    does: compose_project_contents,
+    contain: runtime_context.compose_project,
+  )
+  assert string.contains(
+    does: port_web_contents,
+    contain: int.to_string(runtime_context.port_base),
+  )
+  assert string.contains(
+    does: manifest_path_contents,
+    contain: runtime_context.manifest_path,
+  )
+  assert string.contains(
+    does: manifest_contents,
+    contain: "\"compose_project\":\"" <> runtime_context.compose_project <> "\"",
+  )
+  assert string.contains(does: handoff_contents, contain: "Compose project")
+  assert simplifile.read(filepath.join(
+      completed_task.worktree_path,
+      "night-shift.runtime.json",
+    ))
+    |> result.is_error
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
@@ -592,6 +1110,7 @@ pub fn provider_await_task_recovers_trailing_junk_test() {
       pr_number: "",
       superseded_pr_numbers: [],
       summary: "",
+      runtime_context: None,
     )
 
   let assert Ok(task_run) =
@@ -678,6 +1197,7 @@ pub fn provider_await_task_normalizes_absolute_files_touched_test() {
       pr_number: "",
       superseded_pr_numbers: [],
       summary: "",
+      runtime_context: None,
     )
 
   let assert Ok(task_run) =
@@ -752,6 +1272,7 @@ pub fn provider_await_task_rejects_absolute_paths_outside_worktree_test() {
       pr_number: "",
       superseded_pr_numbers: [],
       summary: "",
+      runtime_context: None,
     )
 
   let assert Ok(task_run) =
@@ -826,6 +1347,7 @@ pub fn provider_payload_repair_accepts_valid_repair_test() {
       pr_number: "",
       superseded_pr_numbers: [],
       summary: "",
+      runtime_context: None,
     )
 
   let assert Ok(task_run) =
@@ -922,6 +1444,7 @@ pub fn provider_payload_repair_accepts_recoverable_repair_with_warning_test() {
       pr_number: "",
       superseded_pr_numbers: [],
       summary: "",
+      runtime_context: None,
     )
 
   let assert Ok(task_run) =
@@ -1018,6 +1541,7 @@ pub fn provider_payload_repair_rejects_unsafe_paths_test() {
       pr_number: "",
       superseded_pr_numbers: [],
       summary: "",
+      runtime_context: None,
     )
 
   let assert Ok(task_run) =
@@ -1226,6 +1750,7 @@ pub fn orchestrator_start_prunes_clean_superseded_worktrees_test() {
       branch_name: "night-shift/prior",
       pr_number: "12",
       summary: "Prior completed task",
+      runtime_context: None,
     )
   let assert Ok(_) =
     journal.rewrite_run(
@@ -1263,6 +1788,7 @@ pub fn orchestrator_start_prunes_clean_superseded_worktrees_test() {
       branch_name: "night-shift/rewrite-root-v2",
       pr_number: "15",
       summary: "Replacement completed task",
+      runtime_context: None,
     )
   let replacement_run =
     types.RunRecord(..current_run, status: types.RunActive, tasks: [
@@ -1385,6 +1911,7 @@ pub fn orchestrator_start_blocks_manual_attention_before_bootstrap_test() {
       pr_number: "",
       superseded_pr_numbers: [],
       summary: "",
+      runtime_context: None,
     ))
   let assert Ok(events) = simplifile.read(blocked_run.events_path)
 
@@ -1667,6 +2194,7 @@ pub fn orchestrator_start_reports_setup_phase_failures_after_preflight_test() {
       pr_number: "",
       superseded_pr_numbers: [],
       summary: "",
+      runtime_context: None,
     ))
 
   assert failed_run.status == types.RunFailed
@@ -1858,6 +2386,7 @@ pub fn orchestrator_start_marks_decode_failures_failed_and_clears_lock_test() {
       pr_number: "",
       superseded_pr_numbers: [],
       summary: "",
+      runtime_context: None,
     ))
   let assert Ok(events) = simplifile.read(failed_run.events_path)
   let assert Ok(raw_payload) =
@@ -2018,6 +2547,7 @@ pub fn orchestrator_start_routes_dirty_decode_failures_to_manual_attention_test(
       pr_number: "",
       superseded_pr_numbers: [],
       summary: "",
+      runtime_context: None,
     ))
   let assert Ok(report) = simplifile.read(blocked_run.report_path)
   let assert Ok(events) = simplifile.read(blocked_run.events_path)
@@ -2150,6 +2680,7 @@ pub fn orchestrator_start_recovers_dirty_decode_failures_with_payload_repair_tes
       pr_number: "",
       superseded_pr_numbers: [],
       summary: "",
+      runtime_context: None,
     ))
   let assert Ok(events) = simplifile.read(completed_run.events_path)
   let assert Ok(report) = simplifile.read(completed_run.report_path)
@@ -2251,6 +2782,7 @@ pub fn orchestrator_start_blocks_invalid_follow_up_tasks_before_delivery_test() 
       pr_number: "",
       superseded_pr_numbers: [],
       summary: "",
+      runtime_context: None,
     ))
   let assert Ok(events_text) = simplifile.read(blocked_run.events_path)
   let assert Ok(created_file) =
@@ -2353,6 +2885,7 @@ pub fn orchestrator_start_continues_awaiting_batch_after_decode_failure_test() {
       pr_number: "",
       superseded_pr_numbers: [],
       summary: "",
+      runtime_context: None,
     ))
   let fail_task =
     failed_run.tasks
@@ -2373,6 +2906,7 @@ pub fn orchestrator_start_continues_awaiting_batch_after_decode_failure_test() {
       pr_number: "",
       superseded_pr_numbers: [],
       summary: "",
+      runtime_context: None,
     ))
 
   assert failed_run.status == types.RunFailed

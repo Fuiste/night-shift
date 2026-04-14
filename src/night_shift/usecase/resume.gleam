@@ -39,10 +39,12 @@ pub fn execute(
   ))
 }
 
-fn prepare_resumed_run(run: types.RunRecord) -> Result(types.RunRecord, String) {
+pub fn prepare_resumed_run(
+  run: types.RunRecord,
+) -> Result(types.RunRecord, String) {
   let resumed_tasks =
     run.tasks
-    |> list.map(fn(task) { recover_task(task) })
+    |> list.map(fn(task) { recover_task(run.run_path, task) })
     |> task_graph.refresh_ready_states
 
   let resumed_run = types.RunRecord(..run, tasks: resumed_tasks)
@@ -57,13 +59,16 @@ fn prepare_resumed_run(run: types.RunRecord) -> Result(types.RunRecord, String) 
   journal.append_event(resumed_run, event)
 }
 
-fn recover_task(task: types.Task) -> types.Task {
+fn recover_task(run_path: String, task: types.Task) -> types.Task {
   let has_worktree_changes = case task.worktree_path {
     "" -> False
     worktree_path ->
       git.has_changes(
         worktree_path,
-        filepath.join(worktree_path, ".night-shift-recover.log"),
+        filepath.join(
+          run_path,
+          "logs/" <> task.id <> ".recover.has-changes.log",
+        ),
       )
   }
 

@@ -2,6 +2,7 @@
 
 import gleam/option.{type Option}
 import night_shift/codec/worktree_setup as codec
+import night_shift/types
 import night_shift/worktree_setup_model as model
 import night_shift/worktree_setup_runtime as runtime
 
@@ -16,6 +17,10 @@ pub type CommandSet =
 /// A named worktree environment with commands and environment variables.
 pub type WorktreeEnvironment =
   model.WorktreeEnvironment
+
+/// Optional runtime aliases configured for one environment.
+pub type RuntimeConfig =
+  model.RuntimeConfig
 
 /// Full repo-local worktree setup configuration.
 pub type WorktreeSetupConfig =
@@ -75,8 +80,9 @@ pub fn env_vars_for(
   repo_root: String,
   environment_name: String,
   setup_path: String,
+  runtime_context: Option(types.RuntimeContext),
 ) -> Result(List(#(String, String)), String) {
-  runtime.env_vars_for(repo_root, environment_name, setup_path)
+  runtime.env_vars_for(repo_root, environment_name, setup_path, runtime_context)
 }
 
 /// Execute the commands required to prepare a worktree for one phase.
@@ -88,6 +94,7 @@ pub fn prepare_worktree(
   branch_name: String,
   phase: BootstrapPhase,
   log_path: String,
+  runtime_context: Option(types.RuntimeContext),
 ) -> Result(Nil, String) {
   runtime.prepare_worktree(
     repo_root,
@@ -97,6 +104,7 @@ pub fn prepare_worktree(
     branch_name,
     phase,
     log_path,
+    runtime_context,
   )
 }
 
