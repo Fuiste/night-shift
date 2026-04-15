@@ -111,17 +111,13 @@ leave that disabled and still use the PR-body overlay.
 
 ## Dashboard
 
-The local dashboard is intentionally narrow in scope. It binds to `127.0.0.1`,
-prefers port `8787`, and serves a monitor-only UI for:
+Dash is the repo-local browser front door. It binds to `127.0.0.1`, asks the
+OS for an open local port, and serves:
 
-- run history
-- summary metadata for the selected run
+- run history and selected-run bootstrap state
 - repo-state summary for review-driven runs, including snapshot time and drift
-- task status
-- event timeline
-- report content
-
-There are no browser-side mutation controls.
+- DAG, task, timeline, report, provenance, and raw artifact panels
+- browser-side init, plan, start, resume, and resolve actions
 
 ## Demo Mode
 

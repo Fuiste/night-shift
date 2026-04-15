@@ -9,6 +9,20 @@ import night_shift/usecase/support/environment
 import night_shift/usecase/support/repo_guard
 import night_shift/usecase/support/runs
 
+pub fn view(
+  repo_root: String,
+  selector: types.RunSelector,
+) -> Result(Nil, String) {
+  use initial_run_id <- result.try(resolve_initial_run_id(repo_root, selector))
+  use session <- result.try(dashboard.start_view_session(
+    repo_root,
+    initial_run_id,
+  ))
+  io.println(render_dashboard_summary(session.url, initial_run_id))
+  system.wait_forever()
+  Ok(Nil)
+}
+
 pub fn start(
   repo_root: String,
   selector: types.RunSelector,
@@ -51,5 +65,30 @@ pub fn resume(
 }
 
 fn render_dashboard_summary(url: String, run_id: String) -> String {
-  "Dashboard: " <> url <> "\n" <> "Run: " <> run_id
+  "Dashboard: "
+  <> url
+  <> "\nRun: "
+  <> case run_id {
+    "" -> "(auto)"
+    value -> value
+  }
+}
+
+fn resolve_initial_run_id(
+  repo_root: String,
+  selector: types.RunSelector,
+) -> Result(String, String) {
+  case selector {
+    types.RunId(run_id) -> {
+      use _ <- result.try(journal.load(repo_root, selector))
+      Ok(run_id)
+    }
+    types.LatestRun -> {
+      use run_list <- result.try(journal.list_runs(repo_root))
+      Ok(case run_list {
+        [run, ..] -> run.run_id
+        [] -> ""
+      })
+    }
+  }
 }

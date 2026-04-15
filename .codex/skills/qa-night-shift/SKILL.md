@@ -143,6 +143,10 @@ Typical flow:
 12. after `resolve -> continue` on a setup blocker, confirm `status`,
    `report`, and Dash still show the retry-armed state and keep confidence
    below `high` until the next `night-shift start` consumes the waiver
+13. when the user specifically wants the browser surface, use
+   `night-shift dash`, then drive `start`, `resume`, and `resolve` from the
+   browser-backed HTTP/UI flow instead of the removed `dash --start`,
+   `dash --resume`, `start --ui`, or `resume --ui` entrypoints
 
 For review-driven investigations, replace steps 3-4 with:
 

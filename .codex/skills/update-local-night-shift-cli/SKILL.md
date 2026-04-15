@@ -10,10 +10,13 @@ run the code from a specific worktree.
 
 ## What this skill does
 
-- Builds the selected worktree with `gleam build`.
+- Builds the selected worktree with `gleam build` and `scripts/build_dash_assets.sh`.
 - Creates a versioned install bundle under `~/.local/share/night-shift/<label>`.
 - Copies the compiled Erlang package directories from `build/dev/erlang/`.
+- Copies the built dashboard assets from `build/dash-assets/`.
 - Writes stable `entrypoint.sh` and `entrypoint.ps1` launchers into that bundle.
+- Exports `NIGHT_SHIFT_DASH_ASSET_ROOT` from the launcher so `night-shift dash`
+  works from the installed bundle.
 - Repoints `~/.local/share/night-shift/current` to the new bundle.
 - Ensures `~/.local/bin/night-shift` exists and launches `current/entrypoint.sh run`.
 - Smoke-tests the install through the normal `night-shift` launcher.

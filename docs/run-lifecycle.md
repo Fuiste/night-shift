@@ -90,7 +90,6 @@ and the next action becomes `night-shift start`.
 night-shift doctor
 night-shift resume --explain
 night-shift resume
-night-shift resume --run run-123 --ui
 ```
 
 Night Shift reloads the saved run, validates the saved environment, recovers
@@ -184,22 +183,26 @@ attention with both the original and repair artifacts recorded.
 
 ## Dashboard
 
-The dashboard is monitor-only:
+Dash is the standalone browser entrypoint:
 
 ```sh
-night-shift start --ui
-night-shift resume --ui
+night-shift dash
 ```
 
-Night Shift binds to `127.0.0.1`, prefers port `8787`, and serves:
+Night Shift binds to `127.0.0.1`, asks the OS for an open local port, and
+serves a browser-native front door for:
 
 - run history for the current repository
 - run summary metadata
 - repo-state summary for review-driven runs, including open PR counts and drift
 - confidence posture and provenance path
 - task status
+- DAG graph and synchronized task detail
+- browser-driven init, plan, start, resume, and resolve flows
 - event timeline
 - report content
+- provenance and raw artifact links
 
-There are no browser-side controls for starting or resuming runs in this
-version.
+Execution and recovery now happen from the browser actions exposed by Dash.
+The old `dash --start`, `dash --resume`, `start --ui`, and `resume --ui`
+entrypoints are gone.

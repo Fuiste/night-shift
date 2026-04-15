@@ -7,7 +7,7 @@ import night_shift/types
 import night_shift/worktree_setup
 
 pub fn parse_start_command_test() {
-  let assert Ok(types.Start(types.RunId("run-123"), False)) =
+  let assert Ok(types.Start(types.RunId("run-123"))) =
     cli.parse(["start", "--run", "run-123"])
 }
 
@@ -66,13 +66,29 @@ pub fn parse_status_defaults_to_latest_test() {
   let assert Ok(types.Status(types.LatestRun)) = cli.parse(["status"])
 }
 
-pub fn parse_start_command_with_ui_test() {
-  let assert Ok(types.Start(types.LatestRun, True)) =
-    cli.parse(["start", "--ui"])
+pub fn parse_start_command_rejects_ui_flag_test() {
+  let assert Error(message) = cli.parse(["start", "--ui"])
+  assert message
+    == "`start --ui` was replaced by `night-shift dash`, which now owns the browser flow."
+}
+
+pub fn parse_dash_command_defaults_to_latest_test() {
+  let assert Ok(types.Dash(types.LatestRun)) = cli.parse(["dash"])
+}
+
+pub fn parse_dash_command_with_run_selector_test() {
+  let assert Ok(types.Dash(types.RunId("run-123"))) =
+    cli.parse(["dash", "--run", "run-123"])
+}
+
+pub fn parse_dash_command_rejects_transitional_start_flag_test() {
+  let assert Error(message) = cli.parse(["dash", "--start"])
+  assert message
+    == "`night-shift dash --start` was removed; open Dash and use the Start button in the browser."
 }
 
 pub fn parse_start_command_without_brief_test() {
-  let assert Ok(types.Start(types.LatestRun, False)) = cli.parse(["start"])
+  let assert Ok(types.Start(types.LatestRun)) = cli.parse(["start"])
 }
 
 pub fn parse_plan_requires_notes_test() {
@@ -126,13 +142,14 @@ pub fn parse_resolve_rejects_multiple_actions_test() {
     == "`night-shift resolve --task <task-id>` accepts exactly one of `--inspect`, `--continue`, `--complete`, or `--abandon`."
 }
 
-pub fn parse_resume_command_with_ui_test() {
-  let assert Ok(types.Resume(types.RunId("run-123"), True, False)) =
-    cli.parse(["resume", "--run", "run-123", "--ui"])
+pub fn parse_resume_command_rejects_ui_flag_test() {
+  let assert Error(message) = cli.parse(["resume", "--run", "run-123", "--ui"])
+  assert message
+    == "`resume --ui` was replaced by `night-shift dash`, which now owns the browser flow."
 }
 
 pub fn parse_resume_explain_command_test() {
-  let assert Ok(types.Resume(types.LatestRun, False, True)) =
+  let assert Ok(types.Resume(types.LatestRun, True)) =
     cli.parse(["resume", "--explain"])
 }
 

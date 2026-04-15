@@ -53,6 +53,7 @@ fi
 
 SOURCE_DIR="$(cd "$SOURCE_DIR" && pwd)"
 BUILD_DIR="$SOURCE_DIR/build/dev/erlang"
+DASH_ASSET_DIR="$SOURCE_DIR/build/dash-assets"
 
 if [ ! -f "$SOURCE_DIR/gleam.toml" ]; then
   echo "Not a Gleam project: $SOURCE_DIR" >&2
@@ -62,10 +63,16 @@ fi
 (
   cd "$SOURCE_DIR"
   gleam build
+  sh ./scripts/build_dash_assets.sh "$DASH_ASSET_DIR"
 )
 
 if [ ! -d "$BUILD_DIR" ]; then
   echo "Missing build output: $BUILD_DIR" >&2
+  exit 1
+fi
+
+if [ ! -d "$DASH_ASSET_DIR" ]; then
+  echo "Missing dashboard assets: $DASH_ASSET_DIR" >&2
   exit 1
 fi
 
@@ -88,6 +95,8 @@ for package_dir in "$BUILD_DIR"/*; do
   fi
 done
 
+cp -R "$DASH_ASSET_DIR" "$INSTALL_DIR"/dash-assets
+
 cat > "$INSTALL_DIR/entrypoint.sh" <<'EOF'
 #!/bin/sh
 set -eu
@@ -97,6 +106,7 @@ BASE=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 COMMAND="${1-default}"
 
 run() {
+  NIGHT_SHIFT_DASH_ASSET_ROOT="$BASE/dash-assets" \
   exec erl \
     -pa "$BASE"/*/ebin \
     -eval "$PACKAGE@@main:run($PACKAGE)" \
@@ -137,6 +147,7 @@ $Command = if ($args.Count -gt 0) { $args[0] } else { "run" }
 switch ($Command) {
   "run" {
     $Remaining = if ($args.Count -gt 1) { $args[1..($args.Count - 1)] } else { @() }
+    $env:NIGHT_SHIFT_DASH_ASSET_ROOT = "$Base/dash-assets"
     & erl -pa "$Base/*/ebin" -eval "$Package@@main:run($Package)" -noshell -extra @Remaining
   }
   "shell" {

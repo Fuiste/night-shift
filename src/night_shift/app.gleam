@@ -12,9 +12,9 @@ import gleam/string
 import night_shift/agent_config
 import night_shift/cli
 import night_shift/config
+import night_shift/dash/session as dash_session
 import night_shift/demo
 import night_shift/git
-import night_shift/infra/dashboard_session
 import night_shift/infra/decision_prompt
 import night_shift/infra/init_prompt
 import night_shift/infra/reset_guard
@@ -68,6 +68,7 @@ pub fn run(command: types.Command) -> Nil {
       }
     types.Reset(assume_yes, force) ->
       io.println(reset(repo_root, assume_yes, force))
+    types.Dash(run) -> dash(repo_root, run)
     _ ->
       case load_initialized_repo_config(repo_root) {
         Error(message) -> io.println(message)
@@ -129,8 +130,7 @@ fn run_initialized_command(
           )
         Error(message) -> message
       })
-    types.Start(run, False) -> io.println(start(repo_root, run, config))
-    types.Start(run, True) -> start_with_ui(repo_root, run, config)
+    types.Start(run) -> io.println(start(repo_root, run, config))
     types.Status(run) -> io.println(status(repo_root, run, config))
     types.Report(run) -> io.println(report(repo_root, run, config))
     types.Provenance(run, task_id, format) ->
@@ -138,10 +138,8 @@ fn run_initialized_command(
     types.Doctor(run) -> io.println(doctor(repo_root, run, config))
     types.Resolve(run, task_id, action) ->
       io.println(resolve(repo_root, run, task_id, action, config))
-    types.Resume(run, False, False) ->
-      io.println(resume(repo_root, run, config))
-    types.Resume(run, True, False) -> resume_with_ui(repo_root, run, config)
-    types.Resume(run, False, True) -> io.println(doctor(repo_root, run, config))
+    types.Resume(run, False) -> io.println(resume(repo_root, run, config))
+    types.Resume(run, True) -> io.println(doctor(repo_root, run, config))
     _ -> io.println("Unsupported command.")
   }
 }
@@ -350,23 +348,8 @@ fn reset(repo_root: String, assume_yes: Bool, force: Bool) -> String {
   }
 }
 
-fn start_with_ui(
-  repo_root: String,
-  selector: types.RunSelector,
-  config: types.Config,
-) -> Nil {
-  case dashboard_session.start(repo_root, selector, config) {
-    Ok(Nil) -> Nil
-    Error(message) -> io.println(message)
-  }
-}
-
-fn resume_with_ui(
-  repo_root: String,
-  run: types.RunSelector,
-  config: types.Config,
-) -> Nil {
-  case dashboard_session.resume(repo_root, run, config) {
+fn dash(repo_root: String, selector: types.RunSelector) -> Nil {
+  case dash_session.view(repo_root, selector) {
     Ok(Nil) -> Nil
     Error(message) -> io.println(message)
   }
