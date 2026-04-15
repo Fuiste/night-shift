@@ -56,6 +56,7 @@ type Model {
     connection: String,
     selected_run: String,
     selected_task: Option(String),
+    active_tab: String,
     init_form: InitForm,
     plan_form: PlanForm,
     decision_answers: List(#(String, String)),
@@ -266,6 +267,7 @@ type Msg {
   StreamErrored
   SelectRun(String)
   SelectTask(String)
+  SelectTab(String)
   UpdateInitProvider(String)
   UpdateInitModel(String)
   UpdateInitReasoning(String)
@@ -302,6 +304,7 @@ fn init(_) -> #(Model, effect.Effect(Msg)) {
       connection: "connecting",
       selected_run: target_run,
       selected_task: None,
+      active_tab: "graph",
       init_form: init_form,
       plan_form: PlanForm(notes: "", doc_path: ""),
       decision_answers: [],
@@ -325,12 +328,14 @@ fn update(model: Model, msg: Msg) -> #(Model, effect.Effect(Msg)) {
             resolve_selected_task(model.selected_task, workspace)
           let next_stream_target =
             selected_run_target(workspace.selected_run_id)
+          let tab = suggest_tab(model.active_tab, workspace)
           let next_model =
             Model(
               ..model,
               workspace: Some(workspace),
               selected_run: next_stream_target,
               selected_task: selected_task,
+              active_tab: tab,
               connection: "connected",
             )
           let stream_effect = case
@@ -364,11 +369,20 @@ fn update(model: Model, msg: Msg) -> #(Model, effect.Effect(Msg)) {
       effect.none(),
     )
     SelectRun(run_id) -> #(
-      Model(..model, selected_run: run_id, selected_task: None),
+      Model(
+        ..model,
+        selected_run: run_id,
+        selected_task: None,
+        active_tab: "graph",
+      ),
       effect.batch([fetch_workspace_effect(run_id), open_stream_effect(run_id)]),
     )
     SelectTask(task_id) -> #(
       Model(..model, selected_task: Some(task_id)),
+      effect.none(),
+    )
+    SelectTab(tab) -> #(
+      Model(..model, active_tab: tab),
       effect.none(),
     )
     UpdateInitProvider(provider) -> #(
@@ -1862,4 +1876,17 @@ fn default_model_id(models: List(ProviderModel), existing: String) -> String {
 
 fn int_to_string(value: Int) -> String {
   int.to_string(value)
+}
+
+fn suggest_tab(current: String, workspace: Workspace) -> String {
+  case current == "graph", workspace.run {
+    True, Some(run) ->
+      case run.decisions, run.setup_blocker, run.implementation_blockers {
+        [_, ..], _, _ -> "decisions"
+        _, Some(_), _ -> "recovery"
+        _, _, [_, ..] -> "recovery"
+        _, _, _ -> current
+      }
+    _, _ -> current
+  }
 }
