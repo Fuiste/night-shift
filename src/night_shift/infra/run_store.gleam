@@ -105,6 +105,7 @@ pub fn create_pending_run_with_context(
       status: types.RunPending,
       created_at: timestamp,
       updated_at: timestamp,
+      recovery_blocker: None,
       tasks: [],
       handoff_states: [],
     )

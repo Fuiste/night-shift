@@ -130,7 +130,19 @@ Typical flow:
 9. use `night-shift doctor` or `night-shift resume --explain` before any real
    resume attempt when the run was interrupted
 10. use `night-shift resolve` or `night-shift resume` only if the run actually
-   requires it
+   requires it; if an interrupted implementation task already landed in manual
+   attention with a retained worktree, inspect the report and worktree first,
+   then use `night-shift resolve --task <task-id> --inspect|--continue|--complete|--abandon`
+   instead of expecting `resume` alone to clear it
+11. if a review-driven or setup-heavy run blocks before implementation during
+   environment preflight or task setup, treat that as a recoverable blocker:
+   inspect the failed gate/logs, confirm no PRs were updated yet, and use
+   `night-shift resolve` to inspect, continue with the one-shot waiver, or
+   abandon the run instead of assuming the user must edit
+   `worktree-setup.toml`
+12. after `resolve -> continue` on a setup blocker, confirm `status`,
+   `report`, and Dash still show the retry-armed state and keep confidence
+   below `high` until the next `night-shift start` consumes the waiver
 
 For review-driven investigations, replace steps 3-4 with:
 

@@ -7,6 +7,7 @@ import night_shift/domain/confidence
 import night_shift/domain/provenance
 import night_shift/domain/repo_state
 import night_shift/domain/review_run_projection
+import night_shift/domain/summary as domain_summary
 import night_shift/repo_state_runtime
 import night_shift/types
 
@@ -39,8 +40,9 @@ pub fn render(
       <> types.confidence_posture_to_string(confidence_assessment.posture),
     "- Confidence reasons: "
       <> confidence.reasons_summary(confidence_assessment),
-    render_summary(run.decisions, run.planning_dirty, run.tasks, events),
+    render_summary(run, run.decisions, run.planning_dirty, run.tasks, events),
     render_planning_validation_summary(events),
+    render_retry_armed_summary(run),
     render_failure_summary(run, events),
     render_review_replacement_section(run, events),
     render_worktree_hygiene_section(run, events),
@@ -127,6 +129,7 @@ fn render_repo_snapshot_group(title: String, entries: List(String)) -> String {
 }
 
 fn render_summary(
+  run: types.RunRecord,
   decisions: List(types.RecordedDecision),
   planning_dirty: Bool,
   tasks: List(types.Task),
@@ -150,22 +153,19 @@ fn render_summary(
       task.kind == types.ImplementationTask && task.state == types.Blocked
     })
     |> list.length
-  let derived_blocked_count = case
-    planning_dirty && manual_attention_count == 0 && blocked_count == 0
-  {
-    True -> 1
-    False -> manual_attention_count + blocked_count
+  let derived_blocked_count = case active_recovery_blocker(run) {
+    Some(_) -> 1
+    None ->
+      case planning_dirty && manual_attention_count == 0 && blocked_count == 0 {
+        True -> 1
+        False -> manual_attention_count + blocked_count
+      }
   }
   let failed_count =
     tasks
     |> list.filter(fn(task) { task.state == types.Failed })
     |> list.length
-  let run_level_failure_count = case
-    latest_environment_preflight_failure(events)
-  {
-    Some(_) -> 1
-    None -> 0
-  }
+  let run_level_failure_count = 0
   let queued_count =
     tasks
     |> list.filter(fn(task) {
@@ -465,9 +465,17 @@ fn render_failure_summary(
   run: types.RunRecord,
   events: List(types.RunEvent),
 ) -> String {
-  case latest_environment_preflight_failure(events) {
-    Some(message) ->
-      "\n## Failure\n- Type: environment bootstrap\n- Details: " <> message
+  case active_recovery_blocker(run) {
+    Some(blocker) ->
+      "\n## Blocked Before Implementation\n- Failed gate: "
+      <> domain_summary.recovery_gate_label(blocker)
+      <> "\n- Setup recovery: "
+      <> domain_summary.setup_recovery_intro(run)
+      <> "\n- Details: "
+      <> blocker.message
+      <> "\n- Log: "
+      <> blocker.log_path
+      <> replacement_fragment(run)
     None ->
       case run.status, latest_run_failed_message(events) {
         types.RunFailed, Some(message) ->
@@ -477,6 +485,23 @@ fn render_failure_summary(
           <> message
         _, _ -> ""
       }
+  }
+}
+
+fn render_retry_armed_summary(run: types.RunRecord) -> String {
+  case pending_recovery_bypass(run) {
+    Some(blocker) ->
+      "\n## Retry Armed\n- Failed gate: "
+      <> domain_summary.recovery_gate_label(blocker)
+      <> "\n- Setup recovery: "
+      <> domain_summary.setup_recovery_intro(run)
+      <> "\n- Waiver: The failed gate was waived once; `night-shift start` will retry from there."
+      <> "\n- Details: "
+      <> blocker.message
+      <> "\n- Log: "
+      <> blocker.log_path
+      <> replacement_fragment(run)
+    None -> ""
   }
 }
 
@@ -495,23 +520,36 @@ fn task_requires_manual_attention(
   || types.task_requires_manual_attention(decisions, task)
 }
 
-fn latest_environment_preflight_failure(
-  events: List(types.RunEvent),
-) -> Option(String) {
-  latest_environment_preflight_failure_loop(list.reverse(events))
+fn active_recovery_blocker(
+  run: types.RunRecord,
+) -> Option(types.RecoveryBlocker) {
+  case run.recovery_blocker {
+    Some(blocker) ->
+      case blocker.disposition == types.RecoveryBlocking {
+        True -> Some(blocker)
+        False -> None
+      }
+    _ -> None
+  }
 }
 
-fn latest_environment_preflight_failure_loop(
-  events: List(types.RunEvent),
-) -> Option(String) {
-  case events {
-    [] -> None
-    [event, ..rest] ->
-      case event.kind == "environment_preflight_failed" {
-        True -> Some(event.message)
-        False -> latest_environment_preflight_failure_loop(rest)
+fn pending_recovery_bypass(
+  run: types.RunRecord,
+) -> Option(types.RecoveryBlocker) {
+  case run.recovery_blocker {
+    Some(blocker) ->
+      case blocker.disposition == types.RecoveryWaivedOnce {
+        True -> Some(blocker)
+        False -> None
       }
+    _ -> None
   }
+}
+
+fn replacement_fragment(run: types.RunRecord) -> String {
+  domain_summary.setup_recovery_outcome_lines(run)
+  |> list.map(fn(line) { "\n- " <> line })
+  |> string.join(with: "")
 }
 
 fn latest_run_failed_message(events: List(types.RunEvent)) -> Option(String) {

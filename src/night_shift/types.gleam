@@ -452,6 +452,93 @@ pub type RunEvent {
   RunEvent(kind: String, at: String, message: String, task_id: Option(String))
 }
 
+pub type RecoveryBlockerKind {
+  EnvironmentPreflightBlocker
+  TaskSetupBlocker
+}
+
+pub fn recovery_blocker_kind_to_string(kind: RecoveryBlockerKind) -> String {
+  case kind {
+    EnvironmentPreflightBlocker -> "environment_preflight"
+    TaskSetupBlocker -> "task_setup"
+  }
+}
+
+pub fn recovery_blocker_kind_from_string(
+  value: String,
+) -> Result(RecoveryBlockerKind, String) {
+  case value {
+    "environment_preflight" -> Ok(EnvironmentPreflightBlocker)
+    "task_setup" -> Ok(TaskSetupBlocker)
+    _ -> Error("Unsupported recovery blocker kind: " <> value)
+  }
+}
+
+pub type RecoveryBlockerPhase {
+  PreflightPhase
+  SetupPhase
+  MaintenancePhase
+}
+
+pub fn recovery_blocker_phase_to_string(phase: RecoveryBlockerPhase) -> String {
+  case phase {
+    PreflightPhase -> "preflight"
+    SetupPhase -> "setup"
+    MaintenancePhase -> "maintenance"
+  }
+}
+
+pub fn recovery_blocker_phase_from_string(
+  value: String,
+) -> Result(RecoveryBlockerPhase, String) {
+  case value {
+    "preflight" -> Ok(PreflightPhase)
+    "setup" -> Ok(SetupPhase)
+    "maintenance" -> Ok(MaintenancePhase)
+    _ -> Error("Unsupported recovery blocker phase: " <> value)
+  }
+}
+
+pub type RecoveryBlockerDisposition {
+  RecoveryBlocking
+  RecoveryWaivedOnce
+}
+
+pub fn recovery_blocker_disposition_to_string(
+  disposition: RecoveryBlockerDisposition,
+) -> String {
+  case disposition {
+    RecoveryBlocking -> "blocking"
+    RecoveryWaivedOnce -> "waived_once"
+  }
+}
+
+pub fn recovery_blocker_disposition_from_string(
+  value: String,
+) -> Result(RecoveryBlockerDisposition, String) {
+  case value {
+    "blocking" -> Ok(RecoveryBlocking)
+    "waived_once" -> Ok(RecoveryWaivedOnce)
+    _ -> Error("Unsupported recovery blocker disposition: " <> value)
+  }
+}
+
+pub type RecoveryBlocker {
+  RecoveryBlocker(
+    kind: RecoveryBlockerKind,
+    phase: RecoveryBlockerPhase,
+    task_id: Option(String),
+    message: String,
+    log_path: String,
+    no_changes_produced: Bool,
+    disposition: RecoveryBlockerDisposition,
+  )
+}
+
+pub fn recovery_blocker_is_active(blocker: RecoveryBlocker) -> Bool {
+  blocker.disposition == RecoveryBlocking
+}
+
 /// Persistent record for one Night Shift run.
 pub type RunRecord {
   RunRecord(
@@ -475,6 +562,7 @@ pub type RunRecord {
     status: RunStatus,
     created_at: String,
     updated_at: String,
+    recovery_blocker: Option(RecoveryBlocker),
     tasks: List(Task),
     handoff_states: List(TaskHandoffState),
   )
@@ -704,8 +792,19 @@ pub type Command {
     format: ProvenanceFormat,
   )
   Doctor(run: RunSelector)
-  Resolve(run: RunSelector)
+  Resolve(
+    run: RunSelector,
+    task_id: Option(String),
+    action: Option(ResolveAction),
+  )
   Resume(run: RunSelector, ui_enabled: Bool, explain_only: Bool)
   Demo(ui_enabled: Bool)
   Help
+}
+
+pub type ResolveAction {
+  ResolveInspect
+  ResolveContinue
+  ResolveComplete
+  ResolveAbandon
 }

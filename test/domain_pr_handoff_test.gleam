@@ -124,6 +124,7 @@ fn sample_run() -> types.RunRecord {
     status: types.RunPending,
     created_at: "",
     updated_at: "",
+    recovery_blocker: None,
     tasks: [],
     handoff_states: [],
   )

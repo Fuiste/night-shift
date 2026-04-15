@@ -21,6 +21,36 @@ pub fn pluralize(count: Int, noun: String) -> String {
   }
 }
 
+pub fn setup_recovery_intro(run: types.RunRecord) -> String {
+  case run.planning_provenance {
+    Some(provenance) ->
+      case types.planning_provenance_uses_reviews(provenance) {
+        True ->
+          "Review-driven planning succeeded, but execution stopped before implementation."
+        False ->
+          "Planning succeeded, but execution stopped before implementation."
+      }
+    None -> "Planning succeeded, but execution stopped before implementation."
+  }
+}
+
+pub fn recovery_gate_label(blocker: types.RecoveryBlocker) -> String {
+  types.recovery_blocker_phase_to_string(blocker.phase)
+  <> " "
+  <> types.recovery_blocker_kind_to_string(blocker.kind)
+}
+
+pub fn setup_recovery_outcome_lines(run: types.RunRecord) -> List(String) {
+  case replacement_pr_numbers(run.tasks) {
+    [] -> ["No new commits or PR updates were produced yet."]
+    pr_numbers -> [
+      "Intended replacement PRs remain pending: #"
+        <> string.join(pr_numbers |> list.map(int.to_string), with: ", #"),
+      "Existing reviewed PRs remain unchanged until replacement delivery succeeds.",
+    ]
+  }
+}
+
 pub fn manual_attention_summary(task: types.Task) -> String {
   "Primary blocker: "
   <> task.description
@@ -81,6 +111,25 @@ pub fn planning_validation_summary(
     "Night Shift rejected the planner output before updating the task graph.",
     "Validation errors: " <> task_validation.render_issues(issues),
   )
+}
+
+fn replacement_pr_numbers(tasks: List(types.Task)) -> List(Int) {
+  unique_pr_numbers(
+    tasks
+      |> list.flat_map(fn(task) { task.superseded_pr_numbers }),
+    [],
+  )
+}
+
+fn unique_pr_numbers(values: List(Int), acc: List(Int)) -> List(Int) {
+  case values {
+    [] -> list.reverse(acc)
+    [value, ..rest] ->
+      case list.contains(acc, value) {
+        True -> unique_pr_numbers(rest, acc)
+        False -> unique_pr_numbers(rest, [value, ..acc])
+      }
+  }
 }
 
 pub fn follow_up_validation_summary(

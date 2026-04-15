@@ -1,7 +1,10 @@
 import filepath
+import gleam/list
 import gleam/option.{None, Some}
+import gleam/result
 import gleam/string
 import night_shift/dashboard
+import night_shift/domain/confidence
 import night_shift/domain/provenance as provenance_domain
 import night_shift/domain/repo_state
 import night_shift/git
@@ -12,6 +15,7 @@ import night_shift/shell
 import night_shift/system
 import night_shift/types
 import night_shift/usecase/doctor
+import night_shift/usecase/status as status_usecase
 import night_shift_test_support as support
 import simplifile
 
@@ -105,6 +109,175 @@ pub fn dashboard_payload_includes_confidence_and_provenance_test() {
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
 
+pub fn status_summary_calls_out_setup_recovery_and_replacements_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    support.absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-status-setup-recovery-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let brief_path = filepath.join(base_dir, "brief.md")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(base_dir)
+  let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
+  support.seed_git_repo(repo_root, base_dir)
+  let assert Ok(run) = support.start_run(repo_root, brief_path, types.Codex, 1)
+  let blocked_run =
+    types.RunRecord(
+      ..run,
+      status: types.RunBlocked,
+      planning_provenance: Some(types.ReviewsOnly),
+      recovery_blocker: Some(types.RecoveryBlocker(
+        kind: types.EnvironmentPreflightBlocker,
+        phase: types.PreflightPhase,
+        task_id: None,
+        message: "missing-tool setup",
+        log_path: filepath.join(run.run_path, "logs/environment-preflight.log"),
+        no_changes_produced: True,
+        disposition: types.RecoveryBlocking,
+      )),
+      tasks: [
+        types.Task(
+          ..list.first(run.tasks)
+          |> result.unwrap(or: types.Task(
+            id: "review-fix",
+            title: "Review fix",
+            description: "",
+            dependencies: [],
+            acceptance: [],
+            demo_plan: [],
+            decision_requests: [],
+            superseded_pr_numbers: [36, 37],
+            kind: types.ImplementationTask,
+            execution_mode: types.Serial,
+            state: types.Queued,
+            worktree_path: "",
+            branch_name: "",
+            pr_number: "",
+            summary: "",
+            runtime_context: None,
+          )),
+          superseded_pr_numbers: [36, 37],
+        ),
+      ],
+    )
+  let assert Ok(_) = journal.rewrite_run(blocked_run)
+  let assert Ok(status_result) =
+    status_usecase.execute(repo_root, types.LatestRun, types.default_config())
+
+  assert status_result.confidence.posture == types.ConfidenceLow
+  assert string.contains(
+    does: status_result.summary,
+    contain: "Blocked before implementation: yes",
+  )
+  assert string.contains(
+    does: status_result.summary,
+    contain: "Existing reviewed PRs remain unchanged until replacement delivery succeeds.",
+  )
+  assert string.contains(
+    does: status_result.summary,
+    contain: "Next action: night-shift resolve",
+  )
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn status_summary_keeps_retry_armed_setup_recovery_visible_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    support.absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-status-retry-armed-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let brief_path = filepath.join(base_dir, "brief.md")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(base_dir)
+  let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
+  support.seed_git_repo(repo_root, base_dir)
+  let assert Ok(run) = support.start_run(repo_root, brief_path, types.Codex, 1)
+  let pending_run =
+    types.RunRecord(
+      ..run,
+      status: types.RunPending,
+      planning_provenance: Some(types.NotesOnly(types.NotesFile(brief_path))),
+      recovery_blocker: Some(types.RecoveryBlocker(
+        kind: types.EnvironmentPreflightBlocker,
+        phase: types.PreflightPhase,
+        task_id: None,
+        message: "missing-tool setup",
+        log_path: filepath.join(run.run_path, "logs/environment-preflight.log"),
+        no_changes_produced: True,
+        disposition: types.RecoveryWaivedOnce,
+      )),
+    )
+  let assert Ok(_) = journal.rewrite_run(pending_run)
+  let assert Ok(status_result) =
+    status_usecase.execute(repo_root, types.LatestRun, types.default_config())
+  let rendered_report = report.render(pending_run, [], None)
+
+  assert status_result.confidence.posture == types.ConfidenceGuarded
+  assert string.contains(
+    does: status_result.summary,
+    contain: "Retry armed: yes",
+  )
+  assert string.contains(
+    does: status_result.summary,
+    contain: "Planning succeeded, but execution stopped before implementation.",
+  )
+  assert !string.contains(
+    does: status_result.summary,
+    contain: "Review-driven planning succeeded",
+  )
+  assert string.contains(
+    does: status_result.summary,
+    contain: "Next action: night-shift start",
+  )
+  assert string.contains(does: rendered_report, contain: "## Retry Armed")
+  assert string.contains(
+    does: rendered_report,
+    contain: "Planning succeeded, but execution stopped before implementation.",
+  )
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn confidence_is_low_for_interrupted_implementation_manual_attention_test() {
+  let missing_worktree =
+    filepath.join(review_run().repo_root, "missing-blocked-impl")
+  let blocked_run =
+    types.RunRecord(..review_run(), status: types.RunBlocked, tasks: [
+      types.Task(
+        id: "blocked-impl",
+        title: "Blocked implementation task",
+        description: "Needs manual recovery after an interrupted run.",
+        dependencies: [],
+        acceptance: [],
+        demo_plan: [],
+        decision_requests: [],
+        superseded_pr_numbers: [],
+        kind: types.ImplementationTask,
+        execution_mode: types.Serial,
+        state: types.ManualAttention,
+        worktree_path: missing_worktree,
+        branch_name: "",
+        pr_number: "",
+        summary: "Interrupted run left changes in the worktree.",
+        runtime_context: None,
+      ),
+    ])
+  let assessment = confidence.assess(blocked_run, [], None)
+
+  assert assessment.posture == types.ConfidenceLow
+  assert string.contains(
+    does: confidence.reasons_summary(assessment),
+    contain: "manual recovery",
+  )
+}
+
 pub fn doctor_flags_dirty_and_missing_worktrees_test() {
   let unique = system.unique_id()
   let base_dir =
@@ -173,6 +346,99 @@ pub fn doctor_flags_dirty_and_missing_worktrees_test() {
   assert string.contains(
     does: rendered,
     contain: "[irrecoverable] Missing task",
+  )
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn doctor_recommends_inspection_for_interrupted_implementation_manual_attention_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    support.absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-doctor-interrupted-impl-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let brief_path = filepath.join(base_dir, "brief.md")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
+  support.seed_git_repo(repo_root, base_dir)
+  let assert Ok(run) = support.start_run(repo_root, brief_path, types.Codex, 1)
+  let blocked_run =
+    types.RunRecord(..run, status: types.RunBlocked, tasks: [
+      types.Task(
+        id: "dirty-task",
+        title: "Dirty task",
+        description: "",
+        dependencies: [],
+        acceptance: [],
+        demo_plan: [],
+        decision_requests: [],
+        superseded_pr_numbers: [],
+        kind: types.ImplementationTask,
+        execution_mode: types.Serial,
+        state: types.ManualAttention,
+        worktree_path: repo_root,
+        branch_name: "night-shift/dirty-task",
+        pr_number: "",
+        summary: "Interrupted run left changes in the worktree.",
+        runtime_context: None,
+      ),
+    ])
+  let assert Ok(_) = journal.rewrite_run(blocked_run)
+  let assert Ok(rendered) =
+    doctor.execute(repo_root, types.LatestRun, types.default_config())
+
+  assert string.contains(
+    does: rendered,
+    contain: "Inspect the report and retained worktree for the interrupted implementation task",
+  )
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn doctor_recommends_resolve_for_blocked_before_implementation_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    support.absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-doctor-setup-recovery-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let brief_path = filepath.join(base_dir, "brief.md")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
+  support.seed_git_repo(repo_root, base_dir)
+  let assert Ok(run) = support.start_run(repo_root, brief_path, types.Codex, 1)
+  let blocked_run =
+    types.RunRecord(
+      ..run,
+      status: types.RunBlocked,
+      recovery_blocker: Some(types.RecoveryBlocker(
+        kind: types.TaskSetupBlocker,
+        phase: types.SetupPhase,
+        task_id: Some("demo-task"),
+        message: "Worktree setup phase failed while running `missing-tool install`.",
+        log_path: filepath.join(run.run_path, "logs/demo-task.env.log"),
+        no_changes_produced: True,
+        disposition: types.RecoveryBlocking,
+      )),
+    )
+  let assert Ok(_) = journal.rewrite_run(blocked_run)
+  let assert Ok(rendered) =
+    doctor.execute(repo_root, types.LatestRun, types.default_config())
+
+  assert string.contains(
+    does: rendered,
+    contain: "Inspect the blocked-before-implementation setup gate first:",
+  )
+  assert string.contains(
+    does: rendered,
+    contain: "use `night-shift resolve` to inspect, continue, or abandon the run.",
   )
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
@@ -266,6 +532,7 @@ fn review_run() -> types.RunRecord {
     status: types.RunCompleted,
     created_at: "2026-04-13T17:30:00Z",
     updated_at: "2026-04-13T18:02:00Z",
+    recovery_blocker: None,
     tasks: [
       types.Task(
         id: "rewrite-root",

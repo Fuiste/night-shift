@@ -3,12 +3,14 @@ import gleam/list
 import gleam/option.{None, Some}
 import gleam/result
 import gleam/string
+import night_shift/config
 import night_shift/journal
 import night_shift/project
 import night_shift/provider
 import night_shift/shell
 import night_shift/system
 import night_shift/types
+import night_shift/usecase/resolve as resolve_usecase
 import night_shift/worktree_setup
 import night_shift_test_support as support
 import simplifile
@@ -895,6 +897,500 @@ pub fn stale_blocked_run_status_and_start_guidance_test() {
   )
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn interrupted_implementation_block_guides_to_inspection_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    support.absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-interrupted-implementation-block-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let brief_path = filepath.join(base_dir, "brief.md")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) = support.initialize_project_home(repo_root)
+  support.seed_git_repo(repo_root, base_dir)
+  let assert Ok(_) = simplifile.write("# Brief\n", to: brief_path)
+  let assert Ok(run) = support.start_run(repo_root, brief_path, types.Codex, 1)
+  let interrupted_task =
+    types.Task(
+      id: "interrupted-ui-task",
+      title: "Interrupted UI task",
+      description: "Inspect retained implementation work before continuing.",
+      dependencies: [],
+      acceptance: [],
+      demo_plan: [],
+      decision_requests: [],
+      superseded_pr_numbers: [],
+      kind: types.ImplementationTask,
+      execution_mode: types.Serial,
+      state: types.ManualAttention,
+      worktree_path: repo_root,
+      branch_name: "night-shift/interrupted-ui-task",
+      pr_number: "",
+      summary: "Interrupted run left changes in the worktree.",
+      runtime_context: None,
+    )
+  let blocked_run =
+    types.RunRecord(..run, status: types.RunBlocked, tasks: [interrupted_task])
+  let assert Ok(_) = journal.rewrite_run(blocked_run)
+  let assert Ok(#(_before_run, before_events)) =
+    journal.load(repo_root, types.RunId(run.run_id))
+
+  let status_result =
+    support.run_local_cli_command(
+      ["status"],
+      repo_root,
+      filepath.join(base_dir, "status.log"),
+    )
+  let resolve_result =
+    support.run_local_cli_command(
+      ["resolve", "--task", interrupted_task.id, "--inspect"],
+      repo_root,
+      filepath.join(base_dir, "resolve.log"),
+    )
+  let assert Ok(#(after_inspect_run, after_inspect_events)) =
+    journal.load(repo_root, types.RunId(run.run_id))
+  let start_result =
+    support.run_local_cli_command(
+      ["start"],
+      repo_root,
+      filepath.join(base_dir, "start.log"),
+    )
+  let resume_result =
+    support.run_local_cli_command(
+      ["resume"],
+      repo_root,
+      filepath.join(base_dir, "resume.log"),
+    )
+
+  let assert Ok(status_output) = status_result
+  let assert Ok(resolve_output) = resolve_result
+  let assert Ok(start_output) = start_result
+  let assert Ok(resume_output) = resume_result
+
+  assert string.contains(
+    does: status_output,
+    contain: "Outstanding decisions: 0",
+  )
+  assert string.contains(
+    does: status_output,
+    contain: "Next action: inspect the report and retained worktree",
+  )
+  assert string.contains(
+    does: resolve_output,
+    contain: "Task `interrupted-ui-task` is blocked by interrupted implementation work.",
+  )
+  assert string.contains(
+    does: resolve_output,
+    contain: "Worktree: " <> repo_root,
+  )
+  assert string.contains(
+    does: start_output,
+    contain: "interrupted implementation task now requires manual recovery",
+  )
+  assert string.contains(does: start_output, contain: blocked_run.report_path)
+  assert string.contains(
+    does: resume_output,
+    contain: "Next action: inspect the report and retained worktree",
+  )
+  assert after_inspect_run.status == types.RunBlocked
+  assert list.length(after_inspect_events) == list.length(before_events)
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn resolve_continue_recovers_interrupted_implementation_task_to_pending_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    support.absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-resolve-continue-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let brief_path = filepath.join(base_dir, "brief.md")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) = support.initialize_project_home(repo_root)
+  support.seed_git_repo(repo_root, base_dir)
+  let assert Ok(_) = simplifile.write("# Brief\n", to: brief_path)
+  let assert Ok(run) = support.start_run(repo_root, brief_path, types.Codex, 1)
+  let assert Ok(_) =
+    simplifile.write(
+      "retained draft\n",
+      to: filepath.join(repo_root, "DRAFT.md"),
+    )
+  let interrupted_task =
+    types.Task(
+      ..interrupted_implementation_task("resume-ui-task", repo_root),
+      branch_name: "night-shift/resume-ui-task",
+      runtime_context: Some(types.RuntimeContext(
+        worktree_id: "resume-ui-task",
+        compose_project: "resume-ui-task",
+        port_base: 3000,
+        named_ports: [types.RuntimePort(name: "app", value: 3000)],
+        runtime_dir: filepath.join(base_dir, "runtime"),
+        env_file_path: filepath.join(filepath.join(base_dir, "runtime"), ".env"),
+        manifest_path: filepath.join(
+          filepath.join(base_dir, "runtime"),
+          "manifest.json",
+        ),
+        handoff_path: filepath.join(
+          filepath.join(base_dir, "runtime"),
+          "handoff.md",
+        ),
+      )),
+    )
+  let blocked_run =
+    types.RunRecord(..run, status: types.RunBlocked, tasks: [interrupted_task])
+  let assert Ok(_) = journal.rewrite_run(blocked_run)
+
+  let resolve_result =
+    support.run_local_cli_command(
+      ["resolve", "--task", interrupted_task.id, "--continue"],
+      repo_root,
+      filepath.join(base_dir, "resolve.log"),
+    )
+  let assert Ok(resolve_output) = resolve_result
+  let assert Ok(#(updated_run, events)) =
+    journal.load(repo_root, types.RunId(run.run_id))
+  let assert [updated_task] = updated_run.tasks
+  let assert [latest_event, ..] = list.reverse(events)
+
+  assert updated_run.status == types.RunPending
+  assert updated_task.state == types.Ready
+  assert updated_task.summary == ""
+  assert updated_task.worktree_path == repo_root
+  assert updated_task.branch_name == interrupted_task.branch_name
+  assert updated_task.runtime_context == interrupted_task.runtime_context
+  assert latest_event.kind == "run_pending"
+  assert string.contains(
+    does: resolve_output,
+    contain: "finished with status pending",
+  )
+  assert string.contains(
+    does: resolve_output,
+    contain: "Next action: night-shift start",
+  )
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn resolve_complete_marks_task_completed_and_unblocks_dependents_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    support.absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-resolve-complete-success-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let brief_path = filepath.join(base_dir, "brief.md")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) = support.initialize_project_home(repo_root)
+  support.seed_git_repo(repo_root, base_dir)
+  let assert Ok(_) = simplifile.write("# Brief\n", to: brief_path)
+  let assert Ok(run) = support.start_run(repo_root, brief_path, types.Codex, 1)
+  let assert Ok(_) =
+    simplifile.write(
+      "retained draft\n",
+      to: filepath.join(repo_root, "DRAFT.md"),
+    )
+  let blocked_task =
+    types.Task(
+      ..interrupted_implementation_task("complete-ui-task", repo_root),
+      branch_name: "night-shift/complete-ui-task",
+    )
+  let dependent_task =
+    types.Task(
+      id: "ship-docs-task",
+      title: "Ship docs task",
+      description: "Continue after recovery completes.",
+      dependencies: [blocked_task.id],
+      acceptance: [],
+      demo_plan: [],
+      decision_requests: [],
+      superseded_pr_numbers: [],
+      kind: types.ImplementationTask,
+      execution_mode: types.Serial,
+      state: types.Queued,
+      worktree_path: "",
+      branch_name: "",
+      pr_number: "",
+      summary: "",
+      runtime_context: None,
+    )
+  let blocked_run =
+    types.RunRecord(..run, status: types.RunBlocked, tasks: [
+      blocked_task,
+      dependent_task,
+    ])
+  let assert Ok(_) = journal.rewrite_run(blocked_run)
+
+  let resolve_result =
+    support.run_local_cli_command(
+      ["resolve", "--task", blocked_task.id, "--complete"],
+      repo_root,
+      filepath.join(base_dir, "resolve.log"),
+    )
+  let assert Ok(resolve_output) = resolve_result
+  let assert Ok(#(updated_run, events)) =
+    journal.load(repo_root, types.RunId(run.run_id))
+  let assert [completed_task, ready_task] = updated_run.tasks
+
+  assert updated_run.status == types.RunPending
+  assert completed_task.state == types.Completed
+  assert string.contains(
+    does: completed_task.summary,
+    contain: "Operator completed retained work and verification passed.",
+  )
+  assert ready_task.state == types.Ready
+  assert list.any(events, fn(event) { event.kind == "task_verified" })
+  assert string.contains(
+    does: resolve_output,
+    contain: "finished with status pending",
+  )
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn resolve_complete_keeps_recovery_blocked_when_verification_fails_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    support.absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-resolve-complete-failure-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let brief_path = filepath.join(base_dir, "brief.md")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) = support.initialize_project_home(repo_root)
+  support.seed_git_repo(repo_root, base_dir)
+  let assert Ok(_) =
+    simplifile.write(
+      config.render(
+        types.Config(..types.default_config(), verification_commands: ["false"]),
+      ),
+      to: project.config_path(repo_root),
+    )
+  let assert Ok(_) = simplifile.write("# Brief\n", to: brief_path)
+  let assert Ok(run) = support.start_run(repo_root, brief_path, types.Codex, 1)
+  let assert Ok(_) =
+    simplifile.write(
+      "retained draft\n",
+      to: filepath.join(repo_root, "DRAFT.md"),
+    )
+  let blocked_task =
+    types.Task(
+      ..interrupted_implementation_task("failed-verify-task", repo_root),
+      branch_name: "night-shift/failed-verify-task",
+    )
+  let blocked_run =
+    types.RunRecord(..run, status: types.RunBlocked, tasks: [blocked_task])
+  let assert Ok(_) = journal.rewrite_run(blocked_run)
+
+  let resolve_result =
+    support.run_local_cli_command(
+      ["resolve", "--task", blocked_task.id, "--complete"],
+      repo_root,
+      filepath.join(base_dir, "resolve.log"),
+    )
+  let assert Ok(resolve_output) = resolve_result
+  let assert Ok(#(updated_run, events)) =
+    journal.load(repo_root, types.RunId(run.run_id))
+  let assert [updated_task] = updated_run.tasks
+  let verification_log =
+    filepath.join(run.run_path, "logs/" <> blocked_task.id <> ".verify.log")
+  let assert Ok(verification_contents) = simplifile.read(verification_log)
+
+  assert updated_run.status == types.RunBlocked
+  assert updated_task.state == types.ManualAttention
+  assert string.contains(
+    does: updated_task.summary,
+    contain: "Primary blocker: verification failed.",
+  )
+  assert string.contains(does: updated_task.summary, contain: verification_log)
+  assert string.contains(does: updated_task.summary, contain: "$ false")
+  assert verification_contents == ""
+  assert list.any(events, fn(event) {
+    event.kind == "task_manual_attention"
+    && event.task_id == Some(blocked_task.id)
+  })
+  assert string.contains(
+    does: resolve_output,
+    contain: "finished with status blocked",
+  )
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn resolve_abandon_replans_after_discarding_retained_work_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    support.absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-resolve-abandon-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let brief_path = filepath.join(base_dir, "brief.md")
+  let fake_provider = filepath.join(bin_dir, "fake-provider")
+  let state_home = filepath.join(base_dir, "state")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
+  let old_state_home = system.get_env("XDG_STATE_HOME")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) = support.initialize_project_home(repo_root)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = support.write_fake_provider(fake_provider)
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_provider),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+  support.seed_git_repo(repo_root, base_dir)
+  let assert Ok(_) = simplifile.write("# Brief\n", to: brief_path)
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
+  system.set_env("XDG_STATE_HOME", state_home)
+
+  let assert Ok(run) = support.start_run(repo_root, brief_path, types.Codex, 1)
+  let assert Ok(_) =
+    simplifile.write(
+      "retained draft\n",
+      to: filepath.join(repo_root, "DRAFT.md"),
+    )
+  let blocked_task =
+    types.Task(
+      ..interrupted_implementation_task("abandon-ui-task", repo_root),
+      branch_name: "night-shift/abandon-ui-task",
+    )
+  let blocked_run =
+    types.RunRecord(..run, status: types.RunBlocked, tasks: [blocked_task])
+  let assert Ok(_) = journal.rewrite_run(blocked_run)
+
+  let resolve_result =
+    support.run_local_cli_command(
+      ["resolve", "--task", blocked_task.id, "--abandon"],
+      repo_root,
+      filepath.join(base_dir, "resolve.log"),
+    )
+  let assert Ok(resolve_output) = resolve_result
+  let assert Ok(#(updated_run, _events)) =
+    journal.load(repo_root, types.RunId(run.run_id))
+  let assert Ok(brief_contents) = simplifile.read(run.brief_path)
+  let assert [replacement_task] = updated_run.tasks
+
+  support.restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
+  support.restore_env("XDG_STATE_HOME", old_state_home)
+
+  assert updated_run.status == types.RunPending
+  assert updated_run.planning_dirty == False
+  assert replacement_task.id == "demo-task"
+  assert string.contains(
+    does: brief_contents,
+    contain: "## Recovery Note: Abandoned Retained Work",
+  )
+  assert string.contains(
+    does: brief_contents,
+    contain: "Planner instruction: replace or omit this task when replanning remaining work; do not assume the discarded partial work was completed.",
+  )
+  assert string.contains(
+    does: resolve_output,
+    contain: "finished with status pending",
+  )
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn resolve_rejects_active_runs_until_resume_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    support.absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-resolve-active-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let brief_path = filepath.join(base_dir, "brief.md")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(repo_root)
+  let assert Ok(_) = support.initialize_project_home(repo_root)
+  support.seed_git_repo(repo_root, base_dir)
+  let assert Ok(_) = simplifile.write("# Brief\n", to: brief_path)
+  let assert Ok(run) = support.start_run(repo_root, brief_path, types.Codex, 1)
+  let running_task =
+    types.Task(
+      id: "active-ui-task",
+      title: "Active UI task",
+      description: "Still running.",
+      dependencies: [],
+      acceptance: [],
+      demo_plan: [],
+      decision_requests: [],
+      superseded_pr_numbers: [],
+      kind: types.ImplementationTask,
+      execution_mode: types.Serial,
+      state: types.Running,
+      worktree_path: repo_root,
+      branch_name: "night-shift/active-ui-task",
+      pr_number: "",
+      summary: "",
+      runtime_context: None,
+    )
+  let active_run =
+    types.RunRecord(..run, status: types.RunActive, tasks: [running_task])
+  let assert Ok(_) = journal.rewrite_run(active_run)
+
+  let resolve_result =
+    resolve_usecase.execute(
+      repo_root,
+      types.RunId(run.run_id),
+      None,
+      None,
+      types.default_config(),
+      fn(_, _) { Ok(#([], [])) },
+    )
+
+  let assert Error(message) = resolve_result
+  assert string.contains(
+    does: message,
+    contain: "is active and cannot be resolved right now",
+  )
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+fn interrupted_implementation_task(
+  id: String,
+  worktree_path: String,
+) -> types.Task {
+  types.Task(
+    id: id,
+    title: "Interrupted UI task",
+    description: "Inspect retained implementation work before continuing.",
+    dependencies: [],
+    acceptance: [],
+    demo_plan: [],
+    decision_requests: [],
+    superseded_pr_numbers: [],
+    kind: types.ImplementationTask,
+    execution_mode: types.Serial,
+    state: types.ManualAttention,
+    worktree_path: worktree_path,
+    branch_name: "",
+    pr_number: "",
+    summary: "Interrupted run left changes in the worktree.",
+    runtime_context: None,
+  )
 }
 
 pub fn start_dirty_night_shift_control_files_do_not_block_test() {

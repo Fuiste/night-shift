@@ -6,7 +6,7 @@
 import gleam/int
 import gleam/io
 import gleam/list
-import gleam/option.{type Option}
+import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import night_shift/agent_config
@@ -136,7 +136,8 @@ fn run_initialized_command(
     types.Provenance(run, task_id, format) ->
       io.println(provenance(repo_root, run, task_id, format, config))
     types.Doctor(run) -> io.println(doctor(repo_root, run, config))
-    types.Resolve(run) -> io.println(resolve(repo_root, run, config))
+    types.Resolve(run, task_id, action) ->
+      io.println(resolve(repo_root, run, task_id, action, config))
     types.Resume(run, False, False) ->
       io.println(resume(repo_root, run, config))
     types.Resume(run, True, False) -> resume_with_ui(repo_root, run, config)
@@ -238,16 +239,35 @@ fn status(
 fn resolve(
   repo_root: String,
   selector: types.RunSelector,
-  _config: types.Config,
+  task_id: Option(String),
+  action: Option(types.ResolveAction),
+  config: types.Config,
 ) -> String {
-  case terminal_ui.can_prompt_interactively() {
-    False ->
-      "night-shift resolve requires an interactive terminal so it can capture decision answers."
-    True ->
+  case action, terminal_ui.can_prompt_interactively() {
+    Some(_), _ ->
       case
         resolve_usecase.execute(
           repo_root,
           selector,
+          task_id,
+          action,
+          config,
+          decision_prompt.collect_recorded_decisions,
+        )
+      {
+        Ok(view) -> usecase_render.render_resolve(view)
+        Error(message) -> message
+      }
+    None, False ->
+      "night-shift resolve requires an interactive terminal so it can capture decision answers."
+    None, True ->
+      case
+        resolve_usecase.execute(
+          repo_root,
+          selector,
+          task_id,
+          action,
+          config,
           decision_prompt.collect_recorded_decisions,
         )
       {

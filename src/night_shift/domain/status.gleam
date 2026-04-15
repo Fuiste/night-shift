@@ -1,7 +1,9 @@
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/string
 import night_shift/domain/decisions
+import night_shift/domain/summary as domain_summary
 import night_shift/types
 
 pub fn summary(
@@ -9,11 +11,20 @@ pub fn summary(
   events: List(types.RunEvent),
   next_action: String,
 ) -> String {
-  case latest_environment_preflight_failure(events) {
-    Some(message) ->
-      "Environment bootstrap blocker: yes\n"
+  case active_recovery_blocker(run) {
+    Some(blocker) ->
+      "Blocked before implementation: yes\n"
+      <> "Setup recovery: "
+      <> domain_summary.setup_recovery_intro(run)
+      <> "\n"
+      <> "Failed gate: "
+      <> domain_summary.recovery_gate_label(blocker)
+      <> "\n"
       <> "Failure: "
-      <> message
+      <> blocker.message
+      <> "\nLog: "
+      <> blocker.log_path
+      <> replacement_fragment(run)
       <> "\n"
       <> "Ready implementation tasks: "
       <> int.to_string(ready_implementation_task_count(run.tasks))
@@ -21,125 +32,190 @@ pub fn summary(
       <> "Queued tasks: "
       <> int.to_string(queued_task_count(run.tasks))
       <> "\n"
-      <> "Next action: fix the worktree environment, then rerun `night-shift start` or `night-shift reset`"
+      <> "\nNext action: "
+      <> next_action
     None ->
-      case run.status {
-        types.RunFailed ->
-          "Completed tasks: "
-          <> int.to_string(completed_task_count(run.tasks))
+      case pending_recovery_bypass(run) {
+        Some(blocker) ->
+          "Retry armed: yes\n"
+          <> "Setup recovery: "
+          <> domain_summary.setup_recovery_intro(run)
           <> "\n"
-          <> "Opened PRs: "
-          <> int.to_string(opened_pr_count(run.tasks))
+          <> "Failed gate: "
+          <> domain_summary.recovery_gate_label(blocker)
           <> "\n"
-          <> "Failed tasks: "
-          <> int.to_string(failed_task_count(run.tasks))
+          <> "Waiver: The failed gate was waived once; `night-shift start` will retry from there.\n"
+          <> "Failure: "
+          <> blocker.message
+          <> "\nLog: "
+          <> blocker.log_path
+          <> replacement_fragment(run)
           <> "\n"
-          <> "Outstanding decisions: "
-          <> int.to_string(decisions.outstanding_decision_count(run))
+          <> "Ready tasks: "
+          <> int.to_string(ready_task_count(run.tasks))
           <> "\n"
           <> "Queued tasks: "
           <> int.to_string(queued_task_count(run.tasks))
           <> "\n"
-          <> "Failure: "
-          <> latest_run_failed_message(events)
-          <> "\n"
-          <> "Next action: inspect the report, then rerun `night-shift plan --notes ...` when you're ready for the next pass."
-        _ ->
-          case run.status == types.RunBlocked || run.planning_dirty {
-            True ->
-              "Blocked tasks: "
-              <> int.to_string(decisions.blocked_task_count(run))
+          <> "Next action: "
+          <> next_action
+        None ->
+          case run.status {
+            types.RunFailed ->
+              "Completed tasks: "
+              <> int.to_string(completed_task_count(run.tasks))
+              <> "\n"
+              <> "Opened PRs: "
+              <> int.to_string(opened_pr_count(run.tasks))
+              <> "\n"
+              <> "Failed tasks: "
+              <> int.to_string(failed_task_count(run.tasks))
               <> "\n"
               <> "Outstanding decisions: "
               <> int.to_string(decisions.outstanding_decision_count(run))
               <> "\n"
-              <> "Planning sync pending: "
-              <> bool_label(run.planning_dirty)
-              <> planning_validation_fragment(events)
-              <> "\n"
-              <> "Retained worktrees: "
-              <> int.to_string(retained_worktree_count(run.tasks))
-              <> "\n"
-              <> "Runtime identities: "
-              <> int.to_string(runtime_identity_count(run.tasks))
-              <> "\n"
-              <> "Pruned superseded worktrees: "
-              <> int.to_string(event_count(events, "worktree_pruned"))
-              <> "\n"
-              <> "Execution recovery warnings: "
-              <> int.to_string(event_count(events, "execution_payload_warning"))
-              <> "\n"
-              <> "Payload repair attempts: "
-              <> int.to_string(event_count(
-                events,
-                "execution_payload_repair_started",
-              ))
-              <> "\n"
-              <> "Payload repair successes: "
-              <> int.to_string(event_count(
-                events,
-                "execution_payload_repair_succeeded",
-              ))
-              <> "\n"
-              <> "Payload repair failures: "
-              <> int.to_string(event_count(
-                events,
-                "execution_payload_repair_failed",
-              ))
-              <> "\n"
-              <> "Ready implementation tasks: "
-              <> int.to_string(ready_implementation_task_count(run.tasks))
-              <> "\n"
               <> "Queued tasks: "
               <> int.to_string(queued_task_count(run.tasks))
               <> "\n"
-              <> "Next action: "
-              <> next_action
-            False ->
-              "Outstanding decisions: "
-              <> int.to_string(decisions.outstanding_decision_count(run))
+              <> "Failure: "
+              <> latest_run_failed_message(events)
               <> "\n"
-              <> "Retained worktrees: "
-              <> int.to_string(retained_worktree_count(run.tasks))
-              <> "\n"
-              <> "Runtime identities: "
-              <> int.to_string(runtime_identity_count(run.tasks))
-              <> "\n"
-              <> "Pruned superseded worktrees: "
-              <> int.to_string(event_count(events, "worktree_pruned"))
-              <> "\n"
-              <> "Execution recovery warnings: "
-              <> int.to_string(event_count(events, "execution_payload_warning"))
-              <> "\n"
-              <> "Payload repair attempts: "
-              <> int.to_string(event_count(
-                events,
-                "execution_payload_repair_started",
-              ))
-              <> "\n"
-              <> "Payload repair successes: "
-              <> int.to_string(event_count(
-                events,
-                "execution_payload_repair_succeeded",
-              ))
-              <> "\n"
-              <> "Payload repair failures: "
-              <> int.to_string(event_count(
-                events,
-                "execution_payload_repair_failed",
-              ))
-              <> "\n"
-              <> "Ready tasks: "
-              <> int.to_string(ready_task_count(run.tasks))
-              <> "\n"
-              <> "Queued tasks: "
-              <> int.to_string(queued_task_count(run.tasks))
-              <> "\n"
-              <> "Next action: "
-              <> next_action
+              <> "Next action: inspect the report, then rerun `night-shift plan --notes ...` when you're ready for the next pass."
+            _ ->
+              case run.status == types.RunBlocked || run.planning_dirty {
+                True ->
+                  "Blocked tasks: "
+                  <> int.to_string(decisions.blocked_task_count(run))
+                  <> "\n"
+                  <> "Outstanding decisions: "
+                  <> int.to_string(decisions.outstanding_decision_count(run))
+                  <> "\n"
+                  <> "Planning sync pending: "
+                  <> bool_label(run.planning_dirty)
+                  <> planning_validation_fragment(events)
+                  <> "\n"
+                  <> "Retained worktrees: "
+                  <> int.to_string(retained_worktree_count(run.tasks))
+                  <> "\n"
+                  <> "Runtime identities: "
+                  <> int.to_string(runtime_identity_count(run.tasks))
+                  <> "\n"
+                  <> "Pruned superseded worktrees: "
+                  <> int.to_string(event_count(events, "worktree_pruned"))
+                  <> "\n"
+                  <> "Execution recovery warnings: "
+                  <> int.to_string(event_count(
+                    events,
+                    "execution_payload_warning",
+                  ))
+                  <> "\n"
+                  <> "Payload repair attempts: "
+                  <> int.to_string(event_count(
+                    events,
+                    "execution_payload_repair_started",
+                  ))
+                  <> "\n"
+                  <> "Payload repair successes: "
+                  <> int.to_string(event_count(
+                    events,
+                    "execution_payload_repair_succeeded",
+                  ))
+                  <> "\n"
+                  <> "Payload repair failures: "
+                  <> int.to_string(event_count(
+                    events,
+                    "execution_payload_repair_failed",
+                  ))
+                  <> "\n"
+                  <> "Ready implementation tasks: "
+                  <> int.to_string(ready_implementation_task_count(run.tasks))
+                  <> "\n"
+                  <> "Queued tasks: "
+                  <> int.to_string(queued_task_count(run.tasks))
+                  <> "\n"
+                  <> "Next action: "
+                  <> next_action
+                False ->
+                  "Outstanding decisions: "
+                  <> int.to_string(decisions.outstanding_decision_count(run))
+                  <> "\n"
+                  <> "Retained worktrees: "
+                  <> int.to_string(retained_worktree_count(run.tasks))
+                  <> "\n"
+                  <> "Runtime identities: "
+                  <> int.to_string(runtime_identity_count(run.tasks))
+                  <> "\n"
+                  <> "Pruned superseded worktrees: "
+                  <> int.to_string(event_count(events, "worktree_pruned"))
+                  <> "\n"
+                  <> "Execution recovery warnings: "
+                  <> int.to_string(event_count(
+                    events,
+                    "execution_payload_warning",
+                  ))
+                  <> "\n"
+                  <> "Payload repair attempts: "
+                  <> int.to_string(event_count(
+                    events,
+                    "execution_payload_repair_started",
+                  ))
+                  <> "\n"
+                  <> "Payload repair successes: "
+                  <> int.to_string(event_count(
+                    events,
+                    "execution_payload_repair_succeeded",
+                  ))
+                  <> "\n"
+                  <> "Payload repair failures: "
+                  <> int.to_string(event_count(
+                    events,
+                    "execution_payload_repair_failed",
+                  ))
+                  <> "\n"
+                  <> "Ready tasks: "
+                  <> int.to_string(ready_task_count(run.tasks))
+                  <> "\n"
+                  <> "Queued tasks: "
+                  <> int.to_string(queued_task_count(run.tasks))
+                  <> "\n"
+                  <> "Next action: "
+                  <> next_action
+              }
           }
       }
   }
+}
+
+fn active_recovery_blocker(
+  run: types.RunRecord,
+) -> Option(types.RecoveryBlocker) {
+  case run.recovery_blocker {
+    Some(blocker) ->
+      case blocker.disposition == types.RecoveryBlocking {
+        True -> Some(blocker)
+        False -> None
+      }
+    _ -> None
+  }
+}
+
+fn pending_recovery_bypass(
+  run: types.RunRecord,
+) -> Option(types.RecoveryBlocker) {
+  case run.recovery_blocker {
+    Some(blocker) ->
+      case blocker.disposition == types.RecoveryWaivedOnce {
+        True -> Some(blocker)
+        False -> None
+      }
+    _ -> None
+  }
+}
+
+fn replacement_fragment(run: types.RunRecord) -> String {
+  domain_summary.setup_recovery_outcome_lines(run)
+  |> list.map(fn(line) { "\n" <> line })
+  |> string.join(with: "")
 }
 
 fn completed_task_count(tasks: List(types.Task)) -> Int {
@@ -196,25 +272,6 @@ fn bool_label(value: Bool) -> String {
   case value {
     True -> "yes"
     False -> "no"
-  }
-}
-
-fn latest_environment_preflight_failure(
-  events: List(types.RunEvent),
-) -> Option(String) {
-  latest_environment_preflight_failure_loop(list.reverse(events))
-}
-
-fn latest_environment_preflight_failure_loop(
-  events: List(types.RunEvent),
-) -> Option(String) {
-  case events {
-    [] -> None
-    [event, ..rest] ->
-      case event.kind == "environment_preflight_failed" {
-        True -> Some(event.message)
-        False -> latest_environment_preflight_failure_loop(rest)
-      }
   }
 }
 

@@ -81,7 +81,49 @@ pub fn parse_plan_requires_notes_test() {
 }
 
 pub fn parse_resolve_defaults_to_latest_test() {
-  let assert Ok(types.Resolve(types.LatestRun)) = cli.parse(["resolve"])
+  let assert Ok(types.Resolve(types.LatestRun, None, None)) =
+    cli.parse(["resolve"])
+}
+
+pub fn parse_resolve_task_continue_command_test() {
+  let assert Ok(types.Resolve(
+    types.RunId("run-123"),
+    Some("task-1"),
+    Some(types.ResolveContinue),
+  )) =
+    cli.parse([
+      "resolve",
+      "--run",
+      "run-123",
+      "--task",
+      "task-1",
+      "--continue",
+    ])
+}
+
+pub fn parse_resolve_rejects_missing_action_for_task_test() {
+  let assert Error(message) = cli.parse(["resolve", "--task", "task-1"])
+  assert message
+    == "`night-shift resolve --task <task-id>` requires exactly one of `--inspect`, `--continue`, `--complete`, or `--abandon`."
+}
+
+pub fn parse_resolve_rejects_action_without_task_test() {
+  let assert Error(message) = cli.parse(["resolve", "--inspect"])
+  assert message
+    == "`night-shift resolve` action flags require `--task <task-id>`."
+}
+
+pub fn parse_resolve_rejects_multiple_actions_test() {
+  let assert Error(message) =
+    cli.parse([
+      "resolve",
+      "--task",
+      "task-1",
+      "--inspect",
+      "--continue",
+    ])
+  assert message
+    == "`night-shift resolve --task <task-id>` accepts exactly one of `--inspect`, `--continue`, `--complete`, or `--abandon`."
 }
 
 pub fn parse_resume_command_with_ui_test() {

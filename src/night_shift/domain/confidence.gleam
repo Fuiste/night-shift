@@ -2,6 +2,7 @@ import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
+import night_shift/domain/decisions as decision_domain
 import night_shift/repo_state_runtime
 import night_shift/types
 import simplifile
@@ -12,7 +13,7 @@ pub fn assess(
   repo_state_view: Option(repo_state_runtime.RepoStateView),
 ) -> types.ConfidenceAssessment {
   let severe = severe_reasons(run, events)
-  let moderate = moderate_reasons(events, repo_state_view)
+  let moderate = moderate_reasons(run, events, repo_state_view)
   let positive = positive_reasons(run, events)
 
   case severe {
@@ -51,12 +52,22 @@ fn severe_reasons(
   run: types.RunRecord,
   events: List(types.RunEvent),
 ) -> List(String) {
-  let manual_attention_count =
+  let planning_manual_attention_count =
     run.tasks
     |> list.filter(fn(task) {
       types.task_requires_manual_attention(run.decisions, task)
     })
     |> list.length
+  let implementation_blocker_count =
+    decision_domain.implementation_blocking_task_count(run)
+  let setup_blocker_count = case run.recovery_blocker {
+    Some(blocker) ->
+      case blocker.disposition == types.RecoveryBlocking {
+        True -> 1
+        False -> 0
+      }
+    _ -> 0
+  }
   let failed_count =
     run.tasks
     |> list.filter(fn(task) { task.state == types.Failed })
@@ -71,12 +82,20 @@ fn severe_reasons(
   let run_failed = event_count(events, "run_failed")
 
   [
-    latest_environment_preflight_failure(events)
-      |> option_reason("Environment bootstrap failed."),
     count_reason(
-      manual_attention_count,
-      "manual-attention task is still unresolved.",
-      "manual-attention tasks are still unresolved.",
+      setup_blocker_count,
+      "blocked-before-implementation setup recovery is still unresolved.",
+      "blocked-before-implementation setup recoveries are still unresolved.",
+    ),
+    count_reason(
+      planning_manual_attention_count,
+      "manual-attention planning task is still unresolved.",
+      "manual-attention planning tasks are still unresolved.",
+    ),
+    count_reason(
+      implementation_blocker_count,
+      "interrupted implementation task requires manual recovery.",
+      "interrupted implementation tasks require manual recovery.",
     ),
     count_reason(
       unresolved_decision_requests_count(run),
@@ -104,6 +123,7 @@ fn severe_reasons(
 }
 
 fn moderate_reasons(
+  run: types.RunRecord,
   events: List(types.RunEvent),
   repo_state_view: Option(repo_state_runtime.RepoStateView),
 ) -> List(String) {
@@ -112,6 +132,7 @@ fn moderate_reasons(
     event_count(events, "execution_payload_repair_succeeded")
   let prune_warnings = event_count(events, "worktree_prune_warning")
   let supersession_warnings = event_count(events, "review_supersession_warning")
+  let pending_setup_retry_count = pending_setup_retry_count(run)
   let repo_state_reason = case repo_state_view {
     Some(view) ->
       case view.drift {
@@ -125,6 +146,11 @@ fn moderate_reasons(
   }
 
   [
+    count_reason(
+      pending_setup_retry_count,
+      "operator-approved setup retry is armed.",
+      "operator-approved setup retries are armed.",
+    ),
     count_reason(
       payload_warnings,
       "recovered execution payload was accepted.",
@@ -177,7 +203,11 @@ fn positive_reasons(
       True -> Some("Delivered pull requests are recorded in the journal.")
       False -> None
     },
-    case unresolved_decision_requests_count(run) == 0 {
+    case
+      unresolved_decision_requests_count(run) == 0
+      && setup_blocker_count(run) == 0
+      && pending_setup_retry_count(run) == 0
+    {
       True -> Some("No outstanding operator decisions remain.")
       False -> None
     },
@@ -207,22 +237,25 @@ fn event_count(events: List(types.RunEvent), kind: String) -> Int {
   |> list.length
 }
 
-fn latest_environment_preflight_failure(
-  events: List(types.RunEvent),
-) -> Option(String) {
-  latest_environment_preflight_failure_loop(list.reverse(events))
+fn setup_blocker_count(run: types.RunRecord) -> Int {
+  case run.recovery_blocker {
+    Some(blocker) ->
+      case blocker.disposition == types.RecoveryBlocking {
+        True -> 1
+        False -> 0
+      }
+    _ -> 0
+  }
 }
 
-fn latest_environment_preflight_failure_loop(
-  events: List(types.RunEvent),
-) -> Option(String) {
-  case events {
-    [] -> None
-    [event, ..rest] ->
-      case event.kind == "environment_preflight_failed" {
-        True -> Some(event.message)
-        False -> latest_environment_preflight_failure_loop(rest)
+fn pending_setup_retry_count(run: types.RunRecord) -> Int {
+  case run.recovery_blocker {
+    Some(blocker) ->
+      case blocker.disposition == types.RecoveryWaivedOnce {
+        True -> 1
+        False -> 0
       }
+    _ -> 0
   }
 }
 
@@ -230,13 +263,6 @@ fn directory_exists(path: String) -> Bool {
   case simplifile.read_directory(at: path) {
     Ok(_) -> True
     Error(_) -> False
-  }
-}
-
-fn option_reason(value: Option(a), message: String) -> Option(String) {
-  case value {
-    Some(_) -> Some(message)
-    None -> None
   }
 }
 

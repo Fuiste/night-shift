@@ -8,11 +8,13 @@ import night_shift/config
 import night_shift/domain/confidence
 import night_shift/domain/provenance
 import night_shift/domain/review_run_projection
+import night_shift/domain/summary as domain_summary
 import night_shift/journal
 import night_shift/project
 import night_shift/repo_state_runtime
 import night_shift/report
 import night_shift/types
+import night_shift/usecase/resolve as resolve_usecase
 
 /// A running local dashboard session.
 pub type Session {
@@ -52,6 +54,37 @@ pub fn stop_session(session: Session) -> Nil
 @external(erlang, "night_shift_dashboard_server", "http_get")
 pub fn http_get(url: String) -> Result(String, String)
 
+pub fn apply_recovery_action(
+  repo_root: String,
+  run_id: String,
+  action_name: String,
+) -> Result(String, String) {
+  use loaded_config <- result.try(load_dashboard_config(repo_root))
+  let action = case action_name {
+    "inspect" -> Ok(types.ResolveInspect)
+    "continue" -> Ok(types.ResolveContinue)
+    "abandon" -> Ok(types.ResolveAbandon)
+    _ -> Error("Unsupported dashboard recovery action: " <> action_name)
+  }
+  use resolved_action <- result.try(action)
+  use resolved <- result.try(
+    resolve_usecase.execute(
+      repo_root,
+      types.RunId(run_id),
+      None,
+      Some(resolved_action),
+      loaded_config,
+      fn(_, _) {
+        Error("Dashboard recovery does not collect planning decisions.")
+      },
+    ),
+  )
+  Ok(case resolved.summary {
+    Some(summary) -> summary <> "\nNext action: " <> resolved.next_action
+    None -> "Next action: " <> resolved.next_action
+  })
+}
+
 /// Render the self-contained dashboard HTML shell.
 pub fn index_html(initial_run_id: String) -> String {
   let initial_run_json = json.string(initial_run_id) |> json.to_string
@@ -81,6 +114,11 @@ pub fn index_html(initial_run_id: String) -> String {
   <> "    .label { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.7; }\n"
   <> "    .value { margin-top: 4px; font-size: 0.98rem; word-break: break-word; }\n"
   <> "    .task-row, .event-row { padding: 12px 14px; border-radius: 14px; background: #f9f3e9; }\n"
+  <> "    .recovery-panel { display: grid; gap: 12px; }\n"
+  <> "    .recovery-panel[hidden] { display: none; }\n"
+  <> "    .recovery-actions { display: flex; flex-wrap: wrap; gap: 10px; }\n"
+  <> "    button.action { padding: 10px 12px; border-radius: 12px; border: 1px solid rgba(79, 56, 35, 0.18); background: #fffaf2; cursor: pointer; }\n"
+  <> "    button.action.primary { background: #2f5a4a; color: #fff9ef; border-color: #2f5a4a; }\n"
   <> "    .task-header, .event-header { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; justify-content: space-between; }\n"
   <> "    .state { display: inline-flex; align-items: center; padding: 4px 9px; border-radius: 999px; background: #e6dcc9; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.08em; }\n"
   <> "    pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: 'SFMono-Regular', 'Menlo', monospace; font-size: 0.88rem; }\n"
@@ -114,6 +152,16 @@ pub fn index_html(initial_run_id: String) -> String {
   <> "          <h2>Report</h2>\n"
   <> "          <pre id=\"report\">Loading report...</pre>\n"
   <> "        </section>\n"
+  <> "        <section class=\"panel recovery-panel\" id=\"recovery-panel\" hidden>\n"
+  <> "          <h2>Recovery</h2>\n"
+  <> "          <p id=\"recovery-summary\" class=\"muted\">No blocked-before-implementation recovery is active.</p>\n"
+  <> "          <div class=\"recovery-actions\">\n"
+  <> "            <button class=\"action\" id=\"recovery-inspect\" type=\"button\">Inspect</button>\n"
+  <> "            <button class=\"action primary\" id=\"recovery-continue\" type=\"button\">Continue</button>\n"
+  <> "            <button class=\"action\" id=\"recovery-abandon\" type=\"button\">Abandon</button>\n"
+  <> "          </div>\n"
+  <> "          <pre id=\"recovery-output\">Recovery guidance will appear here.</pre>\n"
+  <> "        </section>\n"
   <> "      </div>\n"
   <> "    </section>\n"
   <> "  </div>\n"
@@ -128,6 +176,12 @@ pub fn index_html(initial_run_id: String) -> String {
   <> "      const response = await fetch(path, { cache: 'no-store' });\n"
   <> "      if (!response.ok) throw new Error('Request failed: ' + response.status);\n"
   <> "      return response.json();\n"
+  <> "    }\n"
+  <> "    async function requestText(path, options) {\n"
+  <> "      const response = await fetch(path, Object.assign({ cache: 'no-store' }, options || {}));\n"
+  <> "      const text = await response.text();\n"
+  <> "      if (!response.ok) throw new Error(text || ('Request failed: ' + response.status));\n"
+  <> "      return text;\n"
   <> "    }\n"
   <> "    function renderMeta(run) {\n"
   <> "      const fields = [\n"
@@ -145,6 +199,34 @@ pub fn index_html(initial_run_id: String) -> String {
   <> "      document.getElementById('run-meta').innerHTML = fields.map(([label, value]) => `<div class=\"meta-card\"><div class=\"label\">${label}</div><div class=\"value\"></div></div>`).join('');\n"
   <> "      Array.from(document.querySelectorAll('#run-meta .value')).forEach((node, index) => { node.textContent = fields[index][1] || '—'; });\n"
   <> "      document.getElementById('status-line').textContent = `Viewing run ${run.run_id} (${run.status}).`;\n"
+  <> "    }\n"
+  <> "    function renderRecovery(run) {\n"
+  <> "      const panel = document.getElementById('recovery-panel');\n"
+  <> "      const summary = document.getElementById('recovery-summary');\n"
+  <> "      const output = document.getElementById('recovery-output');\n"
+  <> "      const blocker = run.recovery_blocker;\n"
+  <> "      const inspectButton = document.getElementById('recovery-inspect');\n"
+  <> "      const continueButton = document.getElementById('recovery-continue');\n"
+  <> "      const abandonButton = document.getElementById('recovery-abandon');\n"
+  <> "      if (!blocker) {\n"
+  <> "        panel.hidden = true;\n"
+  <> "        summary.textContent = 'No blocked-before-implementation recovery is active.';\n"
+  <> "        output.textContent = 'Recovery guidance will appear here.';\n"
+  <> "        return;\n"
+  <> "      }\n"
+  <> "      const outcome = (run.recovery_outcome_lines || []).join(' ');\n"
+  <> "      const intro = run.recovery_intro || 'Planning succeeded, but execution stopped before implementation.';\n"
+  <> "      const retryArmed = blocker.disposition === 'waived_once';\n"
+  <> "      panel.hidden = false;\n"
+  <> "      inspectButton.disabled = retryArmed;\n"
+  <> "      continueButton.disabled = retryArmed;\n"
+  <> "      abandonButton.disabled = retryArmed;\n"
+  <> "      summary.textContent = retryArmed\n"
+  <> "        ? `Retry armed for ${blocker.phase} ${blocker.kind}. ${intro} The failed gate was waived once; night-shift start will retry from there. ${outcome}`\n"
+  <> "        : `Blocked before implementation during ${blocker.phase} ${blocker.kind}. ${intro} ${blocker.message} ${outcome}`;\n"
+  <> "      output.textContent = retryArmed\n"
+  <> "        ? `Log: ${blocker.log_path}\\nNext action: night-shift start` + (blocker.task_id ? `\\nTask: ${blocker.task_id}` : '')\n"
+  <> "        : `Log: ${blocker.log_path}` + (blocker.task_id ? `\\nTask: ${blocker.task_id}` : '');\n"
   <> "    }\n"
   <> "    function renderHistory(runs) {\n"
   <> "      const container = document.getElementById('history');\n"
@@ -184,6 +266,18 @@ pub fn index_html(initial_run_id: String) -> String {
   <> "      if (refreshTimer) clearTimeout(refreshTimer);\n"
   <> "      refreshTimer = setTimeout(() => loadRun(false), isActive ? 2000 : 10000);\n"
   <> "    }\n"
+  <> "    async function performRecovery(action) {\n"
+  <> "      if (!selectedRunId) return;\n"
+  <> "      const output = document.getElementById('recovery-output');\n"
+  <> "      output.textContent = 'Working...';\n"
+  <> "      try {\n"
+  <> "        const text = await requestText(`/api/runs/${encodeURIComponent(selectedRunId)}/recovery/${action}`, { method: 'POST' });\n"
+  <> "        output.textContent = text;\n"
+  <> "        await loadRun(true);\n"
+  <> "      } catch (error) {\n"
+  <> "        output.textContent = error.message;\n"
+  <> "      }\n"
+  <> "    }\n"
   <> "    async function loadRun(forceHistoryRefresh) {\n"
   <> "      const runs = await requestJson('/api/runs');\n"
   <> "      if (!selectedRunId && runs.length > 0) selectedRunId = runs[0].run_id;\n"
@@ -202,11 +296,15 @@ pub fn index_html(initial_run_id: String) -> String {
   <> "      renderHistory(runs);\n"
   <> "      const payload = await requestJson('/api/runs/' + encodeURIComponent(selectedRunId));\n"
   <> "      renderMeta(payload.run);\n"
+  <> "      renderRecovery(payload.run);\n"
   <> "      renderTasks(payload.run.tasks);\n"
   <> "      renderEvents(payload.events);\n"
   <> "      document.getElementById('report').textContent = payload.report;\n"
   <> "      scheduleRefresh(!terminalStates.has(payload.run.status));\n"
   <> "    }\n"
+  <> "    document.getElementById('recovery-inspect').addEventListener('click', () => performRecovery('inspect'));\n"
+  <> "    document.getElementById('recovery-continue').addEventListener('click', () => performRecovery('continue'));\n"
+  <> "    document.getElementById('recovery-abandon').addEventListener('click', () => performRecovery('abandon'));\n"
   <> "    loadRun(true).catch((error) => { document.getElementById('status-line').textContent = error.message; scheduleRefresh(false); });\n"
   <> "  </script>\n"
   <> "</body>\n"
@@ -283,6 +381,22 @@ fn run_detail_json(
     #("created_at", json.string(run.created_at)),
     #("updated_at", json.string(run.updated_at)),
     #(
+      "recovery_blocker",
+      json.nullable(from: run.recovery_blocker, of: recovery_blocker_json),
+    ),
+    #(
+      "recovery_intro",
+      json.nullable(from: recovery_intro(run), of: json.string),
+    ),
+    #(
+      "recovery_outcome_lines",
+      json.array(recovery_outcome_lines(run), json.string),
+    ),
+    #(
+      "replacement_pr_numbers",
+      json.array(replacement_pr_numbers(run.tasks), json.int),
+    ),
+    #(
       "repo_state",
       json.nullable(
         from: projection_repo_state(review_projection),
@@ -303,6 +417,41 @@ fn task_json(task: types.Task) -> json.Json {
     #("pr_number", json.string(task.pr_number)),
     #("summary", json.string(task.summary)),
   ])
+}
+
+fn recovery_blocker_json(blocker: types.RecoveryBlocker) -> json.Json {
+  json.object([
+    #("kind", json.string(types.recovery_blocker_kind_to_string(blocker.kind))),
+    #(
+      "phase",
+      json.string(types.recovery_blocker_phase_to_string(blocker.phase)),
+    ),
+    #("task_id", json.nullable(from: blocker.task_id, of: json.string)),
+    #("message", json.string(blocker.message)),
+    #("log_path", json.string(blocker.log_path)),
+    #("no_changes_produced", json.bool(blocker.no_changes_produced)),
+    #(
+      "disposition",
+      json.string(case blocker.disposition {
+        types.RecoveryBlocking -> "blocking"
+        types.RecoveryWaivedOnce -> "waived_once"
+      }),
+    ),
+  ])
+}
+
+fn recovery_intro(run: types.RunRecord) -> Option(String) {
+  case run.recovery_blocker {
+    Some(_) -> Some(domain_summary.setup_recovery_intro(run))
+    None -> None
+  }
+}
+
+fn recovery_outcome_lines(run: types.RunRecord) -> List(String) {
+  case run.recovery_blocker {
+    Some(_) -> domain_summary.setup_recovery_outcome_lines(run)
+    None -> []
+  }
 }
 
 fn load_repo_state_view(
@@ -376,4 +525,33 @@ fn event_json(event: types.RunEvent) -> json.Json {
 
 fn identity(value: json.Json) -> json.Json {
   value
+}
+
+fn replacement_pr_numbers(tasks: List(types.Task)) -> List(Int) {
+  unique_pr_numbers(
+    tasks
+      |> list.flat_map(fn(task) { task.superseded_pr_numbers }),
+    [],
+  )
+}
+
+fn unique_pr_numbers(values: List(Int), acc: List(Int)) -> List(Int) {
+  case values {
+    [] -> list.reverse(acc)
+    [value, ..rest] ->
+      case list.contains(acc, value) {
+        True -> unique_pr_numbers(rest, acc)
+        False -> unique_pr_numbers(rest, [value, ..acc])
+      }
+  }
+}
+
+fn load_dashboard_config(repo_root: String) -> Result(types.Config, String) {
+  case config.load(project.config_path(repo_root)) {
+    Ok(loaded_config) -> Ok(loaded_config)
+    Error(message) ->
+      Error(
+        "Unable to load Night Shift config for dashboard recovery: " <> message,
+      )
+  }
 }

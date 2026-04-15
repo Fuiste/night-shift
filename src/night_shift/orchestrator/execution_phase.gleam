@@ -49,41 +49,64 @@ pub fn prepare_run(run: types.RunRecord) -> Result(PreparedExecution, String) {
           |> result.map(fn(updated_run) {
             PreparedExecution(run: updated_run, proceed: True)
           })
-        _ -> {
-          let preflight_log =
-            filepath.join(
-              refreshed_run.run_path,
-              "logs/environment-preflight.log",
+        _ -> prepare_run_after_preflight(refreshed_run)
+      }
+  }
+}
+
+fn prepare_run_after_preflight(
+  run: types.RunRecord,
+) -> Result(PreparedExecution, String) {
+  let preflight_log =
+    filepath.join(run.run_path, "logs/environment-preflight.log")
+
+  case should_skip_environment_preflight(run) {
+    True ->
+      Ok(PreparedExecution(
+        run: maybe_consume_environment_preflight_bypass(run),
+        proceed: True,
+      ))
+    False ->
+      case
+        worktree_setup.preflight_environment(
+          run.repo_root,
+          run.environment_name,
+          project.worktree_setup_path(run.repo_root),
+          preflight_log,
+        )
+      {
+        Ok(_) -> Ok(PreparedExecution(run: run, proceed: True))
+        Error(message) -> {
+          let blocker =
+            types.RecoveryBlocker(
+              kind: types.EnvironmentPreflightBlocker,
+              phase: types.PreflightPhase,
+              task_id: None,
+              message: message,
+              log_path: preflight_log,
+              no_changes_produced: True,
+              disposition: types.RecoveryBlocking,
             )
-          case
-            worktree_setup.preflight_environment(
-              refreshed_run.repo_root,
-              refreshed_run.environment_name,
-              project.worktree_setup_path(refreshed_run.repo_root),
-              preflight_log,
+          let event =
+            types.RunEvent(
+              kind: "environment_preflight_blocked",
+              at: system.timestamp(),
+              message: message,
+              task_id: None,
             )
-          {
-            Ok(_) -> Ok(PreparedExecution(run: refreshed_run, proceed: True))
-            Error(message) -> {
-              let event =
-                types.RunEvent(
-                  kind: "environment_preflight_failed",
-                  at: system.timestamp(),
-                  message: message,
-                  task_id: None,
-                )
-              use failed_run <- result.try(journal.append_event(
-                refreshed_run,
-                event,
-              ))
-              use marked_run <- result.try(journal.mark_status(
-                failed_run,
-                types.RunFailed,
-                message,
-              ))
-              Ok(PreparedExecution(run: marked_run, proceed: False))
-            }
-          }
+          let blocked_run =
+            types.RunRecord(
+              ..run,
+              status: types.RunBlocked,
+              recovery_blocker: Some(blocker),
+            )
+          use evented_run <- result.try(journal.append_event(blocked_run, event))
+          use marked_run <- result.try(journal.mark_status(
+            evented_run,
+            types.RunBlocked,
+            "Night Shift is blocked before implementation could begin.",
+          ))
+          Ok(PreparedExecution(run: marked_run, proceed: False))
         }
       }
   }
@@ -206,14 +229,14 @@ fn launch_batch_loop(
                   launch_batch_loop(config, started_run, rest, [task_run, ..acc])
 
                 Error(message) -> {
-                  use failed_run <- result.try(mark_task_with_event(
+                  use blocked_run <- result.try(block_task_for_setup_failure(
                     announced_run,
                     running_task,
-                    types.Failed,
+                    bootstrap_phase,
+                    env_log,
                     message,
-                    "task_failed",
                   ))
-                  launch_batch_loop(config, failed_run, rest, acc)
+                  launch_batch_loop(config, blocked_run, rest, acc)
                 }
               }
             }
@@ -567,6 +590,11 @@ fn start_task_run(
   env_log: String,
   worktree_origin: provider.WorktreeOrigin,
 ) -> Result(#(types.RunRecord, provider.TaskRun), String) {
+  let skip_setup = should_skip_task_setup(run, task.id, bootstrap_phase)
+  let prepared_run = case skip_setup {
+    True -> consume_task_setup_bypass(run, task.id, bootstrap_phase)
+    False -> run
+  }
   use runtime_context <- result.try(require_runtime_context(task))
   use _ <- result.try(runtime_identity.ensure_artifacts(
     runtime_context,
@@ -574,27 +602,31 @@ fn start_task_run(
     worktree_path,
     branch_name,
   ))
-  use _ <- result.try(worktree_setup.prepare_worktree(
-    run.repo_root,
-    run.environment_name,
-    project.worktree_setup_path(run.repo_root),
-    worktree_path,
-    branch_name,
-    bootstrap_phase,
-    env_log,
-    Some(runtime_context),
-  ))
+  use _ <- result.try(case skip_setup {
+    True -> Ok(Nil)
+    False ->
+      worktree_setup.prepare_worktree(
+        prepared_run.repo_root,
+        prepared_run.environment_name,
+        project.worktree_setup_path(prepared_run.repo_root),
+        worktree_path,
+        branch_name,
+        bootstrap_phase,
+        env_log,
+        Some(runtime_context),
+      )
+  })
   use env_vars <- result.try(worktree_setup.env_vars_for(
-    run.repo_root,
-    run.environment_name,
-    project.worktree_setup_path(run.repo_root),
+    prepared_run.repo_root,
+    prepared_run.environment_name,
+    project.worktree_setup_path(prepared_run.repo_root),
     Some(runtime_context),
   ))
   use start_head <- result.try(git.head_commit(worktree_path, git_log))
   use task_run <- result.try(provider.start_task(
-    run.execution_agent,
-    run.repo_root,
-    run.run_path,
+    prepared_run.execution_agent,
+    prepared_run.repo_root,
+    prepared_run.run_path,
     task,
     worktree_path,
     env_vars,
@@ -603,7 +635,7 @@ fn start_task_run(
     base_ref,
     worktree_origin,
   ))
-  Ok(#(run, task_run))
+  Ok(#(prepared_run, task_run))
 }
 
 fn ensure_runtime_context(
@@ -715,6 +747,116 @@ fn mark_task_with_event(
       message: summary,
       task_id: Some(task.id),
     ),
+  )
+}
+
+fn maybe_consume_environment_preflight_bypass(
+  run: types.RunRecord,
+) -> types.RunRecord {
+  case run.recovery_blocker {
+    Some(blocker)
+      if blocker.kind == types.EnvironmentPreflightBlocker
+      && blocker.phase == types.PreflightPhase
+      && blocker.disposition == types.RecoveryWaivedOnce
+    -> types.RunRecord(..run, recovery_blocker: None)
+    _ -> run
+  }
+}
+
+fn should_skip_environment_preflight(run: types.RunRecord) -> Bool {
+  case run.recovery_blocker {
+    Some(blocker) ->
+      blocker.kind == types.EnvironmentPreflightBlocker
+      && blocker.phase == types.PreflightPhase
+      && blocker.disposition == types.RecoveryWaivedOnce
+    None -> False
+  }
+}
+
+fn consume_task_setup_bypass(
+  run: types.RunRecord,
+  task_id: String,
+  bootstrap_phase: worktree_setup.BootstrapPhase,
+) -> types.RunRecord {
+  let phase = recovery_phase_for_bootstrap(bootstrap_phase)
+  case run.recovery_blocker {
+    Some(blocker) ->
+      case
+        blocker.kind == types.TaskSetupBlocker
+        && blocker.task_id == Some(task_id)
+        && blocker.phase == phase
+        && blocker.disposition == types.RecoveryWaivedOnce
+      {
+        True -> types.RunRecord(..run, recovery_blocker: None)
+        False -> run
+      }
+    _ -> run
+  }
+}
+
+fn should_skip_task_setup(
+  run: types.RunRecord,
+  task_id: String,
+  bootstrap_phase: worktree_setup.BootstrapPhase,
+) -> Bool {
+  let phase = recovery_phase_for_bootstrap(bootstrap_phase)
+  case run.recovery_blocker {
+    Some(blocker) ->
+      blocker.kind == types.TaskSetupBlocker
+      && blocker.task_id == Some(task_id)
+      && blocker.phase == phase
+      && blocker.disposition == types.RecoveryWaivedOnce
+    None -> False
+  }
+}
+
+fn recovery_phase_for_bootstrap(
+  bootstrap_phase: worktree_setup.BootstrapPhase,
+) -> types.RecoveryBlockerPhase {
+  case bootstrap_phase {
+    worktree_setup_model.SetupPhase -> types.SetupPhase
+    worktree_setup_model.MaintenancePhase -> types.MaintenancePhase
+  }
+}
+
+fn block_task_for_setup_failure(
+  run: types.RunRecord,
+  task: types.Task,
+  bootstrap_phase: worktree_setup.BootstrapPhase,
+  env_log: String,
+  message: String,
+) -> Result(types.RunRecord, String) {
+  let blocker =
+    types.RecoveryBlocker(
+      kind: types.TaskSetupBlocker,
+      phase: recovery_phase_for_bootstrap(bootstrap_phase),
+      task_id: Some(task.id),
+      message: message,
+      log_path: env_log,
+      no_changes_produced: True,
+      disposition: types.RecoveryBlocking,
+    )
+  let blocked_task = types.Task(..task, state: types.Blocked, summary: message)
+  let blocked_run =
+    types.RunRecord(
+      ..run,
+      status: types.RunBlocked,
+      recovery_blocker: Some(blocker),
+      tasks: task_graph.replace_task(run.tasks, blocked_task),
+    )
+  use evented_run <- result.try(journal.append_event(
+    blocked_run,
+    types.RunEvent(
+      kind: "task_setup_blocked",
+      at: system.timestamp(),
+      message: message,
+      task_id: Some(task.id),
+    ),
+  ))
+  journal.mark_status(
+    evented_run,
+    types.RunBlocked,
+    "Night Shift is blocked before implementation could begin.",
   )
 }
 

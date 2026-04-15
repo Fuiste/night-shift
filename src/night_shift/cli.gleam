@@ -21,6 +21,7 @@ pub fn usage() -> String {
   <> "  provenance [--run <id>|latest] [--task <task-id>] [--format <json|md>]\n"
   <> "  doctor [--run <id>|latest]\n"
   <> "  resolve [--run <id>|latest]\n"
+  <> "  resolve [--run <id>|latest] --task <task-id> [--inspect|--continue|--complete|--abandon]\n"
   <> "  resume [--run <id>|latest] [--ui|--explain]\n"
 }
 
@@ -52,7 +53,7 @@ pub fn parse(args: List(String)) -> Result(types.Command, String) {
         ["report", ..rest] -> parse_run_lookup(rest, types.Report)
         ["provenance", ..rest] -> parse_provenance(rest)
         ["doctor", ..rest] -> parse_run_lookup(rest, types.Doctor)
-        ["resolve", ..rest] -> parse_run_lookup(rest, types.Resolve)
+        ["resolve", ..rest] -> parse_resolve(rest)
         ["resume", ..rest] -> parse_resume(rest)
         ["review", ..] ->
           Error(
@@ -261,6 +262,64 @@ fn parse_start_flags(
 
 fn parse_resume(args: List(String)) -> Result(types.Command, String) {
   parse_resume_flags(args, types.LatestRun, False, False)
+}
+
+fn parse_resolve(args: List(String)) -> Result(types.Command, String) {
+  parse_resolve_flags(args, types.LatestRun, None, None)
+}
+
+fn parse_resolve_flags(
+  args: List(String),
+  run: types.RunSelector,
+  task_id: Option(String),
+  action: Option(types.ResolveAction),
+) -> Result(types.Command, String) {
+  case args {
+    [] ->
+      case task_id, action {
+        None, None -> Ok(types.Resolve(run, None, None))
+        Some(_), Some(_) -> Ok(types.Resolve(run, task_id, action))
+        Some(_), None ->
+          Error(
+            "`night-shift resolve --task <task-id>` requires exactly one of `--inspect`, `--continue`, `--complete`, or `--abandon`.",
+          )
+        None, Some(_) ->
+          Error(
+            "`night-shift resolve` action flags require `--task <task-id>`.",
+          )
+      }
+    ["--run", "latest", ..rest] ->
+      parse_resolve_flags(rest, types.LatestRun, task_id, action)
+    ["--run", run_id, ..rest] ->
+      parse_resolve_flags(rest, types.RunId(run_id), task_id, action)
+    ["--task", next_task_id, ..rest] ->
+      parse_resolve_flags(rest, run, Some(next_task_id), action)
+    ["--inspect", ..rest] ->
+      parse_resolve_action(rest, run, task_id, action, types.ResolveInspect)
+    ["--continue", ..rest] ->
+      parse_resolve_action(rest, run, task_id, action, types.ResolveContinue)
+    ["--complete", ..rest] ->
+      parse_resolve_action(rest, run, task_id, action, types.ResolveComplete)
+    ["--abandon", ..rest] ->
+      parse_resolve_action(rest, run, task_id, action, types.ResolveAbandon)
+    [flag, ..] -> Error("Unsupported resolve flag: " <> flag)
+  }
+}
+
+fn parse_resolve_action(
+  args: List(String),
+  run: types.RunSelector,
+  task_id: Option(String),
+  action: Option(types.ResolveAction),
+  next_action: types.ResolveAction,
+) -> Result(types.Command, String) {
+  case action {
+    Some(_) ->
+      Error(
+        "`night-shift resolve --task <task-id>` accepts exactly one of `--inspect`, `--continue`, `--complete`, or `--abandon`.",
+      )
+    None -> parse_resolve_flags(args, run, task_id, Some(next_action))
+  }
 }
 
 fn parse_resume_flags(

@@ -8,6 +8,7 @@ import night_shift/journal
 import night_shift/project
 import night_shift/repo_state_runtime
 import night_shift/types
+import night_shift/usecase/support/runs
 import simplifile
 
 pub fn execute(
@@ -22,7 +23,7 @@ pub fn execute(
   let assessments =
     run.tasks |> list.map(diagnose_task(repo_root, run.run_path, _))
   let recommendation =
-    recommend_next_action(run.status, events, active_lock, assessments)
+    recommend_next_action(run, events, active_lock, assessments)
 
   Ok(render_doctor(
     run,
@@ -272,42 +273,64 @@ fn diagnose_clean_running_task(
 }
 
 fn recommend_next_action(
-  status: types.RunStatus,
-  events: List(types.RunEvent),
+  run: types.RunRecord,
+  _events: List(types.RunEvent),
   active_lock: ActiveLockState,
   assessments: List(TaskAssessment),
 ) -> String {
-  case latest_environment_preflight_failure(events) {
-    Some(_) ->
-      "Fix the worktree environment first, then rerun `night-shift start` instead of resuming blindly."
+  case active_recovery_blocker(run) {
+    Some(blocker) ->
+      "Inspect the blocked-before-implementation setup gate first: "
+      <> types.recovery_blocker_phase_to_string(blocker.phase)
+      <> " "
+      <> types.recovery_blocker_kind_to_string(blocker.kind)
+      <> ". Review "
+      <> blocker.log_path
+      <> " and use `night-shift resolve` to inspect, continue, or abandon the run."
     None ->
-      case status {
-        types.RunCompleted ->
-          "This run is already completed; inspect the report and retained worktrees instead of resuming."
-        _ ->
-          case has_classification(assessments, types.RecoveryIrrecoverable) {
-            True ->
-              "At least one task is irrecoverable from saved state; inspect the journal and replan rather than resuming."
-            False ->
+      case runs.pending_recovery_bypass(run) {
+        Some(blocker) ->
+          "A one-shot setup retry is armed for "
+          <> types.recovery_blocker_phase_to_string(blocker.phase)
+          <> " "
+          <> types.recovery_blocker_kind_to_string(blocker.kind)
+          <> ". Run `night-shift start` to retry from the waived gate."
+        None ->
+          case run.status {
+            types.RunCompleted ->
+              "This run is already completed; inspect the report and retained worktrees instead of resuming."
+            _ ->
               case
-                has_classification(assessments, types.RecoveryManualAttention)
+                has_classification(assessments, types.RecoveryIrrecoverable)
               {
                 True ->
-                  "Resolve the manual-attention tasks first; `resume` would not safely clear them."
+                  "At least one task is irrecoverable from saved state; inspect the journal and replan rather than resuming."
                 False ->
-                  case active_lock {
-                    ActiveLockMismatch(other_run_id) ->
-                      "Another run lock is active ("
-                      <> other_run_id
-                      <> "); clear that ambiguity before resuming."
-                    _ ->
-                      case
-                        has_classification(assessments, types.ResumeWithWarning)
-                      {
-                        True ->
-                          "Resume is possible, but review the warnings above before you let Night Shift continue."
-                        False ->
-                          "Resume should be safe from the saved run state."
+                  case
+                    has_classification(
+                      assessments,
+                      types.RecoveryManualAttention,
+                    )
+                  {
+                    True -> runs.recovery_recommendation_for_run(run)
+                    False ->
+                      case active_lock {
+                        ActiveLockMismatch(other_run_id) ->
+                          "Another run lock is active ("
+                          <> other_run_id
+                          <> "); clear that ambiguity before resuming."
+                        _ ->
+                          case
+                            has_classification(
+                              assessments,
+                              types.ResumeWithWarning,
+                            )
+                          {
+                            True ->
+                              "Resume is possible, but review the warnings above before you let Night Shift continue."
+                            False ->
+                              "Resume should be safe from the saved run state."
+                          }
                       }
                   }
               }
@@ -323,22 +346,16 @@ fn has_classification(
   list.any(assessments, fn(assessment) { assessment.classification == target })
 }
 
-fn latest_environment_preflight_failure(
-  events: List(types.RunEvent),
-) -> Option(String) {
-  latest_environment_preflight_failure_loop(list.reverse(events))
-}
-
-fn latest_environment_preflight_failure_loop(
-  events: List(types.RunEvent),
-) -> Option(String) {
-  case events {
-    [] -> None
-    [event, ..rest] ->
-      case event.kind == "environment_preflight_failed" {
-        True -> Some(event.message)
-        False -> latest_environment_preflight_failure_loop(rest)
+fn active_recovery_blocker(
+  run: types.RunRecord,
+) -> Option(types.RecoveryBlocker) {
+  case run.recovery_blocker {
+    Some(blocker) ->
+      case blocker.disposition == types.RecoveryBlocking {
+        True -> Some(blocker)
+        False -> None
       }
+    _ -> None
   }
 }
 

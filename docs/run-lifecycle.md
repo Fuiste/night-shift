@@ -39,18 +39,47 @@ run a pending plan that has newer planning inputs than its saved task graph.
 
 ## Blocked Runs and `resolve`
 
-Night Shift blocks when the planner emits manual-attention tasks or unresolved
-decision requests. `resolve` is the interactive command that records answers
-for those decisions and immediately replans.
+Night Shift blocks when setup or preflight fails before implementation,
+when the planner emits manual-attention tasks, when decision requests stay
+unanswered, or when interrupted implementation work is recovered into manual
+attention. `resolve` is the command that discharges those blockers.
 
 Use it like this:
 
 ```sh
 night-shift resolve
 night-shift resolve --run run-123
+night-shift resolve --task task-123 --inspect
+night-shift resolve --task task-123 --continue
+night-shift resolve --task task-123 --complete
+night-shift resolve --task task-123 --abandon
 ```
 
-If `resolve` clears the decisions successfully, the run returns to `pending`
+Interactive `resolve` walks blockers in order:
+
+1. blocked-before-implementation setup or preflight recovery
+2. interrupted implementation recovery
+3. unresolved planning decisions
+4. planning-sync replans
+
+For blocked-before-implementation setup recovery, `resolve` can:
+
+- inspect the failed gate and saved logs without mutating the run
+- continue by arming a one-shot waiver for that exact gate
+- abandon the run if you want to start fresh instead
+
+After `resolve -> continue`, the run returns to `pending` with a retry-armed
+note in `status`, `report`, and Dash until the next `night-shift start`
+consumes that one-shot waiver.
+
+For interrupted implementation recovery, `resolve` can:
+
+- inspect the retained worktree and logs without mutating the run
+- continue the task from the retained worktree
+- mark the retained work complete and run verification
+- abandon the partial work and replan
+
+If `resolve` clears the blockers successfully, the run returns to `pending`
 and the next action becomes `night-shift start`.
 
 ## Interrupted Runs and `resume`
@@ -72,6 +101,10 @@ or environment settings; it reuses what the run journal already saved.
 inspect the saved run, active lock, worktrees, logs, review drift, and
 interrupted task states, then classify each task as `safe_to_resume`,
 `resume_with_warning`, `manual_attention`, or `irrecoverable`.
+
+`resume` is still the gate for stale `active` runs. Once `resume` has recovered
+an interrupted implementation task into `manual_attention`, use `resolve` to
+inspect, continue, complete, or abandon that retained work inside Night Shift.
 
 ## Review-Driven Replanning
 

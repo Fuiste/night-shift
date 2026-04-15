@@ -100,6 +100,7 @@ fn review_run() -> types.RunRecord {
     status: types.RunCompleted,
     created_at: "2026-04-13T17:30:00Z",
     updated_at: "2026-04-13T18:02:00Z",
+    recovery_blocker: None,
     tasks: [
       replacement_task(
         "rewrite-root",
