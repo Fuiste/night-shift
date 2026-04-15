@@ -527,25 +527,39 @@ fn update(model: Model, msg: Msg) -> #(Model, effect.Effect(Msg)) {
 }
 
 fn view(model: Model) {
-  html.main([attribute.class("dash-shell")], [
-    header_view(model),
-    body_view(model),
+  html.div([attribute.class("shell")], [
+    topbar_view(model),
+    html.div([attribute.class("body")], [
+      sidebar_view(model),
+      main_content_view(model),
+    ]),
   ])
 }
 
-fn header_view(model: Model) {
-  html.header([attribute.class("hero")], [
-    html.div([attribute.class("hero-copy")], [
-      html.h1([], [html.text("Night Shift Dash")]),
-      html.p([attribute.class("muted")], [
-        html.text(
-          "Browser-native planning, execution, recovery, and audit for the current repository.",
-        ),
-      ]),
+fn topbar_view(model: Model) {
+  html.header([attribute.class("topbar")], [
+    html.div([attribute.class("topbar-brand")], [
+      html.h1([], [html.text("Night Shift")]),
+      case model.workspace {
+        Some(workspace) ->
+          html.span([attribute.class("repo-root")], [
+            html.text(workspace.repo_root),
+          ])
+        None -> html.text("")
+      },
     ]),
-    html.div([attribute.class("hero-meta")], [
-      meta_card("Connection", model.connection),
-      meta_card("Selected run", model.selected_run),
+    html.div([attribute.class("topbar-meta")], [
+      html.div([attribute.class("meta-card")], [
+        html.span([attribute.class("meta-label")], [html.text("Connection")]),
+        html.span([attribute.class("meta-value")], [
+          html.span(
+            [attribute.class("connection-dot " <> model.connection)],
+            [],
+          ),
+          html.text(model.connection),
+        ]),
+      ]),
+      meta_card("Run", model.selected_run),
       meta_card("Command", case active_command(model.workspace) {
         Some(command) -> command.name <> " @ " <> command.started_at
         None -> "idle"
@@ -554,23 +568,57 @@ fn header_view(model: Model) {
   ])
 }
 
-fn body_view(model: Model) {
-  html.div([attribute.class("workspace")], [
-    sidebar_view(model),
-    main_panel_view(model),
+fn sidebar_view(model: Model) {
+  html.aside([attribute.class("sidebar")], [
+    workspace_section(model),
+    runs_section(model),
   ])
 }
 
-fn sidebar_view(model: Model) {
-  html.aside([attribute.class("sidebar panel")], [
-    html.h2([], [html.text("Runs")]),
-    html.ul([attribute.class("history-list")], case model.workspace {
+fn workspace_section(model: Model) {
+  html.div([attribute.class("sidebar-section")], case model.workspace {
+    Some(workspace) ->
+      case workspace.initialized {
+        True -> [
+          html.p([attribute.class("nav-title")], [html.text("Planning")]),
+          plan_form_view(model),
+        ]
+        False -> [
+          html.p([attribute.class("nav-title")], [html.text("Initialize")]),
+          html.p([attribute.class("muted")], [
+            html.text("Configure provider, model, and setup."),
+          ]),
+          init_form_view(model, workspace.providers),
+        ]
+      }
+    None -> [
+      html.p([attribute.class("muted")], [html.text("Loading workspace...")]),
+    ]
+  })
+}
+
+fn runs_section(model: Model) {
+  html.div([attribute.class("sidebar-section")], [
+    html.p([attribute.class("nav-title")], [html.text("Runs")]),
+    html.ul([attribute.class("run-list")], case model.workspace {
       Some(workspace) ->
         case workspace.runs {
-          [] -> [html.li([], [html.text("No runs yet.")])]
+          [] -> [
+            html.li([], [
+              html.span([attribute.class("muted")], [
+                html.text("No runs yet."),
+              ]),
+            ]),
+          ]
           runs -> runs |> list.map(run_button(_, model.selected_run))
         }
-      None -> [html.li([], [html.text("Loading workspace...")])]
+      None -> [
+        html.li([], [
+          html.span([attribute.class("muted")], [
+            html.text("Loading..."),
+          ]),
+        ]),
+      ]
     }),
   ])
 }
@@ -589,87 +637,28 @@ fn run_button(run: RunSummary, selected_run: String) {
         event.on_click(SelectRun(run.run_id)),
       ],
       [
-        html.strong([], [html.text(run.run_id)]),
-        html.p([attribute.class("muted")], [
-          html.text(
-            run.status
-            <> " · "
-            <> run.updated_at
-            <> " · "
-            <> int_to_string(run.task_count)
-            <> " tasks",
-          ),
+        html.span(
+          [attribute.class("status-dot status-" <> run.status)],
+          [],
+        ),
+        html.span([attribute.class("run-info")], [
+          html.span([attribute.class("run-id")], [html.text(run.run_id)]),
+          html.span([attribute.class("run-meta")], [
+            html.text(
+              run.status
+              <> " · "
+              <> int_to_string(run.task_count)
+              <> " tasks",
+            ),
+          ]),
         ]),
       ],
     ),
   ])
 }
 
-fn main_panel_view(model: Model) {
-  html.section([attribute.class("main-stack")], [
-    notice_view(model.notice),
-    repo_panel(model),
-    actions_panel(model),
-    case model.workspace {
-      Some(workspace) ->
-        case workspace.run {
-          Some(run) ->
-            html.div([attribute.class("panel-grid")], [
-              dag_panel(run, model.selected_task),
-              task_panel(run, model.selected_task),
-              decision_panel(run, model.decision_answers),
-              recovery_panel(run),
-              repo_state_panel(run),
-              delivery_panel(run),
-              timeline_panel(run),
-              markdown_panel("Report", run.report_markdown, run.report_url),
-              markdown_panel(
-                "Provenance",
-                run.provenance_markdown,
-                run.provenance_url,
-              ),
-            ])
-          None ->
-            html.section([attribute.class("panel")], [
-              html.text("No run selected yet."),
-            ])
-        }
-      None ->
-        html.section([attribute.class("panel")], [
-          html.text("Loading workspace..."),
-        ])
-    },
-  ])
-}
-
-fn repo_panel(model: Model) {
-  case model.workspace {
-    Some(workspace) ->
-      html.section([attribute.class("panel")], [
-        html.h2([], [html.text("Workspace")]),
-        html.p([], [html.text(workspace.repo_root)]),
-        html.p([attribute.class("muted")], [
-          html.text(case workspace.initialized {
-            True ->
-              "Initialized. Default profile: " <> workspace.default_profile
-            False ->
-              "Not initialized yet. Configure provider, model, and setup here."
-          }),
-        ]),
-        case workspace.initialized {
-          True -> plan_form_view(model)
-          False -> init_form_view(model, workspace.providers)
-        },
-      ])
-    None ->
-      html.section([attribute.class("panel")], [
-        html.text("Loading workspace..."),
-      ])
-  }
-}
-
 fn init_form_view(model: Model, providers: List(String)) {
-  html.div([attribute.class("form-stack")], [
+  html.div([attribute.class("sidebar-form")], [
     select_field(
       "Provider",
       providers,
@@ -687,17 +676,17 @@ fn init_form_view(model: Model, providers: List(String)) {
       "Generate setup from provider",
       model.init_form.generate_setup,
     ),
-    html.button([attribute.class("primary"), event.on_click(SubmitInit)], [
-      html.text("Initialize"),
-    ]),
+    html.button(
+      [attribute.class("btn btn-primary btn-sm"), event.on_click(SubmitInit)],
+      [html.text("Initialize")],
+    ),
   ])
 }
 
 fn plan_form_view(model: Model) {
-  html.div([attribute.class("form-stack")], [
+  html.div([attribute.class("sidebar-form")], [
     html.textarea(
       [
-        attribute.class("notes-input"),
         attribute.placeholder("Paste planning notes or a short operator brief"),
         attribute.value(model.plan_form.notes),
         event.on_input(UpdateNotes),
@@ -705,46 +694,165 @@ fn plan_form_view(model: Model) {
       model.plan_form.notes,
     ),
     text_field(
-      "Optional doc path",
+      "Doc path",
       "./notes.md",
       model.plan_form.doc_path,
       UpdateDocPath,
     ),
     html.div([attribute.class("button-row")], [
-      html.button([attribute.class("primary"), event.on_click(SubmitPlan)], [
-        html.text("Plan"),
-      ]),
-      html.button([event.on_click(SubmitPlanFromReviews)], [
-        html.text("Plan From Reviews"),
-      ]),
-      html.button([event.on_click(StartRun)], [html.text("Start")]),
-      html.button([event.on_click(ResumeRun)], [html.text("Resume")]),
+      html.button(
+        [attribute.class("btn btn-primary btn-sm"), event.on_click(SubmitPlan)],
+        [html.text("Plan")],
+      ),
+      html.button(
+        [attribute.class("btn btn-sm"), event.on_click(SubmitPlanFromReviews)],
+        [html.text("From Reviews")],
+      ),
     ]),
   ])
 }
 
-fn actions_panel(model: Model) {
-  case selected_run(model.workspace) {
-    Some(run) ->
-      html.section([attribute.class("panel action-summary")], [
-        html.h2([], [html.text("Run Summary")]),
-        html.p([], [html.text(run.run_id <> " · " <> run.status)]),
-        html.p([attribute.class("muted")], [
-          html.text("Next action: " <> run.next_action),
+fn main_content_view(model: Model) {
+  html.section([attribute.class("main-area")], [
+    notice_view(model.notice),
+    case model.workspace {
+      Some(workspace) ->
+        case workspace.run {
+          Some(run) ->
+            html.div([], [
+              run_bar_view(run),
+              tab_strip_view(model.active_tab, run),
+              tab_content_view(model.active_tab, run, model.selected_task,
+                model.decision_answers),
+            ])
+          None ->
+            html.div([attribute.class("empty-state")], [
+              html.p([], [
+                html.text("No run selected. Plan work from the sidebar to begin."),
+              ]),
+            ])
+        }
+      None ->
+        html.div([attribute.class("empty-state")], [
+          html.p([], [html.text("Loading workspace...")]),
+        ])
+    },
+  ])
+}
+
+fn run_bar_view(run: RunView) {
+  html.div([attribute.class("run-bar")], [
+    html.div([attribute.class("run-bar-info")], [
+      html.span([attribute.class("run-id-label")], [html.text(run.run_id)]),
+      html.span([attribute.class("status-badge " <> run.status)], [
+        html.text(run.status),
+      ]),
+      html.span([attribute.class("next-action")], [
+        html.text(run.next_action),
+      ]),
+    ]),
+    html.div([attribute.class("run-bar-meta")], [
+      meta_card("Planning", run.planning_label),
+      meta_card("Confidence", run.confidence_level),
+      meta_card("Updated", run.updated_at),
+    ]),
+    html.div([attribute.class("run-bar-actions")], [
+      html.button(
+        [attribute.class("btn btn-primary btn-sm"), event.on_click(StartRun)],
+        [html.text("Start")],
+      ),
+      html.button(
+        [attribute.class("btn btn-sm"), event.on_click(ResumeRun)],
+        [html.text("Resume")],
+      ),
+    ]),
+  ])
+}
+
+fn tab_strip_view(active_tab: String, run: RunView) {
+  let decision_count = list.length(run.decisions)
+  let blocker_count =
+    list.length(run.implementation_blockers)
+    + case run.setup_blocker {
+      Some(_) -> 1
+      None -> 0
+    }
+  html.nav([attribute.class("tab-strip")], [
+    tab_button("graph", "Graph", active_tab, 0),
+    tab_button("timeline", "Timeline", active_tab, 0),
+    tab_button("decisions", "Decisions", active_tab, decision_count),
+    tab_button("recovery", "Recovery", active_tab, blocker_count),
+    tab_button("report", "Report", active_tab, 0),
+    tab_button("provenance", "Provenance", active_tab, 0),
+    tab_button("delivery", "Delivery", active_tab, 0),
+    case run.repo_state {
+      Some(_) -> tab_button("repo_state", "Repo State", active_tab, 0)
+      None -> html.text("")
+    },
+  ])
+}
+
+fn tab_button(id: String, label: String, active_tab: String, badge: Int) {
+  html.button(
+    [
+      attribute.class(
+        "tab-btn"
+        <> case id == active_tab {
+          True -> " active"
+          False -> ""
+        },
+      ),
+      event.on_click(SelectTab(id)),
+    ],
+    case badge > 0 {
+      True -> [
+        html.text(label),
+        html.span([attribute.class("tab-badge warn")], [
+          html.text(int_to_string(badge)),
         ]),
-        html.div([attribute.class("hero-meta")], [
-          meta_card("Planning input", run.planning_label),
-          meta_card("Confidence", run.confidence_level),
-          meta_card("Updated", run.updated_at),
-        ]),
-      ])
-    None -> html.section([], [])
-  }
+      ]
+      False -> [html.text(label)]
+    },
+  )
+}
+
+fn tab_content_view(
+  active_tab: String,
+  run: RunView,
+  selected_task_id: Option(String),
+  decision_answers: List(#(String, String)),
+) {
+  html.div([attribute.class("tab-content")], [
+    case active_tab {
+      "graph" -> graph_tab(run, selected_task_id)
+      "timeline" -> timeline_panel(run)
+      "decisions" -> decision_panel(run, decision_answers)
+      "recovery" -> recovery_panel(run)
+      "report" ->
+        markdown_panel("Report", run.report_markdown, run.report_url)
+      "provenance" ->
+        markdown_panel(
+          "Provenance",
+          run.provenance_markdown,
+          run.provenance_url,
+        )
+      "delivery" -> delivery_panel(run)
+      "repo_state" -> repo_state_panel(run)
+      _ -> graph_tab(run, selected_task_id)
+    },
+  ])
+}
+
+fn graph_tab(run: RunView, selected_task_id: Option(String)) {
+  html.div([attribute.class("graph-split")], [
+    dag_panel(run, selected_task_id),
+    task_panel(run, selected_task_id),
+  ])
 }
 
 fn dag_panel(run: RunView, selected_task_id: Option(String)) {
-  html.section([attribute.class("panel")], [
-    html.h2([], [html.text("DAG")]),
+  html.div([], [
+    html.h2([], [html.text("Task Graph")]),
     html.div(
       [attribute.class("dag-graph")],
       run.dag_nodes
@@ -753,7 +861,8 @@ fn dag_panel(run: RunView, selected_task_id: Option(String)) {
           html.button(
             [
               attribute.class(
-                "dag-node"
+                "dag-node state-"
+                <> node.state
                 <> case selected_task_id == Some(node.id) {
                   True -> " active"
                   False -> ""
@@ -763,8 +872,12 @@ fn dag_panel(run: RunView, selected_task_id: Option(String)) {
               event.on_click(SelectTask(node.id)),
             ],
             [
-              html.strong([], [html.text(node.title)]),
-              html.span([attribute.class("muted")], [html.text(node.state)]),
+              html.span([attribute.class("node-title")], [
+                html.text(node.title),
+              ]),
+              html.span([attribute.class("node-state")], [
+                html.text(node.state),
+              ]),
             ],
           )
         }),
@@ -773,7 +886,7 @@ fn dag_panel(run: RunView, selected_task_id: Option(String)) {
 }
 
 fn task_panel(run: RunView, selected_task_id: Option(String)) {
-  html.section([attribute.class("panel")], [
+  html.div([], [
     html.h2([], [html.text("Task Detail")]),
     case selected_task(run.tasks, selected_task_id) {
       Some(task) ->
@@ -783,20 +896,23 @@ fn task_panel(run: RunView, selected_task_id: Option(String)) {
             html.text(task.id <> " · " <> task.state <> " · " <> task.kind),
           ]),
           html.p([], [html.text(non_empty(task.summary, task.description))]),
-          link_line("Task log", task.task_log_url),
-          link_line("Verify log", task.verify_log_url),
+          detail_line("Task log", Some(task.task_log_url), ""),
+          detail_line("Verify log", Some(task.verify_log_url), ""),
           text_line("Worktree", task.worktree_path),
           text_line("Branch", task.branch_name),
           maybe_link_line("PR", task.pr_url, task.pr_number),
           text_line("Supersedes", render_pr_numbers(task.superseded_pr_numbers)),
         ])
-      None -> html.p([], [html.text("Select a task to inspect its details.")])
+      None ->
+        html.p([attribute.class("muted")], [
+          html.text("Select a task to inspect its details."),
+        ])
     },
   ])
 }
 
 fn decision_panel(run: RunView, answers: List(#(String, String))) {
-  html.section([attribute.class("panel")], [
+  html.div([], [
     html.h2([], [html.text("Resolve Decisions")]),
     case run.decisions {
       [] ->
@@ -805,13 +921,16 @@ fn decision_panel(run: RunView, answers: List(#(String, String))) {
         ])
       decisions ->
         html.div(
-          [attribute.class("form-stack")],
+          [],
           list.append(
             decisions
               |> list.map(fn(item) { decision_request_view(item, answers) }),
             [
               html.button(
-                [attribute.class("primary"), event.on_click(SubmitDecisions)],
+                [
+                  attribute.class("btn btn-primary"),
+                  event.on_click(SubmitDecisions),
+                ],
                 [html.text("Submit Decisions")],
               ),
             ],
@@ -822,11 +941,11 @@ fn decision_panel(run: RunView, answers: List(#(String, String))) {
 }
 
 fn recovery_panel(run: RunView) {
-  html.section([attribute.class("panel")], [
+  html.div([], [
     html.h2([], [html.text("Recovery")]),
     case run.setup_blocker {
       Some(blocker) ->
-        html.div([attribute.class("form-stack")], [
+        html.div([attribute.class("recovery-block")], [
           html.p([], [
             html.text(
               "Blocked during " <> blocker.phase <> " " <> blocker.kind <> ".",
@@ -835,19 +954,27 @@ fn recovery_panel(run: RunView) {
           html.p([attribute.class("muted")], [html.text(blocker.message)]),
           text_line("Log", blocker.log_path),
           html.div([attribute.class("button-row")], [
-            html.button([event.on_click(RecoveryAction("inspect", None))], [
-              html.text("Inspect"),
-            ]),
             html.button(
               [
-                attribute.class("primary"),
+                attribute.class("btn btn-sm"),
+                event.on_click(RecoveryAction("inspect", None)),
+              ],
+              [html.text("Inspect")],
+            ),
+            html.button(
+              [
+                attribute.class("btn btn-primary btn-sm"),
                 event.on_click(RecoveryAction("continue", None)),
               ],
               [html.text("Continue")],
             ),
-            html.button([event.on_click(RecoveryAction("abandon", None))], [
-              html.text("Abandon"),
-            ]),
+            html.button(
+              [
+                attribute.class("btn btn-sm"),
+                event.on_click(RecoveryAction("abandon", None)),
+              ],
+              [html.text("Abandon")],
+            ),
           ]),
         ])
       None ->
@@ -857,7 +984,7 @@ fn recovery_panel(run: RunView) {
               html.text("No recovery blockers are active."),
             ])
           [task, ..] ->
-            html.div([attribute.class("form-stack")], [
+            html.div([attribute.class("recovery-block")], [
               html.p([], [
                 html.text(
                   "Interrupted implementation work is waiting on operator input.",
@@ -868,22 +995,31 @@ fn recovery_panel(run: RunView) {
               ]),
               html.div([attribute.class("button-row")], [
                 html.button(
-                  [event.on_click(RecoveryAction("inspect", Some(task.id)))],
+                  [
+                    attribute.class("btn btn-sm"),
+                    event.on_click(RecoveryAction("inspect", Some(task.id))),
+                  ],
                   [html.text("Inspect")],
                 ),
                 html.button(
                   [
-                    attribute.class("primary"),
+                    attribute.class("btn btn-primary btn-sm"),
                     event.on_click(RecoveryAction("continue", Some(task.id))),
                   ],
                   [html.text("Continue")],
                 ),
                 html.button(
-                  [event.on_click(RecoveryAction("complete", Some(task.id)))],
+                  [
+                    attribute.class("btn btn-sm"),
+                    event.on_click(RecoveryAction("complete", Some(task.id))),
+                  ],
                   [html.text("Complete")],
                 ),
                 html.button(
-                  [event.on_click(RecoveryAction("abandon", Some(task.id)))],
+                  [
+                    attribute.class("btn btn-sm"),
+                    event.on_click(RecoveryAction("abandon", Some(task.id))),
+                  ],
                   [html.text("Abandon")],
                 ),
               ]),
@@ -894,19 +1030,22 @@ fn recovery_panel(run: RunView) {
 }
 
 fn repo_state_panel(run: RunView) {
-  html.section([attribute.class("panel")], [
+  html.div([], [
     html.h2([], [html.text("Repo State")]),
     case run.repo_state {
       Some(repo_state) ->
-        html.div([attribute.class("form-stack")], [
+        html.div([], [
           text_line("Snapshot", repo_state.snapshot_captured_at),
           text_line("Drift", repo_state.drift),
           html.h3([], [html.text("Actionable PRs")]),
           pr_list(repo_state.actionable_pull_requests),
           html.h3([], [html.text("Impacted PRs")]),
           pr_list(repo_state.impacted_pull_requests),
-          html.h3([], [html.text("Replacement lineage")]),
-          html.ul([], repo_state.replacement_lineage |> list.map(lineage_item)),
+          html.h3([], [html.text("Replacement Lineage")]),
+          html.ul(
+            [attribute.class("lineage-list")],
+            repo_state.replacement_lineage |> list.map(lineage_item),
+          ),
         ])
       None ->
         html.p([attribute.class("muted")], [
@@ -917,14 +1056,14 @@ fn repo_state_panel(run: RunView) {
 }
 
 fn delivery_panel(run: RunView) {
-  html.section([attribute.class("panel")], [
+  html.div([], [
     html.h2([], [html.text("Delivery")]),
     case run.delivery {
       [] ->
         html.p([attribute.class("muted")], [html.text("No delivered PRs yet.")])
       rows ->
         html.ul(
-          [],
+          [attribute.class("delivery-list")],
           rows
             |> list.map(fn(row) {
               html.li([], [
@@ -944,16 +1083,22 @@ fn delivery_panel(run: RunView) {
 }
 
 fn timeline_panel(run: RunView) {
-  html.section([attribute.class("panel")], [
+  html.div([], [
     html.h2([], [html.text("Timeline")]),
     html.ul(
       [attribute.class("timeline")],
       run.timeline
         |> list.map(fn(entry) {
           html.li([], [
-            html.strong([], [html.text(entry.kind)]),
-            html.p([attribute.class("muted")], [html.text(entry.at)]),
-            html.p([], [html.text(entry.message)]),
+            html.span([attribute.class("event-kind")], [
+              html.text(entry.kind),
+            ]),
+            html.span([attribute.class("event-time")], [
+              html.text(entry.at),
+            ]),
+            html.span([attribute.class("event-message")], [
+              html.text(entry.message),
+            ]),
           ])
         }),
     ),
@@ -961,7 +1106,7 @@ fn timeline_panel(run: RunView) {
 }
 
 fn markdown_panel(title: String, markdown: String, url: String) {
-  html.section([attribute.class("panel")], [
+  html.div([attribute.class("markdown-panel")], [
     html.div([attribute.class("panel-head")], [
       html.h2([], [html.text(title)]),
       html.a(
@@ -979,11 +1124,11 @@ fn markdown_panel(title: String, markdown: String, url: String) {
 
 fn notice_view(notice: Option(Notice)) {
   case notice {
-    Some(notice) ->
-      html.section([attribute.class("notice " <> notice.kind)], [
-        html.text(notice.message),
+    Some(n) ->
+      html.div([attribute.class("notice " <> n.kind)], [
+        html.text(n.message),
       ])
-    None -> html.section([], [])
+    None -> html.text("")
   }
 }
 
@@ -1009,8 +1154,8 @@ fn decision_request_view(
   ])
 }
 
-fn decision_option_view(option: DecisionOption) {
-  html.li([], [html.text(option.label <> ": " <> option.description)])
+fn decision_option_view(opt: DecisionOption) {
+  html.li([], [html.text(opt.label <> ": " <> opt.description)])
 }
 
 fn pr_list(rows: List(PullRequestView)) {
@@ -1018,7 +1163,7 @@ fn pr_list(rows: List(PullRequestView)) {
     [] -> html.p([attribute.class("muted")], [html.text("None.")])
     _ ->
       html.ul(
-        [],
+        [attribute.class("pr-list")],
         rows
           |> list.map(fn(pr) {
             html.li([], [
@@ -1078,10 +1223,10 @@ fn select_field(
     html.select(
       [event.on_change(to_msg)],
       options
-        |> list.map(fn(option) {
+        |> list.map(fn(opt) {
           html.option(
-            [attribute.value(option), attribute.selected(option == selected)],
-            option,
+            [attribute.value(opt), attribute.selected(opt == selected)],
+            opt,
           )
         }),
     ),
@@ -1095,13 +1240,13 @@ fn select_models_field(models: List(ProviderModel), selected: String) {
       [] -> [html.option([attribute.value("")], "Discovering models...")]
       _ ->
         models
-        |> list.map(fn(model) {
+        |> list.map(fn(m) {
           html.option(
             [
-              attribute.value(model.id),
-              attribute.selected(model.id == selected),
+              attribute.value(m.id),
+              attribute.selected(m.id == selected),
             ],
-            model.label,
+            m.label,
           )
         })
     }),
@@ -1121,36 +1266,44 @@ fn checkbox_field(label: String, value: Bool) {
 
 fn meta_card(label: String, value: String) {
   html.div([attribute.class("meta-card")], [
-    html.span([attribute.class("muted")], [html.text(label)]),
-    html.strong([], [html.text(value)]),
+    html.span([attribute.class("meta-label")], [html.text(label)]),
+    html.span([attribute.class("meta-value")], [html.text(value)]),
   ])
+}
+
+fn detail_line(label: String, url: Option(String), _fallback: String) {
+  case url {
+    Some(link) ->
+      case string.trim(link) {
+        "" -> html.text("")
+        trimmed ->
+          html.div([attribute.class("detail-line")], [
+            html.strong([], [html.text(label <> ": ")]),
+            html.a(
+              [
+                attribute.href(trimmed),
+                attribute.target("_blank"),
+                attribute.rel("noreferrer"),
+              ],
+              [html.text(trimmed)],
+            ),
+          ])
+      }
+    None -> html.text("")
+  }
 }
 
 fn text_line(label: String, value: String) {
-  html.p([], [
+  html.div([attribute.class("detail-line")], [
     html.strong([], [html.text(label <> ": ")]),
-    html.text(non_empty(value, "—")),
-  ])
-}
-
-fn link_line(label: String, url: String) {
-  html.p([], [
-    html.strong([], [html.text(label <> ": ")]),
-    html.a(
-      [
-        attribute.href(url),
-        attribute.target("_blank"),
-        attribute.rel("noreferrer"),
-      ],
-      [html.text(url)],
-    ),
+    html.span([], [html.text(non_empty(value, "—"))]),
   ])
 }
 
 fn maybe_link_line(label: String, url: Option(String), fallback: String) {
   case url {
     Some(link) ->
-      html.p([], [
+      html.div([attribute.class("detail-line")], [
         html.strong([], [html.text(label <> ": ")]),
         html.a(
           [
