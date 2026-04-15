@@ -1,6 +1,7 @@
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/string
 import night_shift/domain/decisions
 import night_shift/types
 
@@ -9,11 +10,19 @@ pub fn summary(
   events: List(types.RunEvent),
   next_action: String,
 ) -> String {
-  case latest_environment_preflight_failure(events) {
-    Some(message) ->
-      "Environment bootstrap blocker: yes\n"
+  case active_recovery_blocker(run) {
+    Some(blocker) ->
+      "Blocked before implementation: yes\n"
+      <> "Failed gate: "
+      <> types.recovery_blocker_phase_to_string(blocker.phase)
+      <> " "
+      <> types.recovery_blocker_kind_to_string(blocker.kind)
+      <> "\n"
       <> "Failure: "
-      <> message
+      <> blocker.message
+      <> "\nLog: "
+      <> blocker.log_path
+      <> replacement_fragment(run)
       <> "\n"
       <> "Ready implementation tasks: "
       <> int.to_string(ready_implementation_task_count(run.tasks))
@@ -21,7 +30,8 @@ pub fn summary(
       <> "Queued tasks: "
       <> int.to_string(queued_task_count(run.tasks))
       <> "\n"
-      <> "Next action: fix the worktree environment, then rerun `night-shift start` or `night-shift reset`"
+      <> "\nNext action: "
+      <> next_action
     None ->
       case run.status {
         types.RunFailed ->
@@ -142,6 +152,44 @@ pub fn summary(
   }
 }
 
+fn active_recovery_blocker(
+  run: types.RunRecord,
+) -> Option(types.RecoveryBlocker) {
+  case run.recovery_blocker {
+    Some(blocker) ->
+      case blocker.disposition == types.RecoveryBlocking {
+        True -> Some(blocker)
+        False -> None
+      }
+    _ -> None
+  }
+}
+
+fn replacement_fragment(run: types.RunRecord) -> String {
+  let pr_numbers =
+    run.tasks
+    |> list.flat_map(fn(task) { task.superseded_pr_numbers })
+    |> unique_pr_numbers([])
+  case pr_numbers {
+    [] -> "\nNo new commits or PR updates were produced yet."
+    _ ->
+      "\nIntended replacement PRs remain pending: #"
+      <> string.join(pr_numbers |> list.map(int.to_string), with: ", #")
+      <> "\nExisting reviewed PRs remain unchanged until replacement delivery succeeds."
+  }
+}
+
+fn unique_pr_numbers(values: List(Int), acc: List(Int)) -> List(Int) {
+  case values {
+    [] -> list.reverse(acc)
+    [value, ..rest] ->
+      case list.contains(acc, value) {
+        True -> unique_pr_numbers(rest, acc)
+        False -> unique_pr_numbers(rest, [value, ..acc])
+      }
+  }
+}
+
 fn completed_task_count(tasks: List(types.Task)) -> Int {
   tasks
   |> list.filter(fn(task) { task.state == types.Completed })
@@ -196,25 +244,6 @@ fn bool_label(value: Bool) -> String {
   case value {
     True -> "yes"
     False -> "no"
-  }
-}
-
-fn latest_environment_preflight_failure(
-  events: List(types.RunEvent),
-) -> Option(String) {
-  latest_environment_preflight_failure_loop(list.reverse(events))
-}
-
-fn latest_environment_preflight_failure_loop(
-  events: List(types.RunEvent),
-) -> Option(String) {
-  case events {
-    [] -> None
-    [event, ..rest] ->
-      case event.kind == "environment_preflight_failed" {
-        True -> Some(event.message)
-        False -> latest_environment_preflight_failure_loop(rest)
-      }
   }
 }
 

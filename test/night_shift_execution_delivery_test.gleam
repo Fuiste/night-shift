@@ -14,6 +14,7 @@ import night_shift/provider
 import night_shift/shell
 import night_shift/system
 import night_shift/types
+import night_shift/usecase/resolve as resolve_usecase
 import night_shift/usecase/resume
 import night_shift/worktree_setup
 import night_shift_test_support as support
@@ -1935,7 +1936,7 @@ pub fn orchestrator_start_blocks_manual_attention_before_bootstrap_test() {
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
 
-pub fn orchestrator_start_fails_environment_preflight_before_task_launch_test() {
+pub fn orchestrator_start_blocks_environment_preflight_before_task_launch_test() {
   let unique = system.unique_id()
   let base_dir =
     support.absolute_path(filepath.join(
@@ -1992,34 +1993,37 @@ pub fn orchestrator_start_fails_environment_preflight_before_task_launch_test() 
       "default",
       1,
     )
-  let assert Ok(failed_run) = orchestrator.start(run, config)
+  let assert Ok(blocked_run) = orchestrator.start(run, config)
 
   system.set_env("PATH", old_path)
   support.restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
   support.restore_env("XDG_STATE_HOME", old_state_home)
 
-  let assert Ok(events) = simplifile.read(failed_run.events_path)
+  let assert Ok(events) = simplifile.read(blocked_run.events_path)
   let preflight_log =
-    filepath.join(failed_run.run_path, "logs/environment-preflight.log")
+    filepath.join(blocked_run.run_path, "logs/environment-preflight.log")
   let assert Ok(preflight_contents) = simplifile.read(preflight_log)
-  let assert Ok(report_contents) = simplifile.read(failed_run.report_path)
+  let assert Ok(report_contents) = simplifile.read(blocked_run.report_path)
 
-  assert failed_run.status == types.RunFailed
+  let assert Some(blocker) = blocked_run.recovery_blocker
+  assert blocked_run.status == types.RunBlocked
+  assert blocker.kind == types.EnvironmentPreflightBlocker
+  assert blocker.phase == types.PreflightPhase
   assert string.contains(
     does: events,
-    contain: "\"kind\":\"environment_preflight_failed\"",
+    contain: "\"kind\":\"environment_preflight_blocked\"",
   )
   assert string.contains(does: events, contain: "\"kind\":\"task_started\"")
     == False
   assert string.contains(does: preflight_contents, contain: "missing-tool")
+  assert string.contains(does: report_contents, contain: "- Blocked tasks: 1")
   assert string.contains(
     does: report_contents,
-    contain: "- Run-level failures: 1",
+    contain: "## Blocked Before Implementation",
   )
-  assert string.contains(does: report_contents, contain: "## Failure")
   assert string.contains(
     does: report_contents,
-    contain: "environment bootstrap",
+    contain: "No new commits or PR updates were produced yet.",
   )
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
@@ -2108,7 +2112,7 @@ pub fn environment_preflight_defaults_to_first_setup_executable_test() {
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
 
-pub fn orchestrator_start_reports_setup_phase_failures_after_preflight_test() {
+pub fn orchestrator_start_blocks_setup_phase_failures_after_preflight_test() {
   let unique = system.unique_id()
   let base_dir =
     support.absolute_path(filepath.join(
@@ -2166,17 +2170,17 @@ pub fn orchestrator_start_reports_setup_phase_failures_after_preflight_test() {
       "default",
       1,
     )
-  let assert Ok(failed_run) = orchestrator.start(run, config)
+  let assert Ok(blocked_run) = orchestrator.start(run, config)
 
   system.set_env("PATH", old_path)
   support.restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
   support.restore_env("XDG_STATE_HOME", old_state_home)
 
-  let assert Ok(events) = simplifile.read(failed_run.events_path)
-  let env_log = filepath.join(failed_run.run_path, "logs/demo-task.env.log")
+  let assert Ok(events) = simplifile.read(blocked_run.events_path)
+  let env_log = filepath.join(blocked_run.run_path, "logs/demo-task.env.log")
   let assert Ok(env_contents) = simplifile.read(env_log)
   let failed_task =
-    failed_run.tasks
+    blocked_run.tasks
     |> list.find(fn(task) { task.id == "demo-task" })
     |> result.unwrap(or: types.Task(
       id: "",
@@ -2197,14 +2201,116 @@ pub fn orchestrator_start_reports_setup_phase_failures_after_preflight_test() {
       runtime_context: None,
     ))
 
-  assert failed_run.status == types.RunFailed
+  let assert Some(blocker) = blocked_run.recovery_blocker
+  assert blocked_run.status == types.RunBlocked
+  assert blocker.kind == types.TaskSetupBlocker
+  assert blocker.phase == types.SetupPhase
   assert string.contains(does: events, contain: "\"kind\":\"task_started\"")
-  assert string.contains(does: events, contain: "\"kind\":\"task_failed\"")
+  assert string.contains(
+    does: events,
+    contain: "\"kind\":\"task_setup_blocked\"",
+  )
   assert string.contains(does: env_contents, contain: "(exit 127)")
   assert string.contains(does: env_contents, contain: "$ missing-tool install")
   assert string.contains(
     does: failed_task.summary,
     contain: "Worktree setup phase failed while running `missing-tool install`",
+  )
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn resolve_continue_waives_environment_preflight_once_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    support.absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-preflight-continue-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let bin_dir = filepath.join(base_dir, "bin")
+  let brief_path = filepath.join(base_dir, "brief.md")
+  let fake_provider = filepath.join(bin_dir, "fake-provider")
+  let state_home = filepath.join(base_dir, "state")
+  let old_path = system.get_env("PATH")
+  let old_fake_provider = system.get_env("NIGHT_SHIFT_FAKE_PROVIDER")
+  let old_state_home = system.get_env("XDG_STATE_HOME")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(bin_dir)
+  let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
+  let assert Ok(_) = support.initialize_project_home(repo_root)
+  let assert Ok(_) = support.write_fake_provider(fake_provider)
+  let assert Ok(_) =
+    support.write_test_worktree_setup_with_preflight(
+      project.worktree_setup_path(repo_root),
+      ["missing-tool setup"],
+      [],
+      [],
+    )
+  let _ =
+    shell.run(
+      "chmod +x " <> shell.quote(fake_provider),
+      base_dir,
+      filepath.join(base_dir, "chmod.log"),
+    )
+  support.seed_git_repo(repo_root, base_dir)
+
+  system.set_env("NIGHT_SHIFT_FAKE_PROVIDER", fake_provider)
+  system.set_env("PATH", bin_dir <> ":" <> old_path)
+  system.set_env("XDG_STATE_HOME", state_home)
+
+  let config =
+    types.Config(
+      ..types.default_config(),
+      verification_commands: [],
+      max_workers: 1,
+    )
+
+  let assert Ok(run) =
+    support.planned_run_in_environment(
+      repo_root,
+      brief_path,
+      types.Codex,
+      "default",
+      1,
+    )
+  let assert Ok(blocked_run) = orchestrator.start(run, config)
+  let assert Ok(resolved) =
+    resolve_usecase.execute(
+      repo_root,
+      types.RunId(run.run_id),
+      None,
+      Some(types.ResolveContinue),
+      config,
+      fn(_, _) { Error("not used") },
+    )
+  let assert Ok(retried_run) = orchestrator.start(resolved.run, config)
+
+  system.set_env("PATH", old_path)
+  support.restore_env("NIGHT_SHIFT_FAKE_PROVIDER", old_fake_provider)
+  support.restore_env("XDG_STATE_HOME", old_state_home)
+
+  let assert Some(blocker) = blocked_run.recovery_blocker
+  let assert Ok(events) = simplifile.read(retried_run.events_path)
+
+  assert blocker.kind == types.EnvironmentPreflightBlocker
+  assert resolved.run.status == types.RunPending
+  assert resolved.run.recovery_blocker != None
+  assert resolved.next_action == "night-shift start"
+  assert retried_run.status != types.RunBlocked
+  assert retried_run.recovery_blocker == None
+  assert string.contains(
+    does: events,
+    contain: "\"kind\":\"setup_recovery_approved\"",
+  )
+  assert string.contains(does: events, contain: "\"kind\":\"task_started\"")
+  assert string.contains(
+    does: events,
+    contain: "\"kind\":\"environment_preflight_blocked\"",
   )
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)

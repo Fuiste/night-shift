@@ -39,7 +39,7 @@ pub fn render(
       <> types.confidence_posture_to_string(confidence_assessment.posture),
     "- Confidence reasons: "
       <> confidence.reasons_summary(confidence_assessment),
-    render_summary(run.decisions, run.planning_dirty, run.tasks, events),
+    render_summary(run, run.decisions, run.planning_dirty, run.tasks, events),
     render_planning_validation_summary(events),
     render_failure_summary(run, events),
     render_review_replacement_section(run, events),
@@ -127,6 +127,7 @@ fn render_repo_snapshot_group(title: String, entries: List(String)) -> String {
 }
 
 fn render_summary(
+  run: types.RunRecord,
   decisions: List(types.RecordedDecision),
   planning_dirty: Bool,
   tasks: List(types.Task),
@@ -150,22 +151,19 @@ fn render_summary(
       task.kind == types.ImplementationTask && task.state == types.Blocked
     })
     |> list.length
-  let derived_blocked_count = case
-    planning_dirty && manual_attention_count == 0 && blocked_count == 0
-  {
-    True -> 1
-    False -> manual_attention_count + blocked_count
+  let derived_blocked_count = case active_recovery_blocker(run) {
+    Some(_) -> 1
+    None ->
+      case planning_dirty && manual_attention_count == 0 && blocked_count == 0 {
+        True -> 1
+        False -> manual_attention_count + blocked_count
+      }
   }
   let failed_count =
     tasks
     |> list.filter(fn(task) { task.state == types.Failed })
     |> list.length
-  let run_level_failure_count = case
-    latest_environment_preflight_failure(events)
-  {
-    Some(_) -> 1
-    None -> 0
-  }
+  let run_level_failure_count = 0
   let queued_count =
     tasks
     |> list.filter(fn(task) {
@@ -465,9 +463,17 @@ fn render_failure_summary(
   run: types.RunRecord,
   events: List(types.RunEvent),
 ) -> String {
-  case latest_environment_preflight_failure(events) {
-    Some(message) ->
-      "\n## Failure\n- Type: environment bootstrap\n- Details: " <> message
+  case active_recovery_blocker(run) {
+    Some(blocker) ->
+      "\n## Blocked Before Implementation\n- Failed gate: "
+      <> types.recovery_blocker_phase_to_string(blocker.phase)
+      <> " "
+      <> types.recovery_blocker_kind_to_string(blocker.kind)
+      <> "\n- Details: "
+      <> blocker.message
+      <> "\n- Log: "
+      <> blocker.log_path
+      <> replacement_fragment(run)
     None ->
       case run.status, latest_run_failed_message(events) {
         types.RunFailed, Some(message) ->
@@ -495,21 +501,40 @@ fn task_requires_manual_attention(
   || types.task_requires_manual_attention(decisions, task)
 }
 
-fn latest_environment_preflight_failure(
-  events: List(types.RunEvent),
-) -> Option(String) {
-  latest_environment_preflight_failure_loop(list.reverse(events))
+fn active_recovery_blocker(
+  run: types.RunRecord,
+) -> Option(types.RecoveryBlocker) {
+  case run.recovery_blocker {
+    Some(blocker) ->
+      case blocker.disposition == types.RecoveryBlocking {
+        True -> Some(blocker)
+        False -> None
+      }
+    _ -> None
+  }
 }
 
-fn latest_environment_preflight_failure_loop(
-  events: List(types.RunEvent),
-) -> Option(String) {
-  case events {
-    [] -> None
-    [event, ..rest] ->
-      case event.kind == "environment_preflight_failed" {
-        True -> Some(event.message)
-        False -> latest_environment_preflight_failure_loop(rest)
+fn replacement_fragment(run: types.RunRecord) -> String {
+  let pr_numbers =
+    run.tasks
+    |> list.flat_map(fn(task) { task.superseded_pr_numbers })
+    |> unique_pr_numbers([])
+  case pr_numbers {
+    [] -> "\n- No new commits or PR updates were produced yet."
+    _ ->
+      "\n- Intended replacement PRs remain pending: #"
+      <> string.join(pr_numbers |> list.map(int.to_string), with: ", #")
+      <> "\n- Existing reviewed PRs remain unchanged until replacement delivery succeeds."
+  }
+}
+
+fn unique_pr_numbers(values: List(Int), acc: List(Int)) -> List(Int) {
+  case values {
+    [] -> list.reverse(acc)
+    [value, ..rest] ->
+      case list.contains(acc, value) {
+        True -> unique_pr_numbers(rest, acc)
+        False -> unique_pr_numbers(rest, [value, ..acc])
       }
   }
 }

@@ -2,6 +2,7 @@ import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
+import night_shift/domain/decisions as decision_domain
 import night_shift/repo_state_runtime
 import night_shift/types
 import simplifile
@@ -51,12 +52,22 @@ fn severe_reasons(
   run: types.RunRecord,
   events: List(types.RunEvent),
 ) -> List(String) {
-  let manual_attention_count =
+  let planning_manual_attention_count =
     run.tasks
     |> list.filter(fn(task) {
       types.task_requires_manual_attention(run.decisions, task)
     })
     |> list.length
+  let implementation_blocker_count =
+    decision_domain.implementation_blocking_task_count(run)
+  let setup_blocker_count = case run.recovery_blocker {
+    Some(blocker) ->
+      case blocker.disposition == types.RecoveryBlocking {
+        True -> 1
+        False -> 0
+      }
+    _ -> 0
+  }
   let failed_count =
     run.tasks
     |> list.filter(fn(task) { task.state == types.Failed })
@@ -71,12 +82,20 @@ fn severe_reasons(
   let run_failed = event_count(events, "run_failed")
 
   [
-    latest_environment_preflight_failure(events)
-      |> option_reason("Environment bootstrap failed."),
     count_reason(
-      manual_attention_count,
-      "manual-attention task is still unresolved.",
-      "manual-attention tasks are still unresolved.",
+      setup_blocker_count,
+      "blocked-before-implementation setup recovery is still unresolved.",
+      "blocked-before-implementation setup recoveries are still unresolved.",
+    ),
+    count_reason(
+      planning_manual_attention_count,
+      "manual-attention planning task is still unresolved.",
+      "manual-attention planning tasks are still unresolved.",
+    ),
+    count_reason(
+      implementation_blocker_count,
+      "interrupted implementation task requires manual recovery.",
+      "interrupted implementation tasks require manual recovery.",
     ),
     count_reason(
       unresolved_decision_requests_count(run),
@@ -177,7 +196,10 @@ fn positive_reasons(
       True -> Some("Delivered pull requests are recorded in the journal.")
       False -> None
     },
-    case unresolved_decision_requests_count(run) == 0 {
+    case
+      unresolved_decision_requests_count(run) == 0
+      && setup_blocker_count(run) == 0
+    {
       True -> Some("No outstanding operator decisions remain.")
       False -> None
     },
@@ -207,22 +229,14 @@ fn event_count(events: List(types.RunEvent), kind: String) -> Int {
   |> list.length
 }
 
-fn latest_environment_preflight_failure(
-  events: List(types.RunEvent),
-) -> Option(String) {
-  latest_environment_preflight_failure_loop(list.reverse(events))
-}
-
-fn latest_environment_preflight_failure_loop(
-  events: List(types.RunEvent),
-) -> Option(String) {
-  case events {
-    [] -> None
-    [event, ..rest] ->
-      case event.kind == "environment_preflight_failed" {
-        True -> Some(event.message)
-        False -> latest_environment_preflight_failure_loop(rest)
+fn setup_blocker_count(run: types.RunRecord) -> Int {
+  case run.recovery_blocker {
+    Some(blocker) ->
+      case blocker.disposition == types.RecoveryBlocking {
+        True -> 1
+        False -> 0
       }
+    _ -> 0
   }
 }
 
@@ -230,13 +244,6 @@ fn directory_exists(path: String) -> Bool {
   case simplifile.read_directory(at: path) {
     Ok(_) -> True
     Error(_) -> False
-  }
-}
-
-fn option_reason(value: Option(a), message: String) -> Option(String) {
-  case value {
-    Some(_) -> Some(message)
-    None -> None
   }
 }
 

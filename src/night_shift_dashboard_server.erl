@@ -108,6 +108,18 @@ handle_client(Socket, RepoRoot, InitialRunId) ->
                 {error, Message} ->
                     reply(Socket, 500, <<"text/plain; charset=utf-8">>, Message)
             end;
+        {ok, <<"POST">>, <<"/api/runs/", Rest/binary>>} ->
+            case parse_recovery_path(Rest) of
+                {ok, RunId, Action} ->
+                    case night_shift@dashboard:apply_recovery_action(RepoRoot, uri_string:unquote(RunId), Action) of
+                        {ok, Payload} ->
+                            reply(Socket, 200, <<"text/plain; charset=utf-8">>, Payload);
+                        {error, Message} ->
+                            reply(Socket, 400, <<"text/plain; charset=utf-8">>, Message)
+                    end;
+                error ->
+                    reply(Socket, 404, <<"text/plain; charset=utf-8">>, <<"Not found">>)
+            end;
         {ok, <<"GET">>, <<"/api/runs/", RunId/binary>>} ->
             case night_shift@dashboard:run_json(RepoRoot, uri_string:unquote(RunId)) of
                 {ok, Payload} ->
@@ -154,6 +166,14 @@ strip_query(Path) ->
     case binary:split(Path, <<"?">>) of
         [Clean | _] -> Clean;
         [] -> Path
+    end.
+
+parse_recovery_path(Rest) ->
+    case binary:split(Rest, <<"/recovery/">>) of
+        [RunId, Action] when RunId =/= <<>>, Action =/= <<>> ->
+            {ok, RunId, Action};
+        _ ->
+            error
     end.
 
 reply(Socket, StatusCode, ContentType, Body) ->

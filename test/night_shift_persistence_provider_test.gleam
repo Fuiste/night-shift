@@ -237,6 +237,133 @@ pub fn dashboard_payloads_include_run_data_test() {
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
 
+pub fn dashboard_payloads_include_setup_recovery_context_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    support.absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-dashboard-recovery-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo-" <> unique)
+  let brief_path = filepath.join(base_dir, "brief.md")
+
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(base_dir)
+  let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
+  let assert Ok(run) = support.start_run(repo_root, brief_path, types.Codex, 1)
+  let blocked_run =
+    types.RunRecord(
+      ..run,
+      status: types.RunBlocked,
+      planning_provenance: Some(types.ReviewsOnly),
+      recovery_blocker: Some(types.RecoveryBlocker(
+        kind: types.EnvironmentPreflightBlocker,
+        phase: types.PreflightPhase,
+        task_id: None,
+        message: "missing-tool setup",
+        log_path: filepath.join(run.run_path, "logs/environment-preflight.log"),
+        no_changes_produced: True,
+        disposition: types.RecoveryBlocking,
+      )),
+      tasks: [
+        types.Task(
+          ..list.first(run.tasks)
+          |> result.unwrap(or: types.Task(
+            id: "demo-task",
+            title: "Demo task",
+            description: "",
+            dependencies: [],
+            acceptance: [],
+            demo_plan: [],
+            decision_requests: [],
+            superseded_pr_numbers: [36, 37],
+            kind: types.ImplementationTask,
+            execution_mode: types.Serial,
+            state: types.Queued,
+            worktree_path: "",
+            branch_name: "",
+            pr_number: "",
+            summary: "",
+            runtime_context: None,
+          )),
+          superseded_pr_numbers: [36, 37],
+        ),
+      ],
+    )
+  let assert Ok(_) = journal.rewrite_run(blocked_run)
+  let assert Ok(run_payload) = dashboard.run_json(repo_root, run.run_id)
+
+  assert string.contains(does: run_payload, contain: "\"recovery_blocker\"")
+  assert string.contains(
+    does: run_payload,
+    contain: "\"kind\":\"environment_preflight\"",
+  )
+  assert string.contains(
+    does: run_payload,
+    contain: "\"replacement_pr_numbers\":[36,37]",
+  )
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn dashboard_recovery_action_continue_updates_run_state_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    support.absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-dashboard-recovery-action-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo-" <> unique)
+  let brief_path = filepath.join(base_dir, "brief.md")
+
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(base_dir)
+  let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
+  let assert Ok(_) = support.initialize_project_home(repo_root)
+  support.seed_git_repo(repo_root, base_dir)
+  let assert Ok(run) = support.start_run(repo_root, brief_path, types.Codex, 1)
+  let blocked_run =
+    types.RunRecord(
+      ..run,
+      status: types.RunBlocked,
+      recovery_blocker: Some(types.RecoveryBlocker(
+        kind: types.EnvironmentPreflightBlocker,
+        phase: types.PreflightPhase,
+        task_id: None,
+        message: "missing-tool setup",
+        log_path: filepath.join(run.run_path, "logs/environment-preflight.log"),
+        no_changes_produced: True,
+        disposition: types.RecoveryBlocking,
+      )),
+    )
+  let assert Ok(_) = journal.rewrite_run(blocked_run)
+  let assert Ok(summary) =
+    dashboard.apply_recovery_action(repo_root, run.run_id, "continue")
+  let assert Ok(#(updated_run, events)) =
+    journal.load(repo_root, types.RunId(run.run_id))
+
+  assert string.contains(
+    does: summary,
+    contain: "Next action: night-shift start",
+  )
+  assert updated_run.status == types.RunPending
+  assert updated_run.recovery_blocker
+    == Some(types.RecoveryBlocker(
+      kind: types.EnvironmentPreflightBlocker,
+      phase: types.PreflightPhase,
+      task_id: None,
+      message: "missing-tool setup",
+      log_path: filepath.join(run.run_path, "logs/environment-preflight.log"),
+      no_changes_produced: True,
+      disposition: types.RecoveryWaivedOnce,
+    ))
+  assert list.any(events, fn(event) { event.kind == "setup_recovery_approved" })
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
 pub fn dashboard_server_serves_run_data_test() {
   let unique = system.unique_id()
   let base_dir =

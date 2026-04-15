@@ -39,18 +39,35 @@ run a pending plan that has newer planning inputs than its saved task graph.
 
 ## Blocked Runs and `resolve`
 
-Night Shift blocks when the planner emits manual-attention tasks or unresolved
-decision requests. `resolve` is the interactive command that records answers
-for those decisions and immediately replans.
+Night Shift blocks when the planner emits manual-attention tasks, unresolved
+decision requests, or interrupted implementation work that was recovered into
+manual attention. `resolve` is the command that discharges those blockers.
 
 Use it like this:
 
 ```sh
 night-shift resolve
 night-shift resolve --run run-123
+night-shift resolve --task task-123 --inspect
+night-shift resolve --task task-123 --continue
+night-shift resolve --task task-123 --complete
+night-shift resolve --task task-123 --abandon
 ```
 
-If `resolve` clears the decisions successfully, the run returns to `pending`
+Interactive `resolve` walks blockers in order:
+
+1. interrupted implementation recovery
+2. unresolved planning decisions
+3. planning-sync replans
+
+For interrupted implementation recovery, `resolve` can:
+
+- inspect the retained worktree and logs without mutating the run
+- continue the task from the retained worktree
+- mark the retained work complete and run verification
+- abandon the partial work and replan
+
+If `resolve` clears the blockers successfully, the run returns to `pending`
 and the next action becomes `night-shift start`.
 
 ## Interrupted Runs and `resume`
@@ -72,6 +89,10 @@ or environment settings; it reuses what the run journal already saved.
 inspect the saved run, active lock, worktrees, logs, review drift, and
 interrupted task states, then classify each task as `safe_to_resume`,
 `resume_with_warning`, `manual_attention`, or `irrecoverable`.
+
+`resume` is still the gate for stale `active` runs. Once `resume` has recovered
+an interrupted implementation task into `manual_attention`, use `resolve` to
+inspect, continue, complete, or abandon that retained work inside Night Shift.
 
 ## Review-Driven Replanning
 

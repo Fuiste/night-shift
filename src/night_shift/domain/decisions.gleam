@@ -102,6 +102,21 @@ pub fn unresolved_manual_attention_tasks(
   })
 }
 
+pub fn implementation_blocking_tasks(run: types.RunRecord) -> List(types.Task) {
+  run.tasks
+  |> list.filter(fn(task) {
+    task.kind == types.ImplementationTask
+    && { task.state == types.Blocked || task.state == types.ManualAttention }
+    && !types.task_requires_manual_attention(run.decisions, task)
+    && task.worktree_path != ""
+  })
+}
+
+pub fn implementation_blocking_task_count(run: types.RunRecord) -> Int {
+  implementation_blocking_tasks(run)
+  |> list.length
+}
+
 pub fn outstanding_decision_count(run: types.RunRecord) -> Int {
   unresolved_manual_attention_tasks(run)
   |> list.map(types.unresolved_decision_requests(run.decisions, _))
@@ -113,13 +128,7 @@ pub fn blocked_task_count(run: types.RunRecord) -> Int {
   let unresolved_blockers =
     unresolved_manual_attention_tasks(run)
     |> list.length
-  let implementation_blockers =
-    run.tasks
-    |> list.filter(fn(task) {
-      task.kind == types.ImplementationTask
-      && { task.state == types.Blocked || task.state == types.ManualAttention }
-    })
-    |> list.length
+  let implementation_blockers = implementation_blocking_task_count(run)
   case
     run.planning_dirty
     && unresolved_blockers == 0

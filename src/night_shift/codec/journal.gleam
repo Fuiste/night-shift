@@ -43,6 +43,10 @@ pub fn encode_run(run: types.RunRecord) -> String {
     #("status", json.string(types.run_status_to_string(run.status))),
     #("created_at", json.string(run.created_at)),
     #("updated_at", json.string(run.updated_at)),
+    #(
+      "recovery_blocker",
+      json.nullable(from: run.recovery_blocker, of: encode_recovery_blocker),
+    ),
     #("tasks", json.array(run.tasks, encode_task)),
     #(
       "handoff_states",
@@ -235,6 +239,26 @@ fn encode_task_handoff_state(state: types.TaskHandoffState) -> json.Json {
   ])
 }
 
+fn encode_recovery_blocker(blocker: types.RecoveryBlocker) -> json.Json {
+  json.object([
+    #("kind", json.string(types.recovery_blocker_kind_to_string(blocker.kind))),
+    #(
+      "phase",
+      json.string(types.recovery_blocker_phase_to_string(blocker.phase)),
+    ),
+    #("task_id", json.nullable(from: blocker.task_id, of: json.string)),
+    #("message", json.string(blocker.message)),
+    #("log_path", json.string(blocker.log_path)),
+    #("no_changes_produced", json.bool(blocker.no_changes_produced)),
+    #(
+      "disposition",
+      json.string(types.recovery_blocker_disposition_to_string(
+        blocker.disposition,
+      )),
+    ),
+  ])
+}
+
 fn encode_decision_request(request: types.DecisionRequest) -> json.Json {
   json.object([
     #("key", json.string(request.key)),
@@ -303,6 +327,11 @@ fn run_decoder() -> decode.Decoder(types.RunRecord) {
   use status <- decode.field("status", run_status_decoder())
   use created_at <- decode.field("created_at", decode.string)
   use updated_at <- decode.field("updated_at", decode.string)
+  use recovery_blocker <- decode.optional_field(
+    "recovery_blocker",
+    None,
+    decode.optional(recovery_blocker_decoder()),
+  )
   use tasks <- decode.field("tasks", decode.list(task_decoder()))
   use handoff_states <- decode.optional_field(
     "handoff_states",
@@ -347,6 +376,7 @@ fn run_decoder() -> decode.Decoder(types.RunRecord) {
       status: status,
       created_at: created_at,
       updated_at: updated_at,
+      recovery_blocker: recovery_blocker,
       tasks: tasks,
       handoff_states: case handoff_states {
         Some(entries) -> entries
@@ -394,6 +424,7 @@ fn legacy_run_decoder() -> decode.Decoder(types.RunRecord) {
       status: status,
       created_at: created_at,
       updated_at: updated_at,
+      recovery_blocker: None,
       tasks: tasks,
       handoff_states: [],
     ),
@@ -554,6 +585,58 @@ fn runtime_context_decoder() -> decode.Decoder(types.RuntimeContext) {
     manifest_path: manifest_path,
     handoff_path: handoff_path,
   ))
+}
+
+fn recovery_blocker_decoder() -> decode.Decoder(types.RecoveryBlocker) {
+  use kind <- decode.field("kind", recovery_blocker_kind_decoder())
+  use phase <- decode.field("phase", recovery_blocker_phase_decoder())
+  use task_id <- decode.field("task_id", decode.optional(decode.string))
+  use message <- decode.field("message", decode.string)
+  use log_path <- decode.field("log_path", decode.string)
+  use no_changes_produced <- decode.field("no_changes_produced", decode.bool)
+  use disposition <- decode.field(
+    "disposition",
+    recovery_blocker_disposition_decoder(),
+  )
+  decode.success(types.RecoveryBlocker(
+    kind: kind,
+    phase: phase,
+    task_id: task_id,
+    message: message,
+    log_path: log_path,
+    no_changes_produced: no_changes_produced,
+    disposition: disposition,
+  ))
+}
+
+fn recovery_blocker_kind_decoder() -> decode.Decoder(types.RecoveryBlockerKind) {
+  use raw <- decode.then(decode.string)
+  case types.recovery_blocker_kind_from_string(raw) {
+    Ok(kind) -> decode.success(kind)
+    Error(_) ->
+      decode.failure(types.EnvironmentPreflightBlocker, "RecoveryBlockerKind")
+  }
+}
+
+fn recovery_blocker_phase_decoder() -> decode.Decoder(
+  types.RecoveryBlockerPhase,
+) {
+  use raw <- decode.then(decode.string)
+  case types.recovery_blocker_phase_from_string(raw) {
+    Ok(phase) -> decode.success(phase)
+    Error(_) -> decode.failure(types.PreflightPhase, "RecoveryBlockerPhase")
+  }
+}
+
+fn recovery_blocker_disposition_decoder() -> decode.Decoder(
+  types.RecoveryBlockerDisposition,
+) {
+  use raw <- decode.then(decode.string)
+  case types.recovery_blocker_disposition_from_string(raw) {
+    Ok(disposition) -> decode.success(disposition)
+    Error(_) ->
+      decode.failure(types.RecoveryBlocking, "RecoveryBlockerDisposition")
+  }
 }
 
 fn runtime_port_decoder() -> decode.Decoder(types.RuntimePort) {
