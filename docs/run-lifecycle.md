@@ -39,9 +39,10 @@ run a pending plan that has newer planning inputs than its saved task graph.
 
 ## Blocked Runs and `resolve`
 
-Night Shift blocks when the planner emits manual-attention tasks, unresolved
-decision requests, or interrupted implementation work that was recovered into
-manual attention. `resolve` is the command that discharges those blockers.
+Night Shift blocks when setup or preflight fails before implementation,
+when the planner emits manual-attention tasks, when decision requests stay
+unanswered, or when interrupted implementation work is recovered into manual
+attention. `resolve` is the command that discharges those blockers.
 
 Use it like this:
 
@@ -56,9 +57,20 @@ night-shift resolve --task task-123 --abandon
 
 Interactive `resolve` walks blockers in order:
 
-1. interrupted implementation recovery
-2. unresolved planning decisions
-3. planning-sync replans
+1. blocked-before-implementation setup or preflight recovery
+2. interrupted implementation recovery
+3. unresolved planning decisions
+4. planning-sync replans
+
+For blocked-before-implementation setup recovery, `resolve` can:
+
+- inspect the failed gate and saved logs without mutating the run
+- continue by arming a one-shot waiver for that exact gate
+- abandon the run if you want to start fresh instead
+
+After `resolve -> continue`, the run returns to `pending` with a retry-armed
+note in `status`, `report`, and Dash until the next `night-shift start`
+consumes that one-shot waiver.
 
 For interrupted implementation recovery, `resolve` can:
 

@@ -303,6 +303,59 @@ pub fn dashboard_payloads_include_setup_recovery_context_test() {
     does: run_payload,
     contain: "\"replacement_pr_numbers\":[36,37]",
   )
+  assert string.contains(
+    does: run_payload,
+    contain: "\"recovery_intro\":\"Review-driven planning succeeded, but execution stopped before implementation.\"",
+  )
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
+pub fn dashboard_payloads_keep_retry_armed_context_visible_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    support.absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-dashboard-retry-armed-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo-" <> unique)
+  let brief_path = filepath.join(base_dir, "brief.md")
+
+  let _ =
+    simplifile.delete(file_or_dir_at: journal.repo_state_path_for(repo_root))
+  let assert Ok(_) = simplifile.create_directory_all(base_dir)
+  let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
+  let assert Ok(run) = support.start_run(repo_root, brief_path, types.Codex, 1)
+  let pending_run =
+    types.RunRecord(
+      ..run,
+      status: types.RunPending,
+      planning_provenance: Some(types.NotesOnly(types.NotesFile(brief_path))),
+      recovery_blocker: Some(types.RecoveryBlocker(
+        kind: types.EnvironmentPreflightBlocker,
+        phase: types.PreflightPhase,
+        task_id: None,
+        message: "missing-tool setup",
+        log_path: filepath.join(run.run_path, "logs/environment-preflight.log"),
+        no_changes_produced: True,
+        disposition: types.RecoveryWaivedOnce,
+      )),
+    )
+  let assert Ok(_) = journal.rewrite_run(pending_run)
+  let assert Ok(run_payload) = dashboard.run_json(repo_root, run.run_id)
+
+  assert string.contains(
+    does: run_payload,
+    contain: "\"disposition\":\"waived_once\"",
+  )
+  assert string.contains(
+    does: run_payload,
+    contain: "\"recovery_intro\":\"Planning succeeded, but execution stopped before implementation.\"",
+  )
+  assert string.contains(
+    does: run_payload,
+    contain: "\"recovery_outcome_lines\":[\"No new commits or PR updates were produced yet.\"]",
+  )
 
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }

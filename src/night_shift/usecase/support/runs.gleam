@@ -5,6 +5,7 @@ import gleam/option.{type Option, None, Some}
 import gleam/result
 import night_shift/domain/decisions as decision_domain
 import night_shift/domain/run_state
+import night_shift/domain/summary as domain_summary
 import night_shift/git
 import night_shift/journal
 import night_shift/types
@@ -234,10 +235,10 @@ fn start_guidance_for_run(run: types.RunRecord) -> String {
     BlockedOnSetupRecovery(blocker) ->
       "Run "
       <> run.run_id
-      <> " is blocked before implementation could begin. Review-driven planning succeeded, but Night Shift stopped during "
-      <> types.recovery_blocker_phase_to_string(blocker.phase)
-      <> " "
-      <> types.recovery_blocker_kind_to_string(blocker.kind)
+      <> " is blocked before implementation could begin. "
+      <> domain_summary.setup_recovery_intro(run)
+      <> " Night Shift stopped during "
+      <> domain_summary.recovery_gate_label(blocker)
       <> ". Inspect "
       <> blocker.log_path
       <> " and run `night-shift resolve --run "
@@ -354,11 +355,21 @@ pub fn active_recovery_blocker(
   }
 }
 
-pub fn run_has_pending_recovery_bypass(run: types.RunRecord) -> Bool {
+pub fn pending_recovery_bypass(
+  run: types.RunRecord,
+) -> Option(types.RecoveryBlocker) {
   case run.recovery_blocker {
-    Some(blocker) -> blocker.disposition == types.RecoveryWaivedOnce
-    None -> False
+    Some(blocker) ->
+      case blocker.disposition == types.RecoveryWaivedOnce {
+        True -> Some(blocker)
+        False -> None
+      }
+    None -> None
   }
+}
+
+pub fn run_has_pending_recovery_bypass(run: types.RunRecord) -> Bool {
+  pending_recovery_bypass(run) != None
 }
 
 pub fn recovery_blocker_task_id(run: types.RunRecord) -> Option(String) {

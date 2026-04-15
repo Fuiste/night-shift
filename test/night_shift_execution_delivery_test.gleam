@@ -2301,6 +2301,10 @@ pub fn resolve_continue_waives_environment_preflight_once_test() {
   assert resolved.run.status == types.RunPending
   assert resolved.run.recovery_blocker != None
   assert resolved.next_action == "night-shift start"
+  assert resolved.summary
+    == Some(
+      "One-shot retry armed for preflight environment_preflight.\nThe failed gate was waived once; `night-shift start` will retry from there.",
+    )
   assert retried_run.status != types.RunBlocked
   assert retried_run.recovery_blocker == None
   assert string.contains(

@@ -7,6 +7,7 @@ import night_shift/domain/confidence
 import night_shift/domain/provenance
 import night_shift/domain/repo_state
 import night_shift/domain/review_run_projection
+import night_shift/domain/summary as domain_summary
 import night_shift/repo_state_runtime
 import night_shift/types
 
@@ -41,6 +42,7 @@ pub fn render(
       <> confidence.reasons_summary(confidence_assessment),
     render_summary(run, run.decisions, run.planning_dirty, run.tasks, events),
     render_planning_validation_summary(events),
+    render_retry_armed_summary(run),
     render_failure_summary(run, events),
     render_review_replacement_section(run, events),
     render_worktree_hygiene_section(run, events),
@@ -466,9 +468,9 @@ fn render_failure_summary(
   case active_recovery_blocker(run) {
     Some(blocker) ->
       "\n## Blocked Before Implementation\n- Failed gate: "
-      <> types.recovery_blocker_phase_to_string(blocker.phase)
-      <> " "
-      <> types.recovery_blocker_kind_to_string(blocker.kind)
+      <> domain_summary.recovery_gate_label(blocker)
+      <> "\n- Setup recovery: "
+      <> domain_summary.setup_recovery_intro(run)
       <> "\n- Details: "
       <> blocker.message
       <> "\n- Log: "
@@ -483,6 +485,23 @@ fn render_failure_summary(
           <> message
         _, _ -> ""
       }
+  }
+}
+
+fn render_retry_armed_summary(run: types.RunRecord) -> String {
+  case pending_recovery_bypass(run) {
+    Some(blocker) ->
+      "\n## Retry Armed\n- Failed gate: "
+      <> domain_summary.recovery_gate_label(blocker)
+      <> "\n- Setup recovery: "
+      <> domain_summary.setup_recovery_intro(run)
+      <> "\n- Waiver: The failed gate was waived once; `night-shift start` will retry from there."
+      <> "\n- Details: "
+      <> blocker.message
+      <> "\n- Log: "
+      <> blocker.log_path
+      <> replacement_fragment(run)
+    None -> ""
   }
 }
 
@@ -514,29 +533,23 @@ fn active_recovery_blocker(
   }
 }
 
-fn replacement_fragment(run: types.RunRecord) -> String {
-  let pr_numbers =
-    run.tasks
-    |> list.flat_map(fn(task) { task.superseded_pr_numbers })
-    |> unique_pr_numbers([])
-  case pr_numbers {
-    [] -> "\n- No new commits or PR updates were produced yet."
-    _ ->
-      "\n- Intended replacement PRs remain pending: #"
-      <> string.join(pr_numbers |> list.map(int.to_string), with: ", #")
-      <> "\n- Existing reviewed PRs remain unchanged until replacement delivery succeeds."
+fn pending_recovery_bypass(
+  run: types.RunRecord,
+) -> Option(types.RecoveryBlocker) {
+  case run.recovery_blocker {
+    Some(blocker) ->
+      case blocker.disposition == types.RecoveryWaivedOnce {
+        True -> Some(blocker)
+        False -> None
+      }
+    _ -> None
   }
 }
 
-fn unique_pr_numbers(values: List(Int), acc: List(Int)) -> List(Int) {
-  case values {
-    [] -> list.reverse(acc)
-    [value, ..rest] ->
-      case list.contains(acc, value) {
-        True -> unique_pr_numbers(rest, acc)
-        False -> unique_pr_numbers(rest, [value, ..acc])
-      }
-  }
+fn replacement_fragment(run: types.RunRecord) -> String {
+  domain_summary.setup_recovery_outcome_lines(run)
+  |> list.map(fn(line) { "\n- " <> line })
+  |> string.join(with: "")
 }
 
 fn latest_run_failed_message(events: List(types.RunEvent)) -> Option(String) {

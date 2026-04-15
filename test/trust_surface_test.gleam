@@ -184,6 +184,67 @@ pub fn status_summary_calls_out_setup_recovery_and_replacements_test() {
   let _ = simplifile.delete(file_or_dir_at: base_dir)
 }
 
+pub fn status_summary_keeps_retry_armed_setup_recovery_visible_test() {
+  let unique = system.unique_id()
+  let base_dir =
+    support.absolute_path(filepath.join(
+      system.state_directory(),
+      "night-shift-status-retry-armed-" <> unique,
+    ))
+  let repo_root = filepath.join(base_dir, "repo")
+  let brief_path = filepath.join(base_dir, "brief.md")
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+  let assert Ok(_) = simplifile.create_directory_all(base_dir)
+  let assert Ok(_) = simplifile.write("# Brief", to: brief_path)
+  support.seed_git_repo(repo_root, base_dir)
+  let assert Ok(run) = support.start_run(repo_root, brief_path, types.Codex, 1)
+  let pending_run =
+    types.RunRecord(
+      ..run,
+      status: types.RunPending,
+      planning_provenance: Some(types.NotesOnly(types.NotesFile(brief_path))),
+      recovery_blocker: Some(types.RecoveryBlocker(
+        kind: types.EnvironmentPreflightBlocker,
+        phase: types.PreflightPhase,
+        task_id: None,
+        message: "missing-tool setup",
+        log_path: filepath.join(run.run_path, "logs/environment-preflight.log"),
+        no_changes_produced: True,
+        disposition: types.RecoveryWaivedOnce,
+      )),
+    )
+  let assert Ok(_) = journal.rewrite_run(pending_run)
+  let assert Ok(status_result) =
+    status_usecase.execute(repo_root, types.LatestRun, types.default_config())
+  let rendered_report = report.render(pending_run, [], None)
+
+  assert status_result.confidence.posture == types.ConfidenceGuarded
+  assert string.contains(
+    does: status_result.summary,
+    contain: "Retry armed: yes",
+  )
+  assert string.contains(
+    does: status_result.summary,
+    contain: "Planning succeeded, but execution stopped before implementation.",
+  )
+  assert !string.contains(
+    does: status_result.summary,
+    contain: "Review-driven planning succeeded",
+  )
+  assert string.contains(
+    does: status_result.summary,
+    contain: "Next action: night-shift start",
+  )
+  assert string.contains(does: rendered_report, contain: "## Retry Armed")
+  assert string.contains(
+    does: rendered_report,
+    contain: "Planning succeeded, but execution stopped before implementation.",
+  )
+
+  let _ = simplifile.delete(file_or_dir_at: base_dir)
+}
+
 pub fn confidence_is_low_for_interrupted_implementation_manual_attention_test() {
   let missing_worktree =
     filepath.join(review_run().repo_root, "missing-blocked-impl")

@@ -13,7 +13,7 @@ pub fn assess(
   repo_state_view: Option(repo_state_runtime.RepoStateView),
 ) -> types.ConfidenceAssessment {
   let severe = severe_reasons(run, events)
-  let moderate = moderate_reasons(events, repo_state_view)
+  let moderate = moderate_reasons(run, events, repo_state_view)
   let positive = positive_reasons(run, events)
 
   case severe {
@@ -123,6 +123,7 @@ fn severe_reasons(
 }
 
 fn moderate_reasons(
+  run: types.RunRecord,
   events: List(types.RunEvent),
   repo_state_view: Option(repo_state_runtime.RepoStateView),
 ) -> List(String) {
@@ -131,6 +132,7 @@ fn moderate_reasons(
     event_count(events, "execution_payload_repair_succeeded")
   let prune_warnings = event_count(events, "worktree_prune_warning")
   let supersession_warnings = event_count(events, "review_supersession_warning")
+  let pending_setup_retry_count = pending_setup_retry_count(run)
   let repo_state_reason = case repo_state_view {
     Some(view) ->
       case view.drift {
@@ -144,6 +146,11 @@ fn moderate_reasons(
   }
 
   [
+    count_reason(
+      pending_setup_retry_count,
+      "operator-approved setup retry is armed.",
+      "operator-approved setup retries are armed.",
+    ),
     count_reason(
       payload_warnings,
       "recovered execution payload was accepted.",
@@ -199,6 +206,7 @@ fn positive_reasons(
     case
       unresolved_decision_requests_count(run) == 0
       && setup_blocker_count(run) == 0
+      && pending_setup_retry_count(run) == 0
     {
       True -> Some("No outstanding operator decisions remain.")
       False -> None
@@ -233,6 +241,17 @@ fn setup_blocker_count(run: types.RunRecord) -> Int {
   case run.recovery_blocker {
     Some(blocker) ->
       case blocker.disposition == types.RecoveryBlocking {
+        True -> 1
+        False -> 0
+      }
+    _ -> 0
+  }
+}
+
+fn pending_setup_retry_count(run: types.RunRecord) -> Int {
+  case run.recovery_blocker {
+    Some(blocker) ->
+      case blocker.disposition == types.RecoveryWaivedOnce {
         True -> 1
         False -> 0
       }

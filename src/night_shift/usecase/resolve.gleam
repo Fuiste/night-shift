@@ -1,5 +1,4 @@
 import filepath
-import gleam/int
 import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -102,8 +101,8 @@ fn next_interactive_blocker(run: types.RunRecord) -> Option(InteractiveBlocker) 
 fn prompt_for_setup_recovery(
   run: types.RunRecord,
   blocker: types.RecoveryBlocker,
-  config: types.Config,
-  collect_decisions: fn(types.RunRecord, List(types.Task)) ->
+  _config: types.Config,
+  _collect_decisions: fn(types.RunRecord, List(types.Task)) ->
     Result(#(List(types.RecordedDecision), List(types.RunEvent)), String),
 ) -> Result(workflow.ResolveResult, String) {
   let inspection = render_setup_inspection(run, blocker)
@@ -130,7 +129,12 @@ fn prompt_for_setup_recovery(
       ))
     1 -> {
       use resolved <- result.try(apply_setup_continue(run, blocker))
-      resolve_interactively(resolved, config, collect_decisions)
+      Ok(workflow.ResolveResult(
+        run: resolved,
+        warnings: [],
+        next_action: runs.next_action_for_run(resolved),
+        summary: Some(render_setup_continue_confirmation(blocker)),
+      ))
     }
     2 ->
       apply_setup_abandon(run, blocker)
@@ -258,7 +262,10 @@ fn resolve_run_recovery_action(
       ))
     types.ResolveContinue ->
       apply_setup_continue(run, blocker)
-      |> result.map(as_resolve_result(_, None))
+      |> result.map(as_resolve_result(
+        _,
+        Some(render_setup_continue_confirmation(blocker)),
+      ))
     types.ResolveAbandon ->
       apply_setup_abandon(run, blocker)
       |> result.map(as_resolve_result(_, None))
@@ -809,49 +816,26 @@ fn render_setup_inspection(
       }
     None -> ""
   }
-  let replacement_lines = render_replacement_targets(run)
+  let replacement_lines =
+    domain_summary.setup_recovery_outcome_lines(run)
+    |> list.map(fn(line) { "\n" <> line })
+    |> string.join(with: "")
 
-  "Review-driven planning succeeded, but execution stopped before implementation."
+  domain_summary.setup_recovery_intro(run)
   <> "\nFailed gate: "
-  <> types.recovery_blocker_phase_to_string(blocker.phase)
-  <> " "
-  <> types.recovery_blocker_kind_to_string(blocker.kind)
+  <> domain_summary.recovery_gate_label(blocker)
   <> "\nReason: "
   <> blocker.message
   <> "\nLog: "
   <> blocker.log_path
   <> task_fragment
-  <> "\nNo new commits or PR updates were produced."
   <> replacement_lines
 }
 
-fn render_replacement_targets(run: types.RunRecord) -> String {
-  case replacement_pr_numbers(run.tasks) {
-    [] -> ""
-    numbers ->
-      "\nIntended replacements remain pending for: "
-      <> string.join(numbers |> list.map(int.to_string), with: ", ")
-      <> "\nExisting reviewed PRs remain unchanged until replacement delivery succeeds."
-  }
-}
-
-fn replacement_pr_numbers(tasks: List(types.Task)) -> List(Int) {
-  unique_pr_numbers(
-    tasks
-      |> list.flat_map(fn(task) { task.superseded_pr_numbers }),
-    [],
-  )
-}
-
-fn unique_pr_numbers(values: List(Int), acc: List(Int)) -> List(Int) {
-  case values {
-    [] -> list.reverse(acc)
-    [value, ..rest] ->
-      case list.contains(acc, value) {
-        True -> unique_pr_numbers(rest, acc)
-        False -> unique_pr_numbers(rest, [value, ..acc])
-      }
-  }
+fn render_setup_continue_confirmation(blocker: types.RecoveryBlocker) -> String {
+  "One-shot retry armed for "
+  <> domain_summary.recovery_gate_label(blocker)
+  <> ".\nThe failed gate was waived once; `night-shift start` will retry from there."
 }
 
 fn find_task(tasks: List(types.Task), task_id: String) -> Option(types.Task) {

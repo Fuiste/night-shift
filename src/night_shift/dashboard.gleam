@@ -8,6 +8,7 @@ import night_shift/config
 import night_shift/domain/confidence
 import night_shift/domain/provenance
 import night_shift/domain/review_run_projection
+import night_shift/domain/summary as domain_summary
 import night_shift/journal
 import night_shift/project
 import night_shift/repo_state_runtime
@@ -204,18 +205,28 @@ pub fn index_html(initial_run_id: String) -> String {
   <> "      const summary = document.getElementById('recovery-summary');\n"
   <> "      const output = document.getElementById('recovery-output');\n"
   <> "      const blocker = run.recovery_blocker;\n"
-  <> "      if (!blocker || blocker.disposition !== 'blocking') {\n"
+  <> "      const inspectButton = document.getElementById('recovery-inspect');\n"
+  <> "      const continueButton = document.getElementById('recovery-continue');\n"
+  <> "      const abandonButton = document.getElementById('recovery-abandon');\n"
+  <> "      if (!blocker) {\n"
   <> "        panel.hidden = true;\n"
   <> "        summary.textContent = 'No blocked-before-implementation recovery is active.';\n"
   <> "        output.textContent = 'Recovery guidance will appear here.';\n"
   <> "        return;\n"
   <> "      }\n"
-  <> "      const replacements = (run.replacement_pr_numbers || []).length > 0\n"
-  <> "        ? ` Intended replacements remain pending for PRs ${run.replacement_pr_numbers.join(', ')}.`\n"
-  <> "        : ' No new commits or PR updates were produced yet.';\n"
+  <> "      const outcome = (run.recovery_outcome_lines || []).join(' ');\n"
+  <> "      const intro = run.recovery_intro || 'Planning succeeded, but execution stopped before implementation.';\n"
+  <> "      const retryArmed = blocker.disposition === 'waived_once';\n"
   <> "      panel.hidden = false;\n"
-  <> "      summary.textContent = `Blocked before implementation during ${blocker.phase} ${blocker.kind}. ${blocker.message}${replacements}`;\n"
-  <> "      output.textContent = `Log: ${blocker.log_path}` + (blocker.task_id ? `\\nTask: ${blocker.task_id}` : '');\n"
+  <> "      inspectButton.disabled = retryArmed;\n"
+  <> "      continueButton.disabled = retryArmed;\n"
+  <> "      abandonButton.disabled = retryArmed;\n"
+  <> "      summary.textContent = retryArmed\n"
+  <> "        ? `Retry armed for ${blocker.phase} ${blocker.kind}. ${intro} The failed gate was waived once; night-shift start will retry from there. ${outcome}`\n"
+  <> "        : `Blocked before implementation during ${blocker.phase} ${blocker.kind}. ${intro} ${blocker.message} ${outcome}`;\n"
+  <> "      output.textContent = retryArmed\n"
+  <> "        ? `Log: ${blocker.log_path}\\nNext action: night-shift start` + (blocker.task_id ? `\\nTask: ${blocker.task_id}` : '')\n"
+  <> "        : `Log: ${blocker.log_path}` + (blocker.task_id ? `\\nTask: ${blocker.task_id}` : '');\n"
   <> "    }\n"
   <> "    function renderHistory(runs) {\n"
   <> "      const container = document.getElementById('history');\n"
@@ -374,6 +385,14 @@ fn run_detail_json(
       json.nullable(from: run.recovery_blocker, of: recovery_blocker_json),
     ),
     #(
+      "recovery_intro",
+      json.nullable(from: recovery_intro(run), of: json.string),
+    ),
+    #(
+      "recovery_outcome_lines",
+      json.array(recovery_outcome_lines(run), json.string),
+    ),
+    #(
       "replacement_pr_numbers",
       json.array(replacement_pr_numbers(run.tasks), json.int),
     ),
@@ -419,6 +438,20 @@ fn recovery_blocker_json(blocker: types.RecoveryBlocker) -> json.Json {
       }),
     ),
   ])
+}
+
+fn recovery_intro(run: types.RunRecord) -> Option(String) {
+  case run.recovery_blocker {
+    Some(_) -> Some(domain_summary.setup_recovery_intro(run))
+    None -> None
+  }
+}
+
+fn recovery_outcome_lines(run: types.RunRecord) -> List(String) {
+  case run.recovery_blocker {
+    Some(_) -> domain_summary.setup_recovery_outcome_lines(run)
+    None -> []
+  }
 }
 
 fn load_repo_state_view(

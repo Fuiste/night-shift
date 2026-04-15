@@ -140,6 +140,9 @@ Typical flow:
    `night-shift resolve` to inspect, continue with the one-shot waiver, or
    abandon the run instead of assuming the user must edit
    `worktree-setup.toml`
+12. after `resolve -> continue` on a setup blocker, confirm `status`,
+   `report`, and Dash still show the retry-armed state and keep confidence
+   below `high` until the next `night-shift start` consumes the waiver
 
 For review-driven investigations, replace steps 3-4 with:
 
