@@ -32,11 +32,17 @@ night-shift status
 night-shift report
 ```
 
+Or use the browser-native dashboard for the full operator workflow:
+
+```sh
+night-shift dash
+```
+
 Use `resolve` when planning needs human decisions, `resume` when a run was
 interrupted, `doctor` or `resume --explain` when you want a dry recovery read,
 `plan --from-reviews` when open Night Shift PRs need a fresh successor stack,
 and `reset` when you need to eject the repo-local control plane and start
-over.
+over. All of these flows are also available from the dashboard.
 
 ## Repository
 
