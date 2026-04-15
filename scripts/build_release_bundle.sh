@@ -46,6 +46,7 @@ rm -rf "$bundle_dir" "$archive_path" "$checksum_path"
 
 cd "$REPO_ROOT"
 gleam export erlang-shipment
+sh "$REPO_ROOT/scripts/build_dash_assets.sh" "$REPO_ROOT/build/dash-assets"
 
 erlang_root=$(
   erl -eval 'io:format("~s", [code:root_dir()]), halt().' -noshell
@@ -59,6 +60,7 @@ fi
 mkdir -p "$bundle_dir"
 cp -R "$REPO_ROOT/build/erlang-shipment" "$bundle_dir/shipment"
 cp -R "$erlang_root" "$bundle_dir/erlang"
+cp -R "$REPO_ROOT/build/dash-assets" "$bundle_dir/dash-assets"
 
 if command -v xattr >/dev/null 2>&1; then
   xattr -cr "$bundle_dir" 2>/dev/null || true
@@ -69,6 +71,7 @@ cat > "$bundle_dir/night-shift" <<'EOF'
 set -eu
 
 BASE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+NIGHT_SHIFT_DASH_ASSET_ROOT="$BASE/dash-assets" \
 ERL_ROOTDIR="$BASE/erlang" \
   exec "$BASE/erlang/bin/erl" \
     -pa "$BASE"/shipment/*/ebin \

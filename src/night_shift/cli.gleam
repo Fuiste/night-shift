@@ -10,19 +10,20 @@ pub fn usage() -> String {
   <> "\n"
   <> "Commands:\n"
   <> "  --demo [--ui]\n"
+  <> "  dash [--run <id>|latest]\n"
   <> "  init [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>] [--yes] [--generate-setup]\n"
   <> "    Prompts interactively for provider, model, and initial worktree setup when those answers are not supplied.\n"
   <> "  reset [--yes] [--force]\n"
   <> "  plan --notes <file-or-inline-text> [--doc <path>] [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>]\n"
   <> "  plan --from-reviews [--notes <file-or-inline-text>] [--doc <path>] [--profile <name>] [--provider <codex|cursor>] [--model <id>] [--reasoning <low|medium|high|xhigh>]\n"
-  <> "  start [--run <id>|latest] [--ui]\n"
+  <> "  start [--run <id>|latest]\n"
   <> "  status [--run <id>|latest]\n"
   <> "  report [--run <id>|latest]\n"
   <> "  provenance [--run <id>|latest] [--task <task-id>] [--format <json|md>]\n"
   <> "  doctor [--run <id>|latest]\n"
   <> "  resolve [--run <id>|latest]\n"
   <> "  resolve [--run <id>|latest] --task <task-id> [--inspect|--continue|--complete|--abandon]\n"
-  <> "  resume [--run <id>|latest] [--ui|--explain]\n"
+  <> "  resume [--run <id>|latest] [--explain]\n"
 }
 
 /// Parse raw command-line arguments into a `Command`.
@@ -31,7 +32,7 @@ pub fn usage() -> String {
 ///
 /// ```gleam
 /// > parse(["start", "--run", "latest"])
-/// Ok(types.Start(types.LatestRun, False))
+/// Ok(types.Start(types.LatestRun))
 /// ```
 ///
 /// ```gleam
@@ -48,6 +49,7 @@ pub fn parse(args: List(String)) -> Result(types.Command, String) {
         ["init", ..rest] -> parse_init(rest)
         ["reset", ..rest] -> parse_reset(rest)
         ["plan", ..rest] -> parse_plan(rest)
+        ["dash", ..rest] -> parse_dash(rest)
         ["start", ..rest] -> parse_start(rest)
         ["status", ..rest] -> parse_run_lookup(rest, types.Status)
         ["report", ..rest] -> parse_run_lookup(rest, types.Report)
@@ -224,7 +226,24 @@ fn parse_init_flags(
 }
 
 fn parse_start(args: List(String)) -> Result(types.Command, String) {
-  parse_start_flags(args, types.LatestRun, False)
+  parse_start_flags(args, types.LatestRun)
+}
+
+fn parse_dash(args: List(String)) -> Result(types.Command, String) {
+  case args {
+    [] -> Ok(types.Dash(types.LatestRun))
+    ["--run", "latest"] -> Ok(types.Dash(types.LatestRun))
+    ["--run", run_id] -> Ok(types.Dash(types.RunId(run_id)))
+    ["--start", ..] ->
+      Error(
+        "`night-shift dash --start` was removed; open Dash and use the Start button in the browser.",
+      )
+    ["--resume", ..] ->
+      Error(
+        "`night-shift dash --resume` was removed; open Dash and use the Resume button in the browser.",
+      )
+    [flag, ..] -> Error("Unsupported flag: " <> flag)
+  }
 }
 
 fn parse_reset(args: List(String)) -> Result(types.Command, String) {
@@ -247,21 +266,21 @@ fn parse_reset_flags(
 fn parse_start_flags(
   args: List(String),
   run: types.RunSelector,
-  ui_enabled: Bool,
 ) -> Result(types.Command, String) {
   case args {
-    [] -> Ok(types.Start(run, ui_enabled))
-    ["--run", "latest", ..rest] ->
-      parse_start_flags(rest, types.LatestRun, ui_enabled)
-    ["--run", run_id, ..rest] ->
-      parse_start_flags(rest, types.RunId(run_id), ui_enabled)
-    ["--ui", ..rest] -> parse_start_flags(rest, run, True)
+    [] -> Ok(types.Start(run))
+    ["--run", "latest", ..rest] -> parse_start_flags(rest, types.LatestRun)
+    ["--run", run_id, ..rest] -> parse_start_flags(rest, types.RunId(run_id))
+    ["--ui", ..] ->
+      Error(
+        "`start --ui` was replaced by `night-shift dash`, which now owns the browser flow.",
+      )
     [flag, ..] -> Error("Unsupported start flag: " <> flag)
   }
 }
 
 fn parse_resume(args: List(String)) -> Result(types.Command, String) {
-  parse_resume_flags(args, types.LatestRun, False, False)
+  parse_resume_flags(args, types.LatestRun, False)
 }
 
 fn parse_resolve(args: List(String)) -> Result(types.Command, String) {
@@ -325,21 +344,19 @@ fn parse_resolve_action(
 fn parse_resume_flags(
   args: List(String),
   run: types.RunSelector,
-  ui_enabled: Bool,
   explain_only: Bool,
 ) -> Result(types.Command, String) {
   case args {
-    [] ->
-      case ui_enabled && explain_only {
-        True -> Error("`resume --explain` cannot be combined with `--ui`.")
-        False -> Ok(types.Resume(run, ui_enabled, explain_only))
-      }
+    [] -> Ok(types.Resume(run, explain_only))
     ["--run", "latest", ..rest] ->
-      parse_resume_flags(rest, types.LatestRun, ui_enabled, explain_only)
+      parse_resume_flags(rest, types.LatestRun, explain_only)
     ["--run", run_id, ..rest] ->
-      parse_resume_flags(rest, types.RunId(run_id), ui_enabled, explain_only)
-    ["--ui", ..rest] -> parse_resume_flags(rest, run, True, explain_only)
-    ["--explain", ..rest] -> parse_resume_flags(rest, run, ui_enabled, True)
+      parse_resume_flags(rest, types.RunId(run_id), explain_only)
+    ["--ui", ..] ->
+      Error(
+        "`resume --ui` was replaced by `night-shift dash`, which now owns the browser flow.",
+      )
+    ["--explain", ..rest] -> parse_resume_flags(rest, run, True)
     [flag, ..] -> Error("Unsupported flag: " <> flag)
   }
 }

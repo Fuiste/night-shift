@@ -145,6 +145,7 @@ fn run_ui_demo(repo_root: String, demo_root: String) -> Result(String, String) {
   ))
   use _ <- result.try(start_ui_command(repo_root, demo_root, log_path, pid_path))
   use #(url, run_id) <- result.try(wait_for_ui_details(log_path, 40))
+  use _ <- result.try(start_dashboard_run(url, run_id))
   use payload <- result.try(wait_for_completed_dashboard_payload(
     url,
     run_id,
@@ -181,7 +182,7 @@ fn run_ui_demo(repo_root: String, demo_root: String) -> Result(String, String) {
   }
   |> result.map(fn(_) {
     "Demo succeeded.\n"
-    <> "Validated UI flows: plan, start --ui, dashboard payload, status\n"
+    <> "Validated UI flows: plan, dash, dashboard start, dashboard payload, status\n"
     <> "Dashboard: "
     <> url
     <> "\n"
@@ -300,7 +301,7 @@ fn start_ui_command(
 ) -> Result(Nil, String) {
   let command =
     "nohup "
-    <> build_cli_command(["start", "--ui"])
+    <> build_cli_command(["dash"])
     <> " > "
     <> shell.quote(log_path)
     <> " 2>&1 & echo $! > "
@@ -312,6 +313,14 @@ fn start_ui_command(
     filepath.join(demo_root, "ui-launch.log"),
     "Unable to launch the UI demo command.",
   )
+}
+
+fn start_dashboard_run(url: String, run_id: String) -> Result(Nil, String) {
+  case dashboard.http_post(url <> "/api/runs/" <> run_id <> "/start", "{}") {
+    Ok(_) -> Ok(Nil)
+    Error(message) ->
+      Error("Unable to start the demo run from Dash. " <> message)
+  }
 }
 
 fn stop_ui_command(demo_root: String, pid_path: String) -> Result(Nil, String) {

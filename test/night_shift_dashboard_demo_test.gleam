@@ -167,7 +167,7 @@ pub fn demo_run_succeeds_with_ui_test() {
 
   assert string.contains(
     does: summary,
-    contain: "Validated UI flows: plan, start --ui, dashboard payload, status",
+    contain: "Validated UI flows: plan, dash, dashboard start, dashboard payload, status",
   )
   assert string.contains(does: summary, contain: "Dashboard: http://127.0.0.1:")
   assert string.contains(

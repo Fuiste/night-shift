@@ -100,11 +100,10 @@ Kick off the most recent pending run:
 night-shift start
 ```
 
-You can also target a specific run or open the local dashboard:
+You can also target a specific run:
 
 ```sh
 night-shift start --run run-123
-night-shift start --ui
 ```
 
 `start` is execution-only. It uses the execution agent, environment, and brief
@@ -138,6 +137,23 @@ report directly, including per-task runtime manifest and handoff paths once
 worktrees have been prepared. `provenance` prints the run's evidence ledger
 from the saved artifact graph.
 
+## Dashboard
+
+Night Shift includes a browser-native dashboard for the full operator
+workflow. Instead of cycling through CLI commands, run:
+
+```sh
+night-shift dash
+```
+
+Dash binds to `127.0.0.1`, prints a localhost URL, and opens a control surface
+where you can initialize, plan, inspect the task DAG, start and resume runs,
+resolve blocked decisions, and audit reports and provenance -- all from the
+browser with live SSE-driven updates.
+
+The CLI commands above remain available for automation and scripting. Dash is
+the intended human-first entrypoint.
+
 ## Supporting Flows
 
 If planning produced manual-attention tasks, record the answers and let Night
@@ -154,7 +170,6 @@ If a run was interrupted, resume from the saved journal:
 night-shift doctor
 night-shift resume --explain
 night-shift resume
-night-shift resume --ui
 ```
 
 `doctor` is the dry recovery pass. It classifies each task as
@@ -177,5 +192,7 @@ If you want a dry proof that the end-to-end harness is wired correctly:
 
 ```sh
 night-shift --demo
-night-shift --demo --ui
 ```
+
+The demo launches `night-shift dash` and drives the browser-backed start flow
+through Dash's HTTP surface.
